@@ -1,0 +1,56 @@
+== compiling production TUs (real webui_http / hmac / session / cmdq) ==
+  CC webui_http.cpp
+  CC aatped_hmac.cpp
+  CC aatpe_session_token.cpp
+  CC aatpe_command_queue.cpp
+  CC poc_stub.cpp
+  CC poc_main.cpp
+== linking ==
+== running PoC ==
+== AATPE WebUI PoC: server on 127.0.0.1:8888 ==
+
+daemon_token minted length=128 (first8=57a67ba8...)
+
+  [PASS] OPEN GET /health (expect 200)
+         -> HTTP/1.1 200 OK | {"status":"ok","uptime_s":0,"port":8888}
+  [PASS] OPEN GET /version (expect 200)
+         -> HTTP/1.1 200 OK | {"version":"v3.4.6"}
+  [PASS] OPEN GET /state/public (expect 200, no token)
+         -> HTTP/1.1 200 OK | {"state_generation":1,"system_state":"running","control_mode":"assist","thermal_cpu":"45000"}
+  [PASS] OPEN GET /api/fusion with NO token (info disclosure surface)
+         -> HTTP/1.1 200 OK | {"heuristic_weight":0,"ml_weight":0,"hybrid_weight":0,"history_weight":0,"total_decisions":0}
+  [PASS] OPEN GET /api/frame_time with NO token (info disclosure surface)
+         -> HTTP/1.1 200 OK | {"samples":0,"improved":0,"degraded":0,"fallback":0,"gfxinfo_calls":0,"gfxinfo_cache_hits":0,"frame_time_avg":0,"frame_time_p95":0,"frame_time_p99":0}
+  [PASS] PROTECTED GET /state/all NO token -> 401
+         -> HTTP/1.1 401 Unauthorized
+  [PASS] PROTECTED GET /state/all ?token=wrong -> 401 (?token= dead on TCP)
+         -> HTTP/1.1 401 Unauthorized
+  [PASS] PROTECTED GET /state/all bad X-Daemon-Token -> 401
+         -> HTTP/1.1 401 Unauthorized
+  [PASS] PROTECTED GET /state/all correct X-Daemon-Token -> 200
+         -> HTTP/1.1 200 OK | {"state_generation":1,"system_state":"running","control_mode":"assist","thermal_
+  [PASS] GET /api/daemon_token over TCP -> 403 (not leaked to local apps)
+         -> HTTP/1.1 403 Forbidden | {"ok":false,"error":"daemon_token unavailable over HTTP; read /dev/aatpe/state/daemon_token as root"}
+  [PASS] CSRF cross-origin text/plain POST /control unsigned -> blocked (403/405)
+         -> HTTP/1.1 403 Forbidden | {"ok":false,"error":"HMAC signature required but missing"}
+  [FAIL] CSRF cross-origin GET /control?cmd=set_profile=... unsigned -> blocked (405)
+         -> HTTP/1.1 403 Forbidden | {"ok":false,"error":"HMAC signature required but missing"}
+  [PASS] POST application/json unsigned (no sig) -> 403 (HMAC still required)
+         -> HTTP/1.1 403 Forbidden | {"ok":false,"error":"HMAC signature required but missing"}
+  [PASS] POST /control with FORGED .sig -> 403
+         -> HTTP/1.1 403 Forbidden | {"ok":false,"error":"timestamp expired or out of window (replay protection)"}
+  [PASS] POST /control with VALID HMAC -> 200 queued
+         -> HTTP/1.1 200 OK | {"ok":true,"status":"queued","command_id":"cmd-000001","command":"set_profile=gaming","hmac_required":1,"session_auth":0
+  [INFO] replay of nonce-less signed triple -> HTTP/1.1 200 OK (accepted by design; nonce optional)
+  [PASS] PATH traversal /api/command/<traversal> -> 400/401 (not file read)
+         -> HTTP/1.1 401 Unauthorized
+  [PASS] OVERSIZE body (>64KB) -> 413
+         -> HTTP/1.1 413 Payload Too Large
+  [PASS] DELETE /health (non-GET) -> 405
+         -> HTTP/1.1 405 Method Not Allowed
+  [PASS] GET /api/hmac_key NO token -> 401 (HMAC key not leaked)
+         -> HTTP/1.1 401 Unauthorized
+  [PASS] GET /api/hmac_key WITH token -> 200 returns key
+         -> HTTP/1.1 200 OK | {"hmac_key":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012
+
+== PoC summary: 19 passed, 1 failed ==

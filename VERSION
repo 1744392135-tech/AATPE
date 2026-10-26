@@ -1,0 +1,13 @@
+# AATPE single source of truth for version.
+# EVERYTHING else must derive from these two lines:
+#   - module.prop      version / versionCode
+#   - aatpe-version.h  AATPE_VERSION / AATPE_VERSION_CODE
+#   - WebUI footer marker
+#   - shell script banner strings
+# Bump BOTH together. Do not fork the version line again.
+VERSION_NAME=v6.0.0
+VERSION_CODE=4411
+# round6: unique build id so users can tell which rel they flashed (v6.0.0/4411
+# was identical across rel7..rel10). RELEASE_ID is NOT a version bump.
+RELEASE_ID=rel14
+BUILD_DATE=2026-10-26

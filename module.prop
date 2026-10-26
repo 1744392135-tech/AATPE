@@ -1,0 +1,10 @@
+# AATPE module.prop — version auto-derived from ./VERSION (single source of truth).
+# Do not hand-edit version=/versionCode here; the build regenerates them from VERSION.
+id=aatpe
+name=AATPE - Adaptive Android Task Placement Engine
+version=v6.0.0 (rel14)
+versionCode=4411
+author=AATPE
+description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel14, versionCode 4411) 四大根因修复: P1/P2 全修, 打包完整性修复(collect.sh/doctor.sh入包), RELEASE_ID/BUILD_DATE 四处一致并加 CI 守门. host 普通/ASan+UBSan/TSan 各136/0全0(race=0). C4_FREEZER/eBPF事件/联邦 默认ON(前台/音频/IM白名单,异常自动降级),安全与120°C硬墙强制ON. DEGRADED: 无真机/KVM, 见升级说明. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
+updateJson=
+template=3

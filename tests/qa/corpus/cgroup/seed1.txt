@@ -1,0 +1,3 @@
+5:cpuset:/top-app
+5:cpuset:/foreground
+5:cpuset:/background

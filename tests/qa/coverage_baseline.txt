@@ -1,0 +1,28 @@
+# coverage_baseline.txt — G11-004 coverage gate baseline.
+#
+# Format: "<source-file>: <line%>"  (whitespace tolerant; '#' comments ignored).
+#
+# Gate rule (enforced by run_coverage.sh):
+#   1. BASELINE NON-REGRESSION: every TU's measured line coverage must be >= its
+#      baseline here (with a small tolerance below). A drop -> FAIL (exit 1).
+#   2. GAP REPORT (non-blocking unless it also drops below baseline): critical
+#      security TUs (aatped_hmac.cpp, integrity.cpp) target >=90%; all other
+#      curated TUs target >=70%. Modules below target are listed as gaps.
+#
+# Rationale: the curated coverage set covers 10 production TUs. Several sit well
+# below the aspirational 90%/70% lines because the hermetic suites exercise the
+# happy path but not every branch. Rather than let the gate go permanently red
+# (and get ignored), the enforceable contract TODAY is "no regression vs this
+# measured baseline"; raising the baseline + closing gaps is tracked per-TU.
+#
+# Values below are the measured line% on the ROUND-001 baseline build.
+aatpe_config_schema.cpp: 97
+aatped_abtest.cpp: 92
+aatped_hmac.cpp: 51
+aatpe_ml.cpp: 2
+aatpe_session_token.cpp: 97
+aatpe_subsystem.cpp: 65
+adrc.cpp: 61
+event_monitor.cpp: 40
+integrity.cpp: 22
+uevent_monitor.cpp: 4

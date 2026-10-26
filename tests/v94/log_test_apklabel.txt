@@ -1,0 +1,22 @@
+=== aatped_apklabel: hermetic fixture matrix ===
+  [PASS] stored zip: hardcoded Chinese label decoded
+  [PASS] deflated zip: built-in inflate decodes hardcoded label
+  [PASS] @string ref: zh-CN config chosen over default
+  [PASS] @string ref: default-config string resolved
+  [PASS] UTF-16 string pool decoded to UTF-8 label
+  [PASS] zmxy channel apk -> 造梦西游4 (not 梦幻西游)
+  [PASS] netease apk -> 梦幻西游 (not 造梦西游4)
+  [PASS] packages.list: real zmxy pkg present
+  [PASS] packages.list: real netease pkg present
+  [PASS] packages.list: 'com.netease' prefix trap rejected
+  [PASS] packages.list: 'aligamesX' suffix trap rejected
+  [PASS] packages.list: unknown pkg absent
+  [PASS] split fallback: label carried by split_config apk resolved
+  [PASS] hostile sample empty: bad_truncated_manifest
+  [PASS] hostile sample empty: bad_garbage
+  [PASS] hostile sample empty: bad_notazip
+  [PASS] hostile sample empty: bad_ref_outofrange
+  [PASS] hostile sample empty: bad_framework_ref
+  [PASS] hostile sample empty: bad_truncated_arsc
+
+=== RESULT: 19 pass, 0 fail ===

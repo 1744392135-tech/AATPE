@@ -1,0 +1,1 @@
+a very long command line that is deliberately over two hundred and fifty six characters to trigger the length rejection path and make sure the dispatcher does not crash when the input is excessive in length compared to the accepted limit of the control pipe

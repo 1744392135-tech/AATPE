@@ -1,0 +1,57 @@
+// test_uevent_fallback.cpp - v94 hermetic unit tests for aatped_uevent.cpp
+// (the daemon-side sysfs polling FALLBACK, distinct from uevent_monitor.cpp
+// which is covered by test_uevent.cpp).
+// Links aatped_uevent.cpp + event_monitor + uevent_monitor + aatpe_ml with
+// v94_daemon_deps (pools/mutexes/counters) + log_stub + uevent_deps.
+// Covers: checkUeventFallback arming (start-time set, stays inactive within
+// the 5s window), pollSysfsEvents no-op when fallback inactive, counter atomics.
+#include <cstdio>
+#include "aatped.h"
+#include "aatped_uevent.h"
+
+static int g_pass = 0, g_fail = 0;
+#define CHECK(c, m) do { \
+    if (c) { g_pass++; printf("  [PASS] %s\n", m); } \
+    else   { g_fail++; printf("  [FAIL] %s\n", m); } \
+} while(0)
+
+int main() {
+    printf("=== uevent: checkUeventFallback arms start time, stays inactive ===\n");
+    g_ueventFallbackActive.store(false);
+    g_ueventEventCount.store(0);
+    // First call: start time is 0 -> arms it and returns (does NOT activate).
+    checkUeventFallback();
+    CHECK(g_ueventFallbackActive.load() == false, "1st call arms timer, not active");
+    // Subsequent rapid calls are within the 5000ms window -> still not active.
+    for (int i = 0; i < 5; i++) checkUeventFallback();
+    CHECK(g_ueventFallbackActive.load() == false, "rapid re-checks within window stay inactive");
+
+    printf("=== uevent: pollSysfsEvents no-op while fallback inactive ===\n");
+    g_ueventEventCount.store(0);
+    pollSysfsEvents();
+    pollSysfsEvents();
+    // While the fallback is inactive, poll must be a true no-op: it must not
+    // fabricate any uevents.
+    CHECK(g_ueventEventCount.load() == 0,
+          "inactive pollSysfsEvents produces zero events");
+
+    printf("=== uevent: event counter atomic ===\n");
+    g_ueventEventCount.store(7);
+    CHECK(g_ueventEventCount.load() == 7, "event counter read/write round-trip");
+    g_ueventEventCount.store(0);
+
+    printf("=== uevent: manual activation then poll no crash ===\n");
+    g_ueventFallbackActive.store(true);
+    pollSysfsEvents();  // now active; reads missing sysfs, must not crash
+    pollSysfsEvents();
+    // On the host there is no real /sys uevent source, so active polling must
+    // not invent events either.
+    CHECK(g_ueventEventCount.load() == 0,
+          "active pollSysfsEvents on host produces zero fabricated events");
+    g_ueventFallbackActive.store(false);
+
+    printf("\n========================================\n"
+           "Uevent-fallback results: %d passed, %d failed\n"
+           "========================================\n", g_pass, g_fail);
+    return g_fail == 0 ? 0 : 1;
+}

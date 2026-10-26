@@ -1,0 +1,18 @@
+# Build artifacts
+*.o
+*.d
+*.a
+*.so
+a.out
+*.zip
+*.tar.gz
+build/
+release/
+# Runtime / dev state
+STATE.RUNNING
+*.log
+*.err
+*.sampler
+# Python
+__pycache__/
+*.pyc

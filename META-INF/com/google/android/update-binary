@@ -1,0 +1,38 @@
+#!/sbin/sh
+#################
+# Initialization
+#################
+umask 022
+ui_print() { echo "$1"; }
+require_new_magisk() {
+  ui_print "*******************************"
+  ui_print " Please install Magisk v20.4+! "
+  ui_print "*******************************"
+  exit 1
+}
+#########################
+# Load util_functions.sh
+#########################
+OUTFD=$2
+ZIPFILE=$3
+mount /data 2>/dev/null
+# Problem7: KernelSU compatibility. KSU manages module installation itself
+# (modules land under /data/adb/ksu/modules/) and does not use Magisk's
+# util_functions.sh / install_module flow. Detect KSU first and bail out so
+# the hard dependency on /data/adb/magisk/util_functions.sh never fires.
+# G10-009: APatch is KSU-compatible and also manages module installation itself
+# (modules under /data/adb/ap/modules/); bail out for it too instead of falling
+# through to a Magisk util_functions requirement that does not exist.
+if [ -d /data/adb/ksu ] || [ -d /data/adb/ap ]; then
+  ui_print "*******************************"
+  ui_print " KernelSU / APatch environment "
+  ui_print " detected; it will install this"
+  ui_print " module on its own.            "
+  ui_print "*******************************"
+  exit 0
+fi
+[ -f /data/adb/magisk/util_functions.sh ] || require_new_magisk
+. /data/adb/magisk/util_functions.sh
+[ $MAGISK_VER_CODE -lt 20400 ] && require_new_magisk
+install_module
+exit 0

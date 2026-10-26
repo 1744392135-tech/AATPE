@@ -1,0 +1,27 @@
+# AATPE sepolicy.rule -- OPTIONAL static SELinux fallback.
+# ---------------------------------------------------------------------------
+# Normally AATPE applies its eBPF/perf_event permissions at RUNTIME from
+# post-fs-data.sh via `magiskpolicy --live` (Magisk) / `supolicy --live` (KSU).
+# That live path already covers the domains the daemon actually runs in.
+#
+# ONLY drop the lines below (remove the leading '#') if:
+#   - your ROM ships WITHOUT magiskpolicy / supolicy (so the live path can't run), AND
+#   - you see "avc: denied ... bpf / perf_event" in logcat, AND
+#   - eBPF remains disabled (state/ebpf_active != 1) despite correct setup.
+#
+# Rules are intentionally minimal (self-domain only), matching the live policy.
+# enable one block for your loader:
+#
+# --- Magisk (daemon runs in the magisk domain) ---
+# allow magisk self bpf { map_create prog_load map_read map_write }
+# allow magisk self perf_event { open read write ioctl }
+#
+# --- KernelSU (daemon may run in init or su domain) ---
+# allow init init bpf { map_create prog_load map_read map_write }
+# allow init init perf_event { open read write ioctl }
+# allow su   su   bpf { map_create prog_load map_read map_write }
+# allow su   su   perf_event { open read write ioctl }
+#
+# --- APatch (uses magiskpolicy / magisk domain) ---
+# allow magisk magisk bpf { map_create prog_load map_read map_write }
+# allow magisk magisk perf_event { open read write ioctl }
