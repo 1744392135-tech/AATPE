@@ -793,7 +793,10 @@ void writeSystemJson() {
         // C3: thermal critical-wall headroom % (already collected by thermal.cpp:1000-1001;
         // only surfaced to the panel here — no re-collection).
         + ",\"thermal_headroom_pct\":" + std::to_string(readInt((std::string(STATE_DIR)+"/thermal_headroom_pct").c_str(),0))
-        + "}";
+        // 第一个 } 闭合 "v42" 对象，第二个 } 闭合顶层 system 对象。
+        // 真机 ui_snapshot 验证：旧代码只有一个 }，导致顶层对象未闭合、
+        // 整个 system.json 非法，WebUI 回退 per-file 逐文件 exec，首屏卡十几秒。
+        + "}}";
     // fix105 P2-3: atomicWriteJson instead of writeFile
     atomicWriteJson(std::string(WEBUI_DIR) + "/system.json", json);
 }
@@ -966,6 +969,9 @@ std::string aatpe_buildFrameAppsJson() {
         body += "\"dropped\":" + std::to_string(a.dropped) + ",";
         body += "\"samples\":" + std::to_string(a.samples) + ",";
         body += "\"total_frames\":" + std::to_string(a.total_frames) + ",";
+        // rel12 Bug1: raw missed-vsync accumulator (may exceed total_frames; shown
+        // only in the detail panel with a "一帧可错过多个vsync" note).
+        body += "\"missed_vsyncs\":" + std::to_string(a.missed_vsyncs) + ",";
         body += "\"active_ms\":" + std::to_string(a.active_ms) + ",";
         body += "\"last_update_ms\":" + std::to_string(a.last_update_ms) + ",";
         body += "\"target_fps\":" + (a.target_fps > 0.01 ? std::to_string(a.target_fps) : std::string("null"));

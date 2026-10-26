@@ -325,6 +325,9 @@ run_one() {
                    RUN_CMD='run_cli_namespaced' build_test cli "aatpe_ml aatped_apklabel" "log_stub" ;;
     probe)         build_test probe        ""                   "" ;;
     watchdog)      build_test watchdog     ""                   "" ;;
+    # v600-fix2: header-only inline shouldRescoreThread() active/dirty gating.
+    # No prod/stub deps -- test only calls inline helpers in aatped_utils.h.
+    scoring_active) build_test scoring_active ""                   "" ;;
     # v4.1.1 hotfix: boot-grace / degraded self-heal / pidfile adoption.
     # Same include-the-.cpp pattern as watchdog above (main renamed inside test).
     watchdog_hotfix) build_test watchdog_hotfix ""                "" ;;
@@ -527,6 +530,9 @@ run_one() {
     # v6.0.0 fix2: FRAME-01/02/03 P2 fixes (g_tsLayerSnap eviction, game_* clear,
     # updatedMs clock unification). Same link set as per_app_frame.
     frame_p2_fixes) build_test frame_p2_fixes "frame frame_binder aatpe_ml aatped_threadutil aatped_apklabel" "log_stub frame_deps" ;;
+    # rel12 Bug1/Bug2: dropped<=total_frames (raw vsync kept separately as
+    # missed_vsyncs) + active_ms reflects real framestats span for a single fresh window.
+    frame_rel12) build_test frame_rel12 "frame frame_binder aatpe_ml aatped_threadutil aatped_apklabel" "log_stub frame_deps" ;;
     # v4.4.8 MAJOR-1/M4: getPkgUid packages.list parser regression. Links the
     # real frame.o and drives it through the guarded aatpeTestGetPkgUid seam
     # (replaces the old #include-frame.cpp fuzz-harness hack). 8 cases.
@@ -653,6 +659,9 @@ run_one() {
     # exec/file I/O never under s_stateMutex) and the NN restart-restore round-trip.
     c4_freezer_glue)  build_test c4_freezer_glue  "c4_freezer"              "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
     c4_freezer_v1)    build_test c4_freezer_v1    "c4_freezer"              "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
+    # rel12 Bug6: v1 freezer present but NO game target -> StateJson must still
+    # report freezerAvailable=true / freezerBackend=v1 (not "unavailable").
+    c4_freezer_rel12) build_test c4_freezer_rel12 "c4_freezer"              "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
     *) echo "unknown test: $t (authoritative set: observability uevent event_monitor interfaces webui_json thermal cli probe watchdog; spsc_queue/ml/scoring/placement exist only as SKIPPED recipes)" ; return 1 ;;
   esac
 }
@@ -669,7 +678,7 @@ fed_main fed_aggregate hmac topology config state control \
 thread_scan threadutil frame webui_http ebpf main v343_ml f_v434_ml f_v434_hybrid v343_placement v342_round4 profile_arb profile_stress recovery cmdq v342_round5 \
 integrity adrc frame_binder config_schema caps diag mech_uclamp coldstart coldinstance thermal_hal gpu_boost gpu_boost_thermal ebpf_classify watchdog_hotfix rt_restore exec_timeout thermal_clusters coldstart_release gpu_devfreq_recovery ebpf_cpu_mask ml_pool_feature \
 numpools_d1100 thermal_gate degraded_gate diag_gpu \
-a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http"
+a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active"
 if [ "$#" -eq 0 ]; then set -- $ALL; fi
 pass=0; fail=0; skipped=0
 declare -a FAILURES=()

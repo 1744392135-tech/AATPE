@@ -41,8 +41,8 @@
 #define AATPE_VERSION_CODE 4411
 // round6: unique build id + build date (single-sourced from ./VERSION). NOT a
 // version bump — lets the panel/state distinguish rel7..rel13 visually.
-#define AATPE_RELEASE_ID  "rel14"
-#define AATPE_BUILD_DATE  "2026-10-26"
+#define AATPE_RELEASE_ID  "rel15"
+#define AATPE_BUILD_DATE  "2026-10-27"
 // P30: build toolchain identity (mirrors Makefile / module.prop description).
 #define AATPE_TOOLCHAIN   "NDK r30 / Clang 21.0.0 / android29 / lld"
 #endif // AATPE_VERSION_H

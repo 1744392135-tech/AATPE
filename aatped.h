@@ -322,6 +322,11 @@ struct AatpePerAppFrameStat {
     bool isCurrent = false;    // this package == currentPkg.
     long long lastSeenMs = 0;   // wall-clock ms of last observed window; 0 = never seen.
     long long lastSeenEpochMs = 0;  // v4.3.5: real epoch ms (system_clock) for UI age display; 0 = never.
+    // rel12 (Bug1): raw missed-vsync accumulator. "丢帧 dropped" is now the real
+    // janky/missed FRAME count (<= total_frames); this preserves the vsync count
+    // (one late frame can miss MANY vsyncs, so it may exceed total_frames) for the
+    // detail panel, labelled "一帧可错过多个vsync".
+    long missed_vsyncs = 0;
 };
 // Fills `out` with all tracked per-app stats (most-recently-updated first),
 // sets `currentPkg` to the current foreground package name. Returns count.

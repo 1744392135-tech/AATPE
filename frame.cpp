@@ -2319,6 +2319,17 @@ void aatpeDebugFsMetricsSet(const std::string& p) {
     m.fps = 60; m.targetFps = 60; m.jankyPct = 0.05; m.totalFrames = 10;
     m.updatedMs = frameNowMs();
 }
+// rel12 Bug1/Bug2: richer inject seam so a host test can drive the exact rel14
+// on-device scenario (missedVsyncs >> totalFrames -> dropped used to exceed
+// total_frames; single fresh window -> active_ms used to be 0).
+void aatpeDebugFsMetricsInject(const std::string& p, double fps, double jankyPct,
+                               long totalFrames, long missedVsyncs) {
+    std::lock_guard<std::mutex> lk(g_perAppMutex);
+    auto& m = g_perAppFsMetrics[p];
+    m.fps = fps; m.targetFps = fps; m.jankyPct = jankyPct;
+    m.totalFrames = totalFrames; m.missedVsyncs = missedVsyncs;
+    m.updatedMs = frameNowMs();
+}
 
 // FRAME-01: g_tsLayerSnap is keyed by SF layer name (which embeds the package,
 // e.g. "SurfaceView[com.foo/Bar]@0(BLAST)#1234"). The old LRU eviction cleared
@@ -3492,21 +3503,41 @@ int aatpe_getPerAppFrameStats(std::vector<AatpePerAppFrameStat>& out,
         }
         // v4.2.6: override fps/jank with authoritative framestats metrics if available.
         auto fsIt = g_perAppFsMetrics.find(pkg);
-        if (fsIt != g_perAppFsMetrics.end() && fsIt->second.totalFrames >= 5) {
-            const auto& fm = fsIt->second;
+        const PerAppFsMetrics* fmPtr =
+            (fsIt != g_perAppFsMetrics.end() && fsIt->second.totalFrames >= 5)
+                ? &fsIt->second : nullptr;
+        if (fmPtr) {
+            const auto& fm = *fmPtr;
             st.fps = fm.fps;               // actual present rate from IntendedVsync
             st.target_fps = fm.targetFps;  // inferred target frame rate
-            st.jank = (long)(fm.jankyPct * fm.totalFrames);  // janky frame count
-            st.dropped = fm.missedVsyncs;  // cumulative missed vsyncs
+            // rel12 Bug1: "丢帧 dropped" = real janky/missed FRAMES and MUST be
+            // <= total_frames. fm.missedVsyncs is the raw vsync accumulator -- one
+            // badly-late frame can miss MANY vsyncs, so it could exceed the frame
+            // count and produced the impossible "丢帧574 / 总帧242". Keep the raw
+            // vsync count in st.missed_vsyncs for the detail panel.
+            long jankyFrames = (long)(fm.jankyPct * fm.totalFrames);
+            if (jankyFrames < 0) jankyFrames = 0;
+            if (jankyFrames > (long)fm.totalFrames) jankyFrames = (long)fm.totalFrames;
+            st.jank = jankyFrames;
+            st.dropped = jankyFrames;  // janky/missed frames (<= total_frames)
+            st.missed_vsyncs = fm.missedVsyncs;
             st.total_frames = fm.totalFrames;  // total rendered frames (denominator for jank%)
             st.frameSource = "timestats";  // SF per-layer present frames (self-render games)
         }
-        // active_ms: sum only gaps <=4s between consecutive windows (skip
-        // background gaps). Single window = 0ms.
+        // rel12 Bug2: active_ms must reflect real foreground-rendered time. The old
+        // code only summed <=4s gaps between sampling windows, so a freshly-opened
+        // app with a single window always rendered "前台 0ms" even though it had been
+        // actively presenting. Prefer the authoritative framestats rendering span
+        // (totalFrames / present-rate) when available; fall back to the contiguous
+        // window-gap sum (which telescopes to first..last for one session).
         long long activeMs = 0;
         for (size_t i = 1; i < ring.size(); i++) {
             long long gap = ring[i].tsMs - ring[i-1].tsMs;
             if (gap > 0 && gap <= kActiveGapMaxMs) activeMs += gap;
+        }
+        if (fmPtr && fmPtr->fps > 1.0 && fmPtr->totalFrames > 0) {
+            long long fsSpan = (long long)((double)fmPtr->totalFrames * 1000.0 / fmPtr->fps);
+            if (fsSpan > activeMs) activeMs = fsSpan;
         }
         st.active_ms = activeMs;
         st.last_update_ms = ring.back().tsMs;

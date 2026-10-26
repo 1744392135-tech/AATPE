@@ -1,18 +1,30 @@
-# Build artifacts
-*.o
-*.d
-*.a
-*.so
-a.out
-*.zip
-*.tar.gz
-build/
-release/
-# Runtime / dev state
-STATE.RUNNING
-*.log
-*.err
-*.sampler
-# Python
+# v6.0.0 RT-B B3: packaging hygiene.
+# Python bytecode cache (ebpf/gen_embedded_header.py leaves these on the build
+# host; they must never ship in the module zip and leak build-host paths).
 __pycache__/
 *.pyc
+
+# Build artifacts.
+*.o
+*.d
+*.s
+tests/v94/build/
+tests/v94/build_normal/
+tests/v94/build_tsan/
+tests/v94/build_check_normal/
+tests/v94/build_check_asan/
+
+# Stripped/install mirror + logs.
+_system_install/
+_install/system/bin/
+system/bin/
+logs/
+*.log
+
+# Compiled eBPF object is a build product (regenerated from sched_events.bpf.c).
+ebpf/sched_events.bpf.o
+
+# Test runtime marker (created by hermetic env-root tests) + generated manifest
+# (recomputed from each build's stripped binaries; never hand-edited).
+.aatpe_env_root
+BUILD_MANIFEST.txt

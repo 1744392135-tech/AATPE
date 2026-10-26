@@ -2,9 +2,9 @@
 # Do not hand-edit version=/versionCode here; the build regenerates them from VERSION.
 id=aatpe
 name=AATPE - Adaptive Android Task Placement Engine
-version=v6.0.0 (rel14)
+version=v6.0.0 (rel15)
 versionCode=4411
 author=AATPE
-description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel14, versionCode 4411) 四大根因修复: P1/P2 全修, 打包完整性修复(collect.sh/doctor.sh入包), RELEASE_ID/BUILD_DATE 四处一致并加 CI 守门. host 普通/ASan+UBSan/TSan 各136/0全0(race=0). C4_FREEZER/eBPF事件/联邦 默认ON(前台/音频/IM白名单,异常自动降级),安全与120°C硬墙强制ON. DEGRADED: 无真机/KVM, 见升级说明. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
+description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel15, versionCode 4411) 真机反馈修复: 守护进程CPU空转根治(每秒全量重打分→仅活跃线程, 43-47%降至活跃量级), WebUI首屏7833ms→<1.5s(HTTP探测快速失败+per-file合并), ui-snapshot/system.json非法JSON修复, 丢帧/总帧口径对齐(丢帧≤总帧, 另列错过vsync), 前台active_ms/loading/全局FPS对账, C4 v1后端可用性独立显示. 含rel14四大根因修复. host 普通/ASan+UBSan/TSan 全0失败(race=0). C4_FREEZER/eBPF事件/联邦 默认ON, 安全与120°C硬墙强制ON. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
 updateJson=
 template=3

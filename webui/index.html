@@ -177,7 +177,7 @@ select:focus{outline:none;border-color:#00d4aa}
 <div class="header">
 <h1>AATPE</h1>
 <div class="ver">Adaptive Android Task Placement Engine v6.0.0
-  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel14 · 构建于 2026-10-26</span>
+  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel15 · 构建于 2026-10-27</span>
 </div>
 <div class="status-bar">
 <span class="status-pill offline" id="daemonStatus">守护进程: 未运行</span>
@@ -1269,9 +1269,14 @@ async function readAllState() {
     /* 3-second client cache for /state/all */
     if (Date.now() - stateCache.timestamp < 3000 && stateCache.data) return stateCache.data;
     const _t0 = perfNow();
-    // Skip HTTP detection if daemon intentionally disabled HTTP (KSU webroot mode)
-    if (g_httpPort === 0 && !g_httpDisabled) {
-        try { await detectHttpPort(); } catch(e) {}
+    // rel13-perf: NEVER block first paint on HTTP detection. The exec bridge
+    // (window.ksu.exec -> aatpe-cli ui-snapshot) works regardless of HTTP; on
+    // SukiSU the WebView origin cannot reach 127.0.0.1 and awaiting the probe
+    // stalled first real data for ~7.9s. Kick detection off in the background
+    // only and proceed straight to the exec snapshot below. (initBoot already
+    // fires it once; the g_httpDetecting lock prevents a second concurrent run.)
+    if (g_httpPort === 0 && !g_httpDisabled && !g_httpDetecting) {
+        detectHttpPort().catch(function(){});
     }
     if (g_httpPort > 0) {
         try {
@@ -1329,12 +1334,27 @@ async function readAllState() {
             return obj;
         }
     } catch(e) {}
-    // Last-resort: per-file reads.
+    // Last-resort: ONE batched exec instead of N per-file forks. Emits
+    //   KEY<US><base64><RS>  (US=0x1F unit sep, RS=0x1E record sep) for each core
+    //   file; base64 round-trips both single- and multi-line state files verbatim
+    //   (newlines included), so we don't need the tr/\036 dance. This collapses
+    //   ~40 root-bridge forks into 1.
     try {
+        const keysArg = CORE_STATE_KEYS.join(' ');
+        const r = await smartExec('cd ' + STATE_DIR + ' 2>/dev/null && for k in ' + keysArg +
+            '; do printf "%s\\037" "$k"; base64 "$k" 2>/dev/null | tr -d "\\n"; printf "\\036"; done');
         const fallback = {};
-        const reads = await Promise.all(CORE_STATE_KEYS.map(k => readFile(STATE_DIR + '/' + k)));
-        for (let i = 0; i < CORE_STATE_KEYS.length; i++) {
-            fallback[CORE_STATE_KEYS[i]] = (reads[i] || '').trim();
+        if (r && r.errno === 0 && r.stdout) {
+            const recs = r.stdout.split('\u001e');
+            for (const rec of recs) {
+                if (!rec) continue;
+                const us = rec.indexOf('\u001f');
+                if (us < 0) continue;
+                const k = rec.substring(0, us);
+                const b64 = rec.substring(us + 1);
+                try { fallback[k] = b64 ? atob(b64).replace(/\s+$/, '') : ''; }
+                catch(e) { fallback[k] = ''; }
+            }
         }
         if (Object.values(fallback).some(v => v !== '')) {
             stateCache.data = fallback;
@@ -1342,7 +1362,7 @@ async function readAllState() {
             PERF.readAll.count++;
             const ms = perfNow() - _t0;
             PERF.readAll.lastMs = ms; if (ms > PERF.readAll.maxMs) PERF.readAll.maxMs = ms;
-            PERF.readAll.sumMs += ms; PERF.readAll.channel = 'per-file';
+            PERF.readAll.sumMs += ms; PERF.readAll.channel = 'per-file-batch';
         }
         return fallback;
     } catch(e) {
@@ -1404,7 +1424,7 @@ async function detectHttpPort() {
         } catch(e) { finish(false, 'sync-throw'); }
     });
     if (filePort > 0) {
-        const r = await tryFetch(filePort, 400);
+        const r = await tryFetch(filePort, 200);
         if (r.ok) {
             g_httpPort = filePort;
             g_httpDetected = true;
@@ -1414,10 +1434,14 @@ async function detectHttpPort() {
             PERF.detect.durationMs = Math.round(perfNow() - PERF.detect.startedAt);
             return filePort;
         }
-        if (r.kind === 'blocked') {
-            // fetch threw synchronously or network error — cleartext/CORS refused.
-            // The daemon IS listening (http_port file says so) but this WebView
-            // origin cannot reach it. exec bridge works, so we are done.
+        // rel13-perf: the http_port file proves the daemon IS listening, yet this
+        // WebView cannot reach it. On SukiSU the failure surfaces as *timeout*
+        // (cleartext blocked by the WebView origin), NOT a network 'blocked'
+        // error, so the old code fell through to the 12-port parallel scan and
+        // later retries — accumulating ~7.9s. When an exec bridge exists we do
+        // NOT need HTTP at all: declare webview_blocked ONCE and stop. Only a
+        // pure browser (no execFn) keeps hunting for the right port below.
+        if (execFn) {
             g_httpDisabled = true;
             g_httpState = 'webview_blocked';
             g_httpDetecting = false;
@@ -1426,7 +1450,8 @@ async function detectHttpPort() {
             PERF.detect.durationMs = Math.round(perfNow() - PERF.detect.startedAt);
             return 0;
         }
-        // else: timeout — port might be wrong, fall through to parallel scan.
+        // no exec bridge: fall through to the parallel port scan (pure browser
+        // needs HTTP to work).
     }
     // Method 2: PARALLEL probe ALL daemon ports (8888-8899) with a short timeout.
     // Previously this was serial: 12 * 150ms = 1.8s of blocking. Now all 12 in
@@ -2336,7 +2361,17 @@ async function refreshC4() {
     set('c4-cgdir', c.cgDir || '--');
     set('c4-action', c.lastAction || 'NO_CHANGE');
     set('c4-audio', c.audioActive ? '活跃（不冻）' : '静默');
-    set('c4-freezer', c.freezerAvailable ? '可用' : '不可用');
+    // rel12 Bug6: separate "freezer BACKEND available" from "currently has a
+    // freezable target". The backend already probes v1/v2 independently
+    // (freezerBackend), so when a v1/v2 backend exists but there is no background
+    // target (degraded=no-game-target) we must NOT read as "不可用" -- that conflates
+    // "no app to freeze right now" with "the freezer driver is missing".
+    const fb = c.freezerBackend || '';
+    if (fb) {
+        set('c4-freezer', fb + ' 后端可用' + (c.target ? '' : '（暂无目标）'));
+    } else {
+        set('c4-freezer', c.freezerAvailable ? '可用' : '不可用');
+    }
     set('c4-degraded', c.degraded || '');
 }
 
@@ -3315,7 +3350,7 @@ async function updateStatus() {
     const mode = get('control_mode');
     const profile = get('current_profile');
     setText('cur-mode', mode || '--');
-    setText('cur-profile', profile || '--');
+    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0')));
     if (!window._modeBtns) window._modeBtns = document.querySelectorAll('.btn-mode');
     if (!window._profBtns) window._profBtns = document.querySelectorAll('.btn-profile');
     window._modeBtns.forEach(b => b.classList.remove('active'));
@@ -3405,12 +3440,21 @@ async function updateStatus() {
             _fg = _frameApps.apps.find(a => (a && a.current === true) || (cur && a && a.pkg === cur)) || null;
         }
     } catch(e) { _fg = null; }
-    if ((!isFinite(gfps) || isNaN(gfps)) && _fg && Number(_fg.total_frames) > 0) {
+    // rel12 Bug4: game_avg_fps can be a literal "0" (finite, not NaN) when the
+    // global state file is stale/absent on the SukiSU exec channel. The old
+    // (!isFinite||isNaN) guard then kept gfps=0, so the global glance card showed
+    // "前台渲染FPS 0" while the authoritative per-app list right below showed 2.6.
+    // Treat a non-positive global value as MISSING and fall back to the current
+    // foreground app's own fps (same source as the per-app panel) so the two never
+    // contradict.
+    if (!(isFinite(gfps) && gfps > 0) && _fg && Number(_fg.total_frames) > 0) {
         const f = Number(_fg.fps);
         if (isFinite(f) && f > 0) gfps = f;
     }
-    setText('mon-game-fps', (isNaN(gfps) || !isFinite(gfps)) ? '--' : gfps.toFixed(0));
-    if ((isNaN(fmiss) || !isFinite(fmiss)) && _fg) {
+    setText('mon-game-fps', (isNaN(gfps) || !isFinite(gfps) || gfps <= 0) ? '--' : gfps.toFixed(0));
+    if (!(isNaN(fmiss) || !isFinite(fmiss)) && fmiss > 0) {
+        // already a positive, credible global miss%
+    } else if (_fg) {
         const tf = Number(_fg.total_frames) || 0;
         const jp = Number(_fg.jank) || 0;
         if (tf > 0) fmiss = 100.0 * jp / tf;
@@ -4498,7 +4542,7 @@ async function updateStatusFromData(S) {
     const mode = get('control_mode');
     const profile = get('current_profile');
     setText('cur-mode', mode || '--');
-    setText('cur-profile', profile || '--');
+    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0')));
     if (!window._modeBtns) window._modeBtns = document.querySelectorAll('.btn-mode');
     if (!window._profBtns) window._profBtns = document.querySelectorAll('.btn-profile');
     window._modeBtns.forEach(b => b.classList.remove('active'));
@@ -4942,6 +4986,17 @@ function faSourceText(src) {
         default:                return src ? String(src) : '无';
     }
 }
+// rel12 Bug5: when the foreground is explicitly NOT a game (frame_source=non_game)
+// but auto-profile still carries "gaming" (a leftover tier from the previous game
+// that has not yet dropped back), do NOT present gaming as the live config -- mark
+// it honestly. A user-locked gaming tier is left untouched (that is the user's
+// explicit choice).
+function rel12ProfileLabel(profile, frameSrc, locked) {
+    if (profile === 'gaming' && !locked && frameSrc === 'non_game') {
+        return 'gaming（前台非游戏·待回落）';
+    }
+    return profile || '--';
+}
 // VM 归因状态读取：vm_container_pkg / vm_inner_game 是后端写入 STATE_DIR、随
 // /state/all（或 ui-snapshot 兜底）聚合的状态键，缓存在模块级 stateCache.data。
 // G-004 fix: 旧实现里 typeof get === 'function' 引用的 get() 是 updateStatus()/
@@ -5082,6 +5137,19 @@ function renderFrameApps() {
     // P0 perf: keyed incremental render. Rows are <div data-pkg>. Only rebuild a
     // row's innerHTML when its content signature changed; append new rows; drop
     // rows for apps no longer present. No full innerHTML rebuild per tick.
+    // rel12 Bug3: wipe the static "加载中..." placeholder (and any other transient
+    // non-[data-pkg] node) now that real rows are being rendered. The incremental
+    // renderer only manages [data-pkg] rows, so the static placeholder used to stay
+    // pinned ABOVE the data rows forever (screenshot: a grey "加载中..." block sitting
+    // between "当前前台" and the populated [前台] card even after data arrived).
+    {
+        const kids = body.children;
+        for (let i = kids.length - 1; i >= 0; i--) {
+            if (!kids[i].hasAttribute || kids[i].getAttribute('data-pkg') === null) {
+                kids[i].remove();
+            }
+        }
+    }
     for (const a of rows) {
         const pkg = a.pkg || '(unknown)';
         // 逐应用 current:true 为前台权威标记（后端 07b 输出）；回退外层 current 包名匹配。
@@ -5193,7 +5261,8 @@ function faRenderDetail(pkg) {
         row('帧时 p95', faNum(a.ft_p95, 2, ' ms')) +
         row('帧时 p99', faNum(a.ft_p99, 2, ' ms')) +
         row('卡顿 jank', faInt(a.jank)) +
-        row('丢帧 dropped', faInt(a.dropped)) +
+        row('丢帧 dropped（未按节奏呈现的帧）', faInt(a.dropped)) +
+        row('错过vsync missed_vsyncs（一帧可错过多个）', faInt(a.missed_vsyncs)) +
         row('采样数 samples', faInt(a.samples)) +
         row('总帧 total_frames', faInt(a.total_frames)) +
         row('前台活跃时长 active_ms', faActive(a.active_ms) + ' (' + faNum(a.active_ms, 0, ' ms') + ')') +

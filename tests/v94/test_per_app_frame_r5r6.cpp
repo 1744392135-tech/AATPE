@@ -14,6 +14,7 @@ struct AatpePerAppFrameStat {
     double ft_p95=0; double ft_p99=0; long jank=0; long dropped=0; long samples=0;
     long total_frames=0; long active_ms=0; long long last_update_ms=0; double target_fps=0;
     std::string reason; std::string frameSource; bool isCurrent=false; long long lastSeenMs=0; long long lastSeenEpochMs=0;
+    long missed_vsyncs=0;  // rel12 Bug1: must match aatped.h struct layout
 };
 extern void aatpeSetFrameJank(const char*, int, double, double, double, double);
 extern int aatpe_getPerAppFrameStats(std::vector<AatpePerAppFrameStat>&, std::string&);

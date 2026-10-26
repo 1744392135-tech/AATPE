@@ -8,6 +8,11 @@
 #include <cstdint>
 #include <sched.h>
 
+// NOTE: this header is intended to be included after aatped_types.h (which
+// provides ThreadInfo / Decision). The umbrella header aatped.h already orders
+// them correctly; do NOT #include "aatped_types.h" here (it pulls in
+// aatpe_ml::ThreadFeatures which needs aatpe_ml.h first).
+
 // Android version detection
 int aatpeAndroidSdkInt();
 const char* aatpeAndroidVersionName();
@@ -188,5 +193,77 @@ void markThreadScoreDirty(int tid, long long nowMs);
 
 // Force-invalidate every cached score (global rebalance backstop).
 void invalidateAllScores();
+
+// ---------------------------------------------------------------------------
+// v600-fix2: scoring-loop active/rescore decision, extracted for host testing.
+//
+// A thread's cached decision is refreshed THIS cycle iff:
+//   (a) neverScored  -- brand-new, must be placed once, OR
+//   (b) (dirty || expired) AND active -- an event/TTL touched it AND it is
+//       actually running.
+//
+// "active" is the UNION of two independent signals:
+//   * eBPF signal: lastSwitchMs recency. ONLY valid when eBPF event-driven is
+//     live. When eBPF is unavailable/polling, onSwitch never runs, so
+//     lastSwitchMs stays 0 until the first score stamps it, then freezes --
+//     it CANNOT be trusted on its own.
+//   * /proc schedstat signal: thread_scan.cpp has observed nrSwitches growing
+//     recently (switchesPerSec > 0) OR the thread has not yet accumulated a
+//     long run of idle refreshes. This is the reliable fallback when eBPF is
+//     off.
+//
+// The dirty bit is consumed (cleared) regardless of the decision, matching
+// the original loop behavior.
+//
+// Root cause this fixes: the global rebalance backstop invalidateAllScores()
+// runs every kRebalanceMs=1s and set dirty=true on EVERY cached entry. The old
+// predicate `dirty || neverScored || (expired && active)` did not gate dirty on
+// active, so sleeping/background threads were rescored every second -- daemon CPU
+// 43-47%, ~475 decisions/s on a 136s uptime. Now dirty/expired only trigger a
+// rescore when the thread is actually active; neverScored always passes.
+// ---------------------------------------------------------------------------
+
+// After this many consecutive refresh cycles with NO nrSwitches growth, a
+// thread is considered sleeping for scoring purposes. Mirrors
+// thread_scan.cpp kIdleSkipThreshold (kept in lockstep deliberately).
+constexpr int kSchedstatIdleRefreshesActive = 6;
+
+// True if thread_scan has evidence the thread is currently running.
+inline bool threadIsActiveBySchedstat(const ThreadInfo& ti) {
+    // switchesPerSec > 0: thread_scan measured recent sched switches -> running.
+    // idleRefreshes < threshold: thread has not been continuously idle for the
+    //   whole skip window -> either recently active or brand-new.
+    return ti.switchesPerSec > 0.0 || ti.idleRefreshes < kSchedstatIdleRefreshesActive;
+}
+
+// Decide whether to rescore this thread. Mutates entry.dirty (consumes it).
+//   ttlMs:       kScoreTtlMs cache validity window
+//   inactiveMs:  kInactiveMs silence window for eBPF recency
+//   ebpfLive:    g_ebpfActive.load() -- whether eBPF event-driven is producing
+//                sched_switch events (false in polling/degraded mode).
+inline bool shouldRescoreThread(ThreadScoreEntry& entry,
+                               const ThreadInfo& ti,
+                               long long nowMs,
+                               long long ttlMs,
+                               long long inactiveMs,
+                               bool ebpfLive) {
+    bool neverScored = (entry.cachedAtMs == 0);
+    bool expired     = (entry.cachedAtMs != 0) && ((nowMs - entry.cachedAtMs) >= ttlMs);
+
+    // eBPF sched_switch recency. Only trustworthy when eBPF is live.
+    bool activeByEBPF = false;
+    if (ebpfLive) {
+        activeByEBPF = (entry.lastSwitchMs == 0) ||
+                       ((nowMs - entry.lastSwitchMs) < inactiveMs);
+    }
+    // /proc schedstat fallback (always valid; thread_scan maintains it).
+    bool activeBySchedstat = threadIsActiveBySchedstat(ti);
+
+    bool active = activeByEBPF || activeBySchedstat;
+
+    bool needsRescore = neverScored || ((entry.dirty || expired) && active);
+    entry.dirty = false;  // consume dirty bit regardless of decision
+    return needsRescore;
+}
 
 #endif // AATPED_UTILS_H

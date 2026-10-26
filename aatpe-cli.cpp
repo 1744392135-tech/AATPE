@@ -192,6 +192,26 @@ static int safeStoi(const std::string& s,int def=0){try{return std::stoi(s);}cat
 // deleting the helper.
 [[maybe_unused]] static unsigned long long safeStoull(const std::string& s,unsigned long long def=0){try{return std::stoull(s);}catch(...){return def;}}
 static long long safeStoll(const std::string& s,long long def=0){try{return std::stoll(s);}catch(...){return def;}}
+// RFC 8259 string escaper. Escapes " \ newline CR tab AND every other byte <0x20
+// as \u00XX. The old hand-rolled loops in `ui-snapshot` only handled " \ \n \r
+// and left the remaining control bytes (0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F) raw
+// inside a JSON string — V8 JSON.parse() rejects raw control chars, so the whole
+// `aatpe-cli ui-snapshot` payload was illegal JSON and the WebUI silently fell
+// back to N per-file exec cats.
+static std::string jsonEscapeStr(const std::string& v){
+    static const char* H="0123456789abcdef";
+    std::string o; o.reserve(v.size()+8);
+    for(unsigned char c:v){
+        if(c=='"'){o+="\\\"";}
+        else if(c=='\\'){o+="\\\\";}
+        else if(c=='\n'){o+="\\n";}
+        else if(c=='\r'){o+="\\r";}
+        else if(c=='\t'){o+="\\t";}
+        else if(c<0x20){o+="\\u00";o+=H[(c>>4)&0xF];o+=H[c&0xF];}
+        else{o+=(char)c;}
+    }
+    return o;
+}
 
 // P1-2 (hardened): PID-reuse-safe identity check. Delegates to the unified
 // aatpe::pid_identity::verifyAatpedPid() which enforces triple identity:
@@ -854,12 +874,7 @@ int main(int argc,char* argv[]){
             if(stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)) continue;
             if(st.st_size>65536) continue;
             std::string val=readFile(path.c_str());
-            std::string out; out.reserve(val.size()+8);
-            for(char c:val){
-                if(c=='"') out+="\\\""; else if(c=='\\') out+="\\\\";
-                else if(c=='\n') out+="\\n"; else if(c=='\r') out+="";
-                else out+=c;
-            }
+            std::string out=jsonEscapeStr(val);
             if(!first) printf(",");
             first=false;
             printf("\"%s\":\"%s\"",name.c_str(),out.c_str());
@@ -868,7 +883,7 @@ int main(int argc,char* argv[]){
         // Also inline frame_apps.json as a nested object (already JSON on disk).
         std::string faPath=std::string(aatpe::paths::kStateDir)+"/frame_apps.json";
         std::string fa=readFile(faPath.c_str());
-        if(!fa.empty()){ if(!first) printf(","); printf("\"frame_apps_raw\":%s",fa.c_str()); }
+        if(!fa.empty()){ if(!first) printf(","); printf("\"frame_apps_raw\":%s",fa.c_str()); first=false; }
         // v4.2.8: inline WEBUI_DIR percpu.json/system.json (small, exempt from 64KB).
         auto inlineJson=[&](const char* key,const std::string& p){
             std::string v=readFile(p.c_str());
@@ -889,14 +904,11 @@ int main(int argc,char* argv[]){
         // threads array (reuse loadThreadDb, capped 100).
         // v4.2.8 P2: JSON-escape thread comm (can contain '"'/'\\') so one odd
         // name cannot corrupt the whole snapshot JSON.
-        auto jsonEsc=[](const std::string& v){
-            std::string o; o.reserve(v.size()+4);
-            for(char c:v){ if(c=='"') o+="\\\""; else if(c=='\\') o+="\\\\";
-                else if(c=='\n') o+="\\n"; else if(c=='\r') continue; else o+=c; }
-            return o;
-        };
+        auto jsonEsc=[](const std::string& v){ return jsonEscapeStr(v); };
         auto recs=loadThreadDb();
-        printf(",\"threads\":[");
+        if(!first) printf(",");
+        first=false;
+        printf("\"threads\":[");
         for(size_t i=0;i<recs.size()&&i<100;i++){
             if(i) printf(",");
             const auto& r=recs[i];

@@ -4045,16 +4045,14 @@ void daemonLoop() {
                 {
                     std::lock_guard<std::mutex> sclock(g_scoreCacheMutex);
                     auto& entry = g_scoreCache[tid];
-                    bool neverScored = (entry.cachedAtMs == 0);
-                    bool expired     = (nowDecisionMs - entry.cachedAtMs) >= kScoreTtlMs;
-                    // No eBPF activity data yet (lastSwitchMs==0) -> treat as active
-                    // until eBPF has covered the thread; once covered, age out after
-                    // kInactiveMs of silence.
-                    bool active      = (entry.lastSwitchMs == 0) ||
-                                       ((nowDecisionMs - entry.lastSwitchMs) < kInactiveMs);
-                    bool needsRescore = entry.dirty || neverScored || (expired && active);
-                    entry.dirty = false;  // consume dirty bit
-                    if (!needsRescore) continue;
+                    // v600-fix2: extracted decision (see aatped_utils.h
+                    // shouldRescoreThread). Passes g_ebpfActive so eBPF recency
+                    // is only trusted when event-driven is live; otherwise the
+                    // /proc schedstat signal (ti.switchesPerSec/idleRefreshes,
+                    // maintained by thread_scan.cpp) is the active fallback.
+                    bool ebpfLive = g_ebpfActive.load(std::memory_order_acquire);
+                    if (!shouldRescoreThread(entry, ti, nowDecisionMs,
+                                             kScoreTtlMs, kInactiveMs, ebpfLive)) continue;
                 }
                 // G6: stable bucketing by Android uid (restart-stable); fall back
                 // to per-tid bucketing only when uid cannot be resolved.
