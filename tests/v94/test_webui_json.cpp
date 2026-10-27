@@ -104,6 +104,17 @@ int main(){
 
         g_mlModel.init(4);   // D1100: slots 0..3 (PRIME=3)
         g_mlModel.setEnabled(true);
+        // #97: mirror the audit device's cpu->pool assignment so isPoolPresent()
+        // can distinguish a real cluster from an empty tier. slot1 (MID) has NO
+        // cpu mapped onto it -> present=false in model.json.
+        {
+            std::vector<int> asg(8, -1);
+            for (int c = 0; c <= 3; c++) asg[c] = 0;   // LITTLE
+            // slot1 (MID) intentionally left with no cpu -> absent
+            for (int c = 4; c <= 6; c++) asg[c] = 2;   // BIG
+            asg[7] = 3;                                // PRIME
+            g_mlModel.setCpuPoolAssignment(asg);
+        }
         // stamp a distinctive pool-3 weight we can look up in the per-CPU table
         std::vector<float> w3(aatpe_ml::ML_WEIGHT_COUNT, 0.0f);
         w3[0] = 0.1234f;
@@ -119,6 +130,27 @@ int main(){
         // per-CPU cpus[] must now include cpu7 (was skipped by `if(poolIdx>=3) continue;`)
         CHECK(content.find("\"cpu\":7")!=std::string::npos, "per-CPU cpus[] contains cpu7");
         CHECK(content.find("\"pool_count\":4")!=std::string::npos, "pool_count=4");
+        // #97: every pool object carries a present field; the empty MID slot (1)
+        // must serialize present=false (NOT "learning"), while LITTLE/BIG/PRIME
+        // carry present=true.
+        CHECK(content.find("\"present\":true")!=std::string::npos, "#97: model.json emits present:true for real clusters");
+        CHECK(content.find("\"present\":false")!=std::string::npos, "#97: model.json emits present:false for empty MID slot");
+        // Pin the MID slot (pool:1) object specifically: its present must be false.
+        {
+            size_t p1 = content.find("\"pool\":1,\"name\":\"MID\"");
+            CHECK(p1 != std::string::npos, "#97: pool:1 MID object present");
+            if (p1 != std::string::npos) {
+                // The pool object has no nested objects (cpus/weights are number
+                // arrays), so the first '}' after the opening '{' closes it.
+                size_t openBrace = content.rfind('{', p1);
+                size_t closeBrace = content.find('}', p1);
+                std::string slot1 = content.substr(openBrace, closeBrace - openBrace + 1);
+                CHECK(slot1.find("\"present\":false") != std::string::npos,
+                      "#97: MID slot1 present=false (empty cluster, not 'learning')");
+                CHECK(slot1.find("\"present\":true") == std::string::npos,
+                      "#97: MID slot1 is not accidentally marked present");
+            }
+        }
         printf("  [INFO] model.json (%zu bytes)\n", content.size());
     }
 

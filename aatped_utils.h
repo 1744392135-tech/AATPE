@@ -179,6 +179,22 @@ struct ThreadScoreEntry {
     long long  cachedAtMs = 0;     // steady_clock ms when last scored (0 = never)
     long long  lastSwitchMs = 0;   // steady_clock ms of last sched_switch (activity)
     bool       dirty = false;      // needs immediate rescore (event-triggered)
+    // rel15 大小核颠倒 fix: one-shot bypass of the active gate. Set by the main
+    // loop when a key control transition happens (notably EMERGENCY->NORMAL), so
+    // every affected thread is re-scored ONCE even though the active gate would
+    // otherwise skip it (e.g. a low-switch-rate worker whose schedstat view was
+    // frozen by skipSchedstat and whose eBPF mark aged past kInactiveMs). This
+    // is NOT a per-second rescore: it is consumed (cleared) by the next
+    // shouldRescoreThread() call, so it fires exactly once per transition.
+    bool       forceRescore = false;
+    // rel15 大小核颠倒 fix: eBPF observed a real sched_switch for this thread
+    // (onSwitch -> markThreadScoreDirty). Set there; consumed by thread_scan's
+    // refreshTrackedThread() to immediately break the skipSchedstat freeze
+    // (reset idleRefreshes/longIdleRescan) instead of waiting up to
+    // kLongIdleRescanPeriod calibration cycles for the forced rescan. The score
+    // loop also treats it as an unconditional rescore trigger (a real switch just
+    // happened -> the thread is provably active, gating on active is wrong).
+    bool       wakeHint = false;
 };
 
 extern std::unordered_map<int, ThreadScoreEntry> g_scoreCache;
@@ -193,6 +209,11 @@ void markThreadScoreDirty(int tid, long long nowMs);
 
 // Force-invalidate every cached score (global rebalance backstop).
 void invalidateAllScores();
+
+// rel15 大小核颠倒 fix: one-shot bypass of the active gate on every cached
+// score. Called on a key control transition (e.g. EMERGENCY->NORMAL) so threads
+// affected by the transition are re-scored once regardless of the active signal.
+void forceRescoreAllScores();
 
 // ---------------------------------------------------------------------------
 // v600-fix2: scoring-loop active/rescore decision, extracted for host testing.
@@ -241,6 +262,17 @@ inline bool threadIsActiveBySchedstat(const ThreadInfo& ti) {
 //   inactiveMs:  kInactiveMs silence window for eBPF recency
 //   ebpfLive:    g_ebpfActive.load() -- whether eBPF event-driven is producing
 //                sched_switch events (false in polling/degraded mode).
+//
+// rel15 大小核颠倒 fix: two ONE-SHOT bypasses of the active gate:
+//   * forceRescore: set by the main loop on a key control transition
+//     (EMERGENCY->NORMAL etc.). Rescore even when active==false. Consumed here.
+//   * wakeHint: set by onSwitch (a real sched_switch was observed). The thread is
+//     provably active, so gating on the (possibly stale) active signal is wrong.
+//     Consumed here; thread_scan separately consumes it to break the schedstat
+//     freeze (see refreshTrackedThread).
+// Neither makes this a per-second full rescore: both are edge-triggered and
+// consumed immediately, and the normal (dirty||expired)&&active path is unchanged
+// so sleeping threads are still skipped to keep daemon CPU low.
 inline bool shouldRescoreThread(ThreadScoreEntry& entry,
                                const ThreadInfo& ti,
                                long long nowMs,
@@ -261,8 +293,20 @@ inline bool shouldRescoreThread(ThreadScoreEntry& entry,
 
     bool active = activeByEBPF || activeBySchedstat;
 
-    bool needsRescore = neverScored || ((entry.dirty || expired) && active);
-    entry.dirty = false;  // consume dirty bit regardless of decision
+    // Edge-triggered bypasses take priority over the active gate.
+    bool bypass = entry.forceRescore || entry.wakeHint;
+
+    bool needsRescore = neverScored || bypass || ((entry.dirty || expired) && active);
+    entry.dirty = false;       // consume dirty bit regardless of decision
+    entry.forceRescore = false; // consume one-shot transition bypass
+    // rel15 P1-1: consume wakeHint on the very next call too. onSwitch() ->
+    // markThreadScoreDirty() sets it on every real sched_switch; if we left it
+    // set, a thread that switches once then goes quiet would be re-scored on every
+    // 200ms main-loop turn for the rest of its life (300/300 red-team repro),
+    // pushing daemon CPU back toward rel14 levels. Consuming it here makes a wake
+    // event trigger exactly one rescore. thread_scan's freeze-break no longer
+    // depends on this flag -- it keys off lastSwitchMs freshness instead.
+    entry.wakeHint = false;
     return needsRescore;
 }
 

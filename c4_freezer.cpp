@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <algorithm>
 
 namespace aatpe {
@@ -182,6 +183,56 @@ std::string parseV1FreezerPath(const std::string& content) {
     return "";
 }
 
+// PURE (#96): parse the body of /proc/mounts (or /etc/mtab) and return the mount
+// point of the cgroup v1 freezer hierarchy. A v1 cgroup mount line is
+// whitespace-separated:
+//   <device>  <mount point>  cgroup  <opt1,opt2,freezer,...>  <dump>  <pass>
+// e.g. "none /sys/fs/cgroup/freezer cgroup rw,relatime,freezer 0 0".
+// We require vfstype == "cgroup" (v2 unified is "cgroup2", which is handled by the
+// separate v2 probe) and an exact "freezer" entry in the comma-separated options.
+// Returns the mount point WITHOUT a trailing slash, or "" when no such mount line
+// exists. Pure: no I/O, fully host-testable.
+std::string parseV1FreezerMountPoint(const std::string& procMountsContent) {
+    size_t pos = 0;
+    while (pos < procMountsContent.size()) {
+        size_t eol = procMountsContent.find('\n', pos);
+        if (eol == std::string::npos) eol = procMountsContent.size();
+        std::string line = procMountsContent.substr(pos, eol - pos);
+        pos = eol + 1;
+        // Split into whitespace-separated fields.
+        std::vector<std::string> fields;
+        size_t p = 0;
+        while (p < line.size()) {
+            while (p < line.size() && (line[p]==' '||line[p]=='\t'||
+                                       line[p]=='\r')) p++;
+            size_t s = p;
+            while (p < line.size() && line[p]!=' ' && line[p]!='\t' &&
+                   line[p]!='\r') p++;
+            if (s < p) fields.push_back(line.substr(s, p - s));
+        }
+        // Need at least: device, mount point, vfstype, options.
+        if (fields.size() < 4) continue;
+        const std::string& vfsType = fields[2];
+        if (vfsType != "cgroup") continue;          // v2 unified is "cgroup2"
+        // Options: comma-separated controller list; match "freezer" exactly.
+        const std::string& opts = fields[3];
+        bool hasFreezer = false;
+        size_t q = 0;
+        while (q <= opts.size()) {
+            size_t comma = opts.find(',', q);
+            if (comma == std::string::npos) comma = opts.size();
+            std::string ctrl = opts.substr(q, comma - q);
+            if (ctrl == "freezer") { hasFreezer = true; break; }
+            q = comma + 1;
+        }
+        if (!hasFreezer) continue;
+        std::string mp = fields[1];
+        while (!mp.empty() && mp.back() == '/') mp.pop_back();
+        if (!mp.empty()) return mp;
+    }
+    return "";
+}
+
 std::string parseV1FreezerState(const std::string& content) {
     std::string s = content;
     while (!s.empty() && (s.back()=='\n'||s.back()=='\r'||
@@ -248,6 +299,12 @@ std::string c4ChooseTarget(const std::string& lastGame,
     return "";                             // nothing tracked
 }
 
+// PURE (v6.0.1): see header. Trivial OR, extracted so the production glue's
+// signal collection stays host-testable on its own.
+bool c4FgIsGameSignals(bool manualGame, bool configGame, bool engineThreadGame) {
+    return manualGame || configGame || engineThreadGame;
+}
+
 // PURE (v4.4.6 WebUI; v6.1.0 backend): read-only JSON snapshot.
 std::string c4StateJson(bool enabled, const std::string& target, bool frozen,
                         const std::string& cgDir, const std::string& lastAction,
@@ -311,6 +368,19 @@ extern const char* STATE_DIR;
 // Forward-declared in the aatpe namespace to keep this TU self-contained
 // (avoids pulling aatped.h's heavy include graph).
 namespace aatpe { namespace gamelist { bool isManualGame(const std::string& pkg); } }
+// v6.0.1: the OTHER game list (aatped_config.cpp: isPackageInGameList, backed by
+// GAME_PACKAGES= in aatpe.conf). It lives in the GLOBAL namespace (see
+// aatped_config.h:80). C4 historically only consulted the manual
+// game_overrides.list, so a user who configured games via aatpe.conf (or whose
+// gamescene engine already tracks games through this list) saw
+// degraded="no-game-target" forever. Unify both lists here.
+bool isPackageInGameList(const std::string& pkg);
+// v6.0.1: auto game-engine-thread recognizer (aatped_threadutil.cpp, namespace
+// aatpe). It has existed since v4.2 A1 but was never called in production (dead
+// code). Wire it in as a third, automatic "this fg is a game" signal so a
+// freshly-installed engine-built game becomes a freeze target without any
+// manual configuration.
+namespace aatpe { bool isGameEngineThread(const char* comm, const char* procComm); }
 
 namespace aatpe {
 namespace c4freezer {
@@ -389,6 +459,73 @@ void c4FreezerTestSetMountRoot(const std::string& root) {
 }
 #endif
 
+// ---- #96: runtime v1 freezer mount-point resolution ---------------------------
+//
+// On the audit device the v1 freezer hierarchy IS mounted (/proc/mounts:
+// "none /sys/fs/cgroup/freezer cgroup rw,relatime,freezer") yet the old probe
+// reported freezerAvailable=false. The old code REQUIRED
+// <root>/freezer/freezer.state to exist at the hierarchy root; on this device
+// that root node is not observable through our probe (SELinux/root-node quirk),
+// so the backend was wrongly judged missing. The authoritative signal that a v1
+// freezer backend exists is the cgroup v1 mount carrying the "freezer" controller
+// in /proc/mounts -- we parse it at runtime and use the discovered mount point,
+// never hardcoding /sys/fs/cgroup/freezer. The probe caches the result (cgroup
+// mounts are static after boot).
+static std::string s_v1FreezerRoot;       // resolved v1 hierarchy root ("" = none)
+static bool        s_v1FreezerProbed = false;
+
+#ifdef C4_FREEZER_TEST_SEAM
+// Test seam: inject /proc/mounts content. Empty -> read the real /proc/mounts.
+// Also flushes the cached resolution so the new content is re-probed.
+static std::string s_testMountsContent;
+void c4FreezerTestSetMountsContent(const std::string& content) {
+    s_testMountsContent = content;
+    s_v1FreezerProbed = false;
+    s_v1FreezerRoot.clear();
+}
+#endif
+
+static std::string readProcMountsContent() {
+#ifdef C4_FREEZER_TEST_SEAM
+    if (!s_testMountsContent.empty()) return s_testMountsContent;
+#endif
+    FILE* f = std::fopen("/proc/mounts", "r");
+    if (!f) return "";
+    std::string out;
+    char buf[512];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+// Resolve the v1 freezer hierarchy root. Order:
+//   1. Parse /proc/mounts for a cgroup v1 "freezer" mount; if its mount point is a
+//      directory, that is the root. This works even when the root freezer.state
+//      node is unreadable.
+//   2. Fall back to the conventional <root>/freezer directory.
+// Returns the path (no trailing slash) or "" when neither yields a directory.
+static const std::string& resolveV1FreezerRoot() {
+    if (s_v1FreezerProbed) return s_v1FreezerRoot;
+    s_v1FreezerProbed = true;
+
+    std::string mp = parseV1FreezerMountPoint(readProcMountsContent());
+    if (!mp.empty()) {
+        struct stat st;
+        if (::stat(mp.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            s_v1FreezerRoot = mp;
+            return s_v1FreezerRoot;
+        }
+    }
+    // Conventional fallback (also what the host glue fake-tree tests rely on).
+    std::string conv = cgroupMountRoot() + "/freezer";
+    struct stat st;
+    if (::stat(conv.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+        s_v1FreezerRoot = conv;
+    }
+    return s_v1FreezerRoot;
+}
+
 static bool freezerControllerPresent() {
     FILE* f = std::fopen((cgroupMountRoot() + "/cgroup.controllers").c_str(), "r");
     if (!f) return false;
@@ -409,15 +546,13 @@ static bool freezeNodeWritable(const std::string& dir) {
 
 // ---- v6.1.0: cgroup v1 freezer backend --------------------------------------
 
-// v1 freezer hierarchy mounted at <root>/freezer/. Present if the directory
-// exists and contains a freezer.state node.
+// v1 freezer backend available iff we resolved a v1 freezer hierarchy root (via
+// /proc/mounts, with a conventional-path fallback). The OLD code additionally
+// required <root>/freezer/freezer.state to be observable, which failed on the
+// #96 device even though the hierarchy was mounted. "Backend available" is now
+// independent of whether a target app cgroup exists yet.
 static bool v1FreezerPresent() {
-    std::string dir = cgroupMountRoot() + "/freezer";
-    struct stat st;
-    if (::stat(dir.c_str(), &st) != 0) return false;
-    if (!S_ISDIR(st.st_mode)) return false;
-    std::string fs = dir + "/freezer.state";
-    return ::access(fs.c_str(), F_OK) == 0;
+    return !resolveV1FreezerRoot().empty();
 }
 
 // Is <dir>/freezer.state present AND writable?
@@ -429,13 +564,16 @@ static bool v1FreezeNodeWritable(const std::string& dir) {
     return ::access(p.c_str(), W_OK) == 0;
 }
 
-// Locate the v1 freezer cgroup for appUid: <root>/freezer/uid_<uid>/.
-// Direct path construction (no /proc scan needed on v1): the uid gate is
-// built into the directory name, so system/root processes (which have no
-// uid_<appUid> directory under freezer) are never touched.
+// Locate the v1 freezer cgroup for appUid: <resolved v1 root>/uid_<uid>/.
+// Uses the runtime-resolved mount point (see resolveV1FreezerRoot) rather than
+// hardcoding <cgroupMountRoot>/freezer. The uid gate is built into the directory
+// name, so system/root processes (which have no uid_<appUid> directory under the
+// freezer hierarchy) are never touched.
 static std::string findTargetV1CgroupDir(int appUid) {
     if (appUid <= 0) return "";
-    std::string dir = cgroupMountRoot() + "/freezer/uid_" + std::to_string(appUid);
+    std::string root = resolveV1FreezerRoot();
+    if (root.empty()) return "";
+    std::string dir = root + "/uid_" + std::to_string(appUid);
     struct stat st;
     if (::stat(dir.c_str(), &st) != 0) return "";
     if (!S_ISDIR(st.st_mode)) return "";
@@ -570,6 +708,93 @@ static bool audioActiveNow(const std::string& pkg) {
     return mediaSessionMentionsPlaying(out, pkg);
 }
 
+// v6.0.1 test seam: when non-empty, fgHasGameEngineThreads() returns
+// (pkg == s_testAutoGamePkg). Lets host glue tests inject "this foreground app
+// has engine threads" without a real /proc tree. Release builds never define
+// C4_FREEZER_TEST_SEAM, so this symbol is absent from the production binary.
+#ifdef C4_FREEZER_TEST_SEAM
+static std::string s_testAutoGamePkg;
+// Forward declaration of the cache defined below; the seam setter must flush
+// it so a test can toggle "engine threads present" for the SAME pkg across
+// phases (in production the cache is keyed on a stable pkg and never needs a
+// flush, but tests flip the injected result mid-run).
+static void flushAutoGameCache();
+void c4FreezerTestSetAutoGamePkg(const std::string& pkg) {
+    s_testAutoGamePkg = pkg;
+    flushAutoGameCache();
+}
+#endif
+
+// v6.0.1: auto-detect whether `pkg` currently runs a game-engine thread
+// (UnityMain/UnrealGame/VulkanRender/bgfx/GameView/...). Reuses the thread-role
+// truth in aatped_threadutil.cpp that was previously dead in production.
+// Conservative: any failure to enumerate -> false (do NOT promote to a game).
+// Caches the result per distinct fg pkg (the tick is single-threaded) so the
+// pidof exec + /proc/<pid>/task scan runs once per foreground switch rather
+// than every tick.
+static bool fgHasGameEngineThreads(const std::string& pkg) {
+    if (pkg.empty()) return false;
+#ifdef C4_FREEZER_TEST_SEAM
+    if (!s_testAutoGamePkg.empty()) return pkg == s_testAutoGamePkg;
+#else
+    std::string out = aatpeExec(("pidof " + pkg).c_str(), "c4freezer-autogame");
+    if (out.empty()) return false;
+    // pidof prints "pid1 pid2 ...". Walk whitespace-separated tokens.
+    size_t pos = 0;
+    while (pos < out.size()) {
+        while (pos < out.size() &&
+               (out[pos]==' ' || out[pos]=='\n' || out[pos]=='\t' || out[pos]=='\r')) pos++;
+        size_t sp = pos;
+        while (pos < out.size() && out[pos] >= '0' && out[pos] <= '9') pos++;
+        if (sp == pos) break;
+        int pid = std::atoi(out.substr(sp, pos - sp).c_str());
+        if (pid <= 0) continue;
+        std::string taskDir = "/proc/" + std::to_string(pid) + "/task";
+        DIR* d = ::opendir(taskDir.c_str());
+        if (!d) continue;
+        struct dirent* de;
+        bool hit = false;
+        while ((de = ::readdir(d)) != nullptr) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;
+            std::string commPath = taskDir + "/" + de->d_name + "/comm";
+            FILE* f = std::fopen(commPath.c_str(), "re");
+            if (!f) continue;
+            char comm[256] = {0};
+            size_t n = std::fread(comm, 1, sizeof(comm) - 1, f);
+            std::fclose(f);
+            if (n == 0) continue;
+            // comm file is NUL- or newline-terminated; trim trailing whitespace.
+            while (n > 0 && (comm[n-1]=='\n' || comm[n-1]=='\r' ||
+                             comm[n-1]==' '  || comm[n-1]=='\t')) {
+                comm[n-1] = '\0'; n--;
+            }
+            if (aatpe::isGameEngineThread(comm, nullptr)) { hit = true; break; }
+        }
+        ::closedir(d);
+        if (hit) return true;
+    }
+#endif
+    return false;
+}
+
+// Per-fg-pkg cache so the pidof + task scan above runs once per distinct
+// foreground app, not every slow tick. c4FreezerTick() is the only caller and
+// runs on a single slow thread, so no lock is needed.
+static std::string s_autoCachePkg;
+static bool        s_autoCacheResult = false;
+#ifdef C4_FREEZER_TEST_SEAM
+// Only the test seam flushes the cache (production re-scans whenever the fg pkg
+// changes, so it never needs a flush); guard it so NDK -Wunused-function won't
+// fire under -Werror.
+static void flushAutoGameCache() { s_autoCachePkg.clear(); s_autoCacheResult = false; }
+#endif
+static bool fgHasGameEngineThreadsCached(const std::string& pkg) {
+    if (pkg == s_autoCachePkg) return s_autoCacheResult;
+    s_autoCachePkg    = pkg;
+    s_autoCacheResult = fgHasGameEngineThreads(pkg);
+    return s_autoCacheResult;
+}
+
 void c4FreezerTick() {
     if (!c4FreezerEnabled()) return;
 
@@ -590,7 +815,17 @@ void c4FreezerTick() {
 
     // ForegroundManager is internally synchronized; no need for our mutex here.
     std::string fg = ForegroundManager::instance().getPackage();
-    bool fgIsGame = !fg.empty() && gamelist::isManualGame(fg);
+    // v6.0.1: "is this foreground a game?" is now the OR of three independent
+    // signals (see c4FgIsGameSignals): manual override list, config game list,
+    // and an auto scan for game-engine threads. The historical v6.0.0 code only
+    // consulted gamelist::isManualGame(), so on a fresh device where the user
+    // had never opened WebUI -> "add game", fgIsGame was permanently false,
+    // lastGame was never set, c4ChooseTarget() always returned "", and the
+    // panel sat at degraded="no-game-target" forever (the reported 8h bug).
+    bool manualGame = !fg.empty() && gamelist::isManualGame(fg);
+    bool configGame = !fg.empty() && isPackageInGameList(fg);
+    bool engineGame = !fg.empty() && fgHasGameEngineThreadsCached(fg);
+    bool fgIsGame   = c4FgIsGameSignals(manualGame, configGame, engineGame);
 
     // ======================================================================
     // PHASE 2 (SHORT critical section): snapshot the shared bookkeeping into

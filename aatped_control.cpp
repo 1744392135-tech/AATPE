@@ -389,6 +389,30 @@ bool setRuntimeControlMode(const std::string& mode, const std::string& reason) {
         return false;
     }
 
+    // ROUND-007c (v6.0.0 rel16): respect the user's manual mode lock on the
+    // watchdog/safety path. The watchdog issues set_control_mode=passive on its
+    // 3s tick (watchdog::kDefaultIntervalSec=3) for mig-rate / load / memory /
+    // crash-loop latching. Before this fix that unconditionally overwrote the
+    // user's explicitly-chosen "active": it set g_cfg.controlMode="passive",
+    // latched g_watchdogPassiveLocked, drove system_state->PASSIVE and rewrote
+    // STATE_DIR/control_mode — so the WebUI mode button bounced from 激进 back to
+    // 被动 within ~3s on a healthy 40C device. g_userModeLock is set true by the
+    // WebUI set_mode=active/assist path and cleared by set_mode=passive. When the
+    // user has manually locked a faster mode, a NON-emergency safety downgrade to
+    // passive must NOT clobber that choice. Real thermal emergency still overrides
+    // (the one safety event that must always win), and a user who picks passive
+    // clears the lock, so the safety path keeps working for them.
+    bool isEmergency = (mode == "emergency");
+    if (!isEmergency &&
+        targetState == SystemState::PASSIVE &&
+        g_userModeLock.load(std::memory_order_relaxed)) {
+        LOG_WARN("[P1-1] control_mode safety downgrade '%s' (%s) IGNORED: user manually locked mode (active/assist); thermal emergency still overrides",
+                 mode.c_str(), reason.c_str());
+        atomicWriteFile((std::string(STATE_DIR) + "/control_mode_reason").c_str(),
+                        std::string("ignored_user_lock:") + (reason.empty() ? "unknown" : reason));
+        return false;
+    }
+
     // 1. Update g_cfg.controlMode (EFFECTIVE mode) under g_cfgMutex.
     // ROUND-007: this is the WATCHDOG/SAFETY path — it must NOT overwrite
     // g_userControlMode (the user's persistent choice). When safety clears,

@@ -252,6 +252,23 @@ int main() {
               == "", "MN: no tracked game + launcher -> no target");
     }
 
+    printf("=== v6.0.1: fgIsGame signal OR (manual/config/engine-thread) ===\n");
+    {
+        // The 8h bug world: no signal at all -> NOT a game.
+        CHECK(aatpe::c4freezer::c4FgIsGameSignals(false, false, false) == false,
+              "signals: zero signals -> not a game (safe)");
+        // Any single positive signal promotes to a game.
+        CHECK(aatpe::c4freezer::c4FgIsGameSignals(true, false, false) == true,
+              "signals: manual list alone -> game");
+        CHECK(aatpe::c4freezer::c4FgIsGameSignals(false, true, false) == true,
+              "signals: config list alone -> game");
+        CHECK(aatpe::c4freezer::c4FgIsGameSignals(false, false, true) == true,
+              "signals: auto engine-thread alone -> game");
+        // All three OR'd together is still a game.
+        CHECK(aatpe::c4freezer::c4FgIsGameSignals(true, true, true) == true,
+              "signals: all three -> game");
+    }
+
     printf("=== v4.4.6/v6.1.0: C4 WebUI state JSON ===\n");
     {
         std::string j = aatpe::c4freezer::c4StateJson(
@@ -313,6 +330,34 @@ int main() {
               "V1: v2 path (no /freezer/) not v1");
         CHECK(!aatpe::c4freezer::isV1FreezerDir(""),
               "V1: empty path -> not v1");
+
+        // #96: parseV1FreezerMountPoint -- exact device cgroup_mounts.txt shape.
+        // The audit device mounts v1 freezer at /sys/fs/cgroup/freezer with the
+        // tmpfs cgroup root above it; the old root-freezer.state probe missed it.
+        const char* DEVICE_MOUNTS =
+            "none /dev/cg2_bpf cgroup2 rw,seclabel,nosuid,nodev,noexec,relatime 0 0\n"
+            "none /sys/fs/cgroup tmpfs rw,seclabel,relatime,mode=750,gid=1000 0 0\n"
+            "none /sys/fs/cgroup/freezer cgroup rw,relatime,freezer 0 0\n"
+            "none /sys/fs/cgroup/cpuset cgroup rw,relatime,cpuset,noprefix,release_agent=/sbin/cgroup_release_agent 0 0\n";
+        CHECK(aatpe::c4freezer::parseV1FreezerMountPoint(DEVICE_MOUNTS) ==
+                  "/sys/fs/cgroup/freezer",
+              "V1: /proc/mounts freezer mount point extracted");
+        // v2 unified line (cgroup2 vfstype) must NOT match.
+        CHECK(aatpe::c4freezer::parseV1FreezerMountPoint(
+                  "cgroup2 /sys/fs/cgroup cgroup2 ro,nsdelegate 0 0\n") == "",
+              "V1: cgroup2 vfstype ignored (v1 parser)");
+        // cgroup v1 mount WITHOUT freezer controller -> empty.
+        CHECK(aatpe::c4freezer::parseV1FreezerMountPoint(
+                  "none /sys/fs/cgroup/cpu cgroup rw,relatime,cpu 0 0\n") == "",
+              "V1: cgroup w/o freezer -> empty");
+        // Combined controllers (cpu,freezer) still matches.
+        CHECK(aatpe::c4freezer::parseV1FreezerMountPoint(
+                  "none /sys/fs/cgroup/mix cgroup rw,relatime,cpu,freezer 0 0\n") ==
+                  "/sys/fs/cgroup/mix",
+              "V1: combined cpu,freezer mount parsed");
+        // Empty / no cgroup line -> empty.
+        CHECK(aatpe::c4freezer::parseV1FreezerMountPoint("") == "",
+              "V1: empty mounts -> empty");
     }
 
     printf("\n=== Results: %d passed, %d failed ===\n", s_pass, s_fail);

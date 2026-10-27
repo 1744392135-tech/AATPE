@@ -177,7 +177,7 @@ select:focus{outline:none;border-color:#00d4aa}
 <div class="header">
 <h1>AATPE</h1>
 <div class="ver">Adaptive Android Task Placement Engine v6.0.0
-  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel15 · 构建于 2026-10-27</span>
+  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel17 · 构建于 2026-10-27</span>
 </div>
 <div class="status-bar">
 <span class="status-pill offline" id="daemonStatus">守护进程: 未运行</span>
@@ -210,6 +210,15 @@ select:focus{outline:none;border-color:#00d4aa}
 <button class="btn btn-test" onclick="exportDiagLogs()">导出诊断日志</button>
 </div>
 <div class="debug-box" id="debugDiag"></div>
+</div>
+
+<div id="ext-sched-banner" style="display:none;border:1px solid #ffd479;background:rgba(255,212,121,.08);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px">
+<div style="color:#ffd479;font-weight:bold;margin-bottom:4px">⚠ 检测到外部调度器共存</div>
+<div style="color:#ccc;line-height:1.6">
+其它调度服务正在运行，可能与 AATPE 同时调整调度参数（schedtune / uclamp / cpufreq 等），导致双方互相覆盖、调度抖动。<br>
+检测到的外部调度器：<span id="ext-sched-names" style="color:#ffb3ba">--</span><br>
+<span style="font-size:10px;color:#888">AATPE 不会主动对抗或关闭它们；如需一致调度，请在外部应用中关闭同类调度，或仅保留 AATPE。</span>
+</div>
 </div>
 
 <div class="card" id="c4-panel">
@@ -311,6 +320,9 @@ Watchdog 锁定状态: <span id="watchdog-lock-status" style="font-weight:bold;c
 <div class="stat-item"><div class="label">当前配置</div><div class="value" id="cur-profile">--</div></div>
 <div class="stat-item"><div class="label">迁移次数</div><div class="value green" id="cur-migrations">--</div></div>
 <div class="stat-item"><div class="label">决策次数</div><div class="value" id="cur-decisions">--</div></div>
+<!-- #99: HTTP channel state read from the SAME g_httpState/g_httpPort the top
+     status bar uses, so control page and status bar can never disagree. -->
+<div class="stat-item"><div class="label">HTTP 服务</div><div class="value" id="cur-http-state">--</div></div>
 </div>
 </div>
 
@@ -683,6 +695,7 @@ eBPF tracepoint实时监听线程创建/销毁/CPU调度/应用启动。支持em
 </div>
 <div class="grid" style="margin-top:8px">
 <div class="stat-item"><div class="label">帧源</div><div class="value" id="mon-frame-source" style="font-size:13px">--</div></div>
+<div class="stat-item"><div class="label">游戏场景<small style="color:#666">(后端实测)</small></div><div class="value" id="mon-game-scene" style="font-size:13px">--</div></div>
 <div class="stat-item"><div class="label">前台应用渲染FPS<small style="color:#666">(非屏幕刷新率)</small></div><div class="value" id="mon-game-fps">--</div></div>
 <div class="stat-item"><div class="label">前台应用帧丢失<small style="color:#666">(非全局平均)</small></div><div class="value" id="mon-frame-miss">--</div></div>
 <div class="stat-item"><div class="label">热HAL状态</div><div class="value" id="mon-thermal-hal">--</div></div>
@@ -1223,6 +1236,14 @@ const CORE_STATE_KEYS = [
     'vm_container_pkg','vm_inner_game','vm_inner_pids',
     // v4.2.1 frame diagnostics (why no game layer / FPS) + manual game list
     'frame_debug_fg','frame_debug_candidates',
+    // #103/P3-3: backend's honest game-scene classification (combat/loading/menu/unknown).
+    // The state cache (/state/all aggregate, ui-snapshot, per-file batch) is keyed by
+    // STATE_DIR FILENAME, which is `current_game_scene` -- NOT the `game_scene` alias
+    // used inside writeStateJson()'s separate webui snapshot file. Use the filename here
+    // so delta/snapshot path hits directly without falling back to a direct readFile.
+    'current_game_scene',
+    // #102: external scheduler coexistence warning (read-only observability)
+    'external_scheduler_detected','external_scheduler_names',
     'thermal_hal_status','thermal_hal_skin','thermal_hal_headroom','thermal_source','gpu_hard_throttle','gpu_thermal_cap',
     // ROUND-014 hotfix: dropped 'scan_loop_ms' (no producer; was a dead fallback read).
     'cgroup_uclamp_scale','ebpf_state','gpu_boost_active','watchdog_degraded','tmpfs_usage_kb','cold_start_window',
@@ -2027,7 +2048,7 @@ function switchTab(name, tabEl) {
     if (name === 'explain') refreshExplain();
     if (name === 'model') refreshModel();
     if (name === 'system') refreshSystem();
-    if (name === 'control') refreshC4();
+    if (name === 'control') { refreshC4(); _extSchedLastRun = 0; refreshExternalScheduler(); }
     if (name === 'monitor') { updatePerCpu(); updateThreads(); updateJankDiag(); refreshFrameApps(); }
 }
 function toggleAutoScroll(btn) {
@@ -2368,11 +2389,49 @@ async function refreshC4() {
     // "no app to freeze right now" with "the freezer driver is missing".
     const fb = c.freezerBackend || '';
     if (fb) {
-        set('c4-freezer', fb + ' 后端可用' + (c.target ? '' : '（暂无目标）'));
+        set('c4-freezer', fb + ' 后端可用' + (c.target ? '' : '（当前无目标）'));
+    } else if (c.freezerAvailable) {
+        set('c4-freezer', '可用');
     } else {
-        set('c4-freezer', c.freezerAvailable ? '可用' : '不可用');
+        set('c4-freezer', '不可用');
     }
-    set('c4-degraded', c.degraded || '');
+    // #96: map the degraded reason code to a human sentence. "no-game-target" must
+    // read as "后端可用/当前无游戏目标" (NOT as "freezer 不可用").
+    const DEGRADED_LABELS = {
+        'disabled': '功能已关闭',
+        'no-game-target': '后端可用 · 当前无游戏目标（后台暂无应用可冻）',
+        'no-freezer-controller': '未找到 freezer 控制器（v1/v2 均不可用）',
+        'freeze-node-not-writable': '冻结节点不可写（权限问题）'
+    };
+    set('c4-degraded', (c.degraded && DEGRADED_LABELS[c.degraded]) ? DEGRADED_LABELS[c.degraded] : (c.degraded || ''));
+}
+
+// #102: external scheduler coexistence warning. The daemon writes two state files:
+//   STATE_DIR/external_scheduler_detected  ("0" | "1")
+//   STATE_DIR/external_scheduler_names     (comma-separated, e.g. scene_fas_ft_provider,scene_swap_controller)
+// We only surface a conservative banner -- NO adversarial action, no toggle.
+// P2-3: this runs on the GLOBAL tick (not only on tab-control) so a user parked on
+// the monitor tab still sees the banner within ~5s. Throttled to once per 5s to
+// avoid re-reading two state files every 1s control-tick; idempotent (it only
+// toggles banner.style.display, no toast / no repeated alert on every poll).
+let _extSchedLastRun = 0;
+async function refreshExternalScheduler() {
+    const banner = document.getElementById('ext-sched-banner');
+    if (!banner) return;
+    const now = Date.now();
+    if (now - _extSchedLastRun < 5000) return;   // 5s throttle
+    _extSchedLastRun = now;
+    let detected = '';
+    let names = '';
+    try { detected = (await readFile(STATE_DIR + '/external_scheduler_detected')).trim(); } catch(e) {}
+    try { names = (await readFile(STATE_DIR + '/external_scheduler_names')).trim(); } catch(e) {}
+    if (detected === '1') {
+        banner.style.display = '';
+        const namesEl = document.getElementById('ext-sched-names');
+        if (namesEl) namesEl.textContent = names && names !== '' ? names : '(未给出名称)';
+    } else {
+        banner.style.display = 'none';
+    }
 }
 
 async function refreshModel() {
@@ -2427,13 +2486,23 @@ async function refreshModel() {
     const pct = maxAlpha > 0 ? Math.min(100, (alpha / maxAlpha) * 100) : 0;
     document.getElementById('model-alpha-bar').style.width = pct + '%';
     document.getElementById('model-alpha-pct').textContent = pct.toFixed(1) + '%';
-    // Model readiness = min(per-pool samples / mlMinSamples) across all pools
+    // Model readiness = min(per-pool samples / mlMinSamples) across PRESENT pools.
+    // #97: a tier that has no CPU on this device (present=false, e.g. MID on the
+    // audit box) MUST NOT drag readiness to 0% -- it will never accumulate samples.
+    // Pools without the present field (older daemon) default to present=true so the
+    // historical "every slot is a cluster" behavior is preserved.
     const readinessMin = 2000;
     let readinessPct = 0;
     let minSamples = 0;
     if (data.pools && data.pools.length > 0) {
-        minSamples = Math.min(...data.pools.map(p => p.sample_count || 0));
-        readinessPct = readinessMin > 0 ? Math.min(100, (minSamples / readinessMin) * 100) : 100;
+        const presentPools = data.pools.filter(p => p.present !== false);
+        const samples = presentPools.map(p => p.sample_count || 0);
+        if (samples.length > 0) {
+            minSamples = Math.min.apply(null, samples);
+            readinessPct = readinessMin > 0 ? Math.min(100, (minSamples / readinessMin) * 100) : 100;
+        } else {
+            minSamples = 0; readinessPct = 0;
+        }
     }
     const rBar = document.getElementById('model-readiness-bar');
     if (rBar) {
@@ -2480,18 +2549,28 @@ async function refreshModel() {
     if (csPoolsEl && data.pools && data.pools.length > 0) {
         let poolHtml = '';
         for (const p of data.pools) {
+            const present = (p.present !== false);  // older daemon: default true
             const sc = p.sample_count || 0;
             const ready = p.ready === true;
-            const progPct = csMin > 0 ? Math.min(100, (sc / csMin) * 100) : 100;
-            const barColor = ready ? '#00d4aa' : '#f0a500';
-            const statusText = ready ? '就绪' : '学习中';
-            const statusClass = ready ? 'green' : 'yellow';
             poolHtml += '<div style="margin-bottom:10px">';
             poolHtml += '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">';
             poolHtml += '<span style="color:#aaa"><b>' + escapeHtml(p.name || ('POOL'+p.pool)) + '</b></span>';
-            poolHtml += '<span class="' + statusClass + '">' + sc + ' / ' + csMin + ' (' + progPct.toFixed(1) + '%) — ' + statusText + '</span>';
-            poolHtml += '</div>';
-            poolHtml += '<div class="progress-bar"><div class="progress-bar-fill" style="width:' + progPct + '%;background:' + barColor + '"></div></div>';
+            if (!present) {
+                // #97: this tier has no CPU on this device -- not "still learning",
+                // not a readiness blocker. Show it as N/A so the user understands
+                // why MID has 0 samples without panic.
+                poolHtml += '<span class="gray" style="color:#666">— 无此簇（本机无对应 CPU，不参与就绪度）</span>';
+                poolHtml += '</div>';
+                poolHtml += '<div class="progress-bar"><div class="progress-bar-fill" style="width:0%;background:#333"></div></div>';
+            } else {
+                const progPct = csMin > 0 ? Math.min(100, (sc / csMin) * 100) : 100;
+                const barColor = ready ? '#00d4aa' : '#f0a500';
+                const statusText = ready ? '就绪' : '学习中';
+                const statusClass = ready ? 'green' : 'yellow';
+                poolHtml += '<span class="' + statusClass + '">' + sc + ' / ' + csMin + ' (' + progPct.toFixed(1) + '%) — ' + statusText + '</span>';
+                poolHtml += '</div>';
+                poolHtml += '<div class="progress-bar"><div class="progress-bar-fill" style="width:' + progPct + '%;background:' + barColor + '"></div></div>';
+            }
             poolHtml += '</div>';
         }
         csPoolsEl.innerHTML = poolHtml;
@@ -3350,7 +3429,7 @@ async function updateStatus() {
     const mode = get('control_mode');
     const profile = get('current_profile');
     setText('cur-mode', mode || '--');
-    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0')));
+    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0'), get('current_game_scene')));
     if (!window._modeBtns) window._modeBtns = document.querySelectorAll('.btn-mode');
     if (!window._profBtns) window._profBtns = document.querySelectorAll('.btn-profile');
     window._modeBtns.forEach(b => b.classList.remove('active'));
@@ -3380,6 +3459,11 @@ async function updateStatus() {
     }
     setText('cur-migrations', (get('migration_count') !== '' && get('migration_count') != null) ? get('migration_count') : '--');
     setText('cur-decisions', (get('decision_count') !== '' && get('decision_count') != null) ? get('decision_count') : '--');
+    // #99: HTTP channel state on the control page. MUST match the top status bar
+    // (renderLinkStatus) because both derive from the same g_httpState/g_httpPort
+    // which are reconciled from system.json's http_state/http_port by
+    // ingestHttpChannelState(). No independent port probe here.
+    renderCurHttpState();
     setText('mon-temp', (get('thermal_cpu_max') || '--') + '°C');
     // ROUND-009a: show thermal source zone if backend provides it.
     try {
@@ -3421,6 +3505,26 @@ async function updateStatus() {
     const FRAME_SRC_LABELS = {timestats:'Timestats',latency_binder:'Binder延迟',latency_dumpsys:'Dumpsys延迟',gfxinfo:'GFXInfo',none:'无数据'};
     const fs = get('frame_source');
     setText('mon-frame-source', (fs && fs !== '') ? (FRAME_SRC_LABELS[fs] || fs) : '--');
+    // #103: game scene is the BACKEND's honest classification of the current
+    // foreground. When a non-game app (e.g. MT manager bin.mt.plus) is in front,
+    // the detector resets to "unknown" -- the UI MUST show that, not "combat".
+    {
+        let scene = get('current_game_scene');
+        if (!scene || scene === '') {
+            try { scene = (await readFile(STATE_DIR + '/current_game_scene')).trim(); } catch(e) {}
+        }
+        const el = document.getElementById('mon-game-scene');
+        if (el) {
+            const SCENE_LABELS = {combat:'战斗(combat)', loading:'加载(loading)', menu:'菜单(menu)', unknown:'非游戏/未知(unknown)'};
+            if (!scene || scene === '') {
+                el.textContent = '--';
+                el.className = 'value';
+            } else {
+                el.textContent = SCENE_LABELS[scene] || scene;
+                el.className = 'value ' + (scene === 'combat' ? 'green' : scene === 'unknown' ? '' : 'yellow');
+            }
+        }
+    }
     // v4.2.8: single-app frame panel is the authoritative source. These legacy
     // keys (game_avg_fps/game_frame_miss) are now derived from the same
     // per-app pipeline but kept for the global glance card; mark it clearly.
@@ -3440,32 +3544,43 @@ async function updateStatus() {
             _fg = _frameApps.apps.find(a => (a && a.current === true) || (cur && a && a.pkg === cur)) || null;
         }
     } catch(e) { _fg = null; }
-    // rel12 Bug4: game_avg_fps can be a literal "0" (finite, not NaN) when the
-    // global state file is stale/absent on the SukiSU exec channel. The old
-    // (!isFinite||isNaN) guard then kept gfps=0, so the global glance card showed
-    // "前台渲染FPS 0" while the authoritative per-app list right below showed 2.6.
-    // Treat a non-positive global value as MISSING and fall back to the current
-    // foreground app's own fps (same source as the per-app panel) so the two never
-    // contradict.
-    if (!(isFinite(gfps) && gfps > 0) && _fg && Number(_fg.total_frames) > 0) {
-        const f = Number(_fg.fps);
-        if (isFinite(f) && f > 0) gfps = f;
-    }
-    setText('mon-game-fps', (isNaN(gfps) || !isFinite(gfps) || gfps <= 0) ? '--' : gfps.toFixed(0));
-    if (!(isNaN(fmiss) || !isFinite(fmiss)) && fmiss > 0) {
-        // already a positive, credible global miss%
-    } else if (_fg) {
-        const tf = Number(_fg.total_frames) || 0;
-        const jp = Number(_fg.jank) || 0;
-        if (tf > 0) fmiss = 100.0 * jp / tf;
-    }
-    if (!isNaN(fmiss) && isFinite(fmiss)) {
-        const el = document.getElementById('mon-frame-miss');
-        if (el) {
-            el.textContent = fmiss.toFixed(1) + '%';
-            el.className = 'value ' + (fmiss > 10 ? 'red' : fmiss > 5 ? 'yellow' : 'green');
+    // #99: do NOT treat the WebUI's own foreground (or any non-game app) as the
+    // frame target. When frame_source is "none"/empty (or game_scene=unknown) the
+    // foreground is not a game surface -- presenting its fps=0 / jank=91% as the
+    // "前台应用渲染FPS" is misleading. Detect that state and show an explicit
+    // "非游戏/无帧率数据" instead of 0 FPS or a fake drop%.
+    const _fs = get('frame_source');
+    const _scene = get('current_game_scene');
+    const _noGameTarget = (!_fs || _fs === '' || _fs === 'none') || (_scene === 'unknown');
+    if (_noGameTarget) {
+        const fpsEl = document.getElementById('mon-game-fps');
+        if (fpsEl) { fpsEl.textContent = '非游戏/无帧率数据'; fpsEl.className = 'value'; }
+        const missEl = document.getElementById('mon-frame-miss');
+        if (missEl) { missEl.textContent = '--'; missEl.className = 'value'; }
+    } else {
+        // rel12 Bug4: game_avg_fps can be a literal "0" (finite, not NaN) when the
+        // global state file is stale/absent. Treat a non-positive global value as
+        // MISSING and fall back to the current foreground app's own fps.
+        if (!(isFinite(gfps) && gfps > 0) && _fg && Number(_fg.total_frames) > 0) {
+            const f = Number(_fg.fps);
+            if (isFinite(f) && f > 0) gfps = f;
         }
-    } else { setText('mon-frame-miss', '--'); }
+        setText('mon-game-fps', (isNaN(gfps) || !isFinite(gfps) || gfps <= 0) ? '--' : gfps.toFixed(0));
+        if (!(isNaN(fmiss) || !isFinite(fmiss)) && fmiss > 0) {
+            // already a positive, credible global miss%
+        } else if (_fg) {
+            const tf = Number(_fg.total_frames) || 0;
+            const jp = Number(_fg.jank) || 0;
+            if (tf > 0) fmiss = 100.0 * jp / tf;
+        }
+        if (!isNaN(fmiss) && isFinite(fmiss)) {
+            const el = document.getElementById('mon-frame-miss');
+            if (el) {
+                el.textContent = fmiss.toFixed(1) + '%';
+                el.className = 'value ' + (fmiss > 10 ? 'red' : fmiss > 5 ? 'yellow' : 'green');
+            }
+        } else { setText('mon-frame-miss', '--'); }
+    }
     const gref = document.getElementById('global-frame-note');
     if (gref) gref.style.display = '';
     const fur = get('frame_unavailable_reason');
@@ -4055,9 +4170,24 @@ async function updatePerCpu() {
     // was ~360 chars with command substitution; on some KSU builds it was
     // truncated or only the last iteration (CPU7) was emitted.
     const data = await readJson(WEBUI_DIR + '/percpu.json');
-    if (!data || !data.cpus || data.cpus.length === 0) {
-        container.innerHTML = '<div class="empty-state">暂无per-CPU数据<br><span style="font-size:10px">守护进程运行后将自动生成状态文件</span></div>';
+    // #98: the backend ALWAYS emits percpu.json now, and carries an explicit
+    // "degraded" reason code when cpus[] is empty. Render that reason instead of
+    // a generic "暂无数据" so the user can tell "topology not detected yet" from
+    // "metrics collector not sampling yet".
+    if (!data) {
+        container.innerHTML = '<div class="empty-state">percpu.json 不可用<br><span style="font-size:10px">守护进程运行后将自动生成状态文件</span></div>';
         if (summaryEl) summaryEl.textContent = '无数据';
+        return;
+    }
+    if (!data.cpus || data.cpus.length === 0) {
+        const deg = (typeof data.degraded === 'string' ? data.degraded : '');
+        let reason = '未知原因';
+        if (deg === 'no-topology') reason = 'CPU 拓扑尚未检测到（守护进程正在扫描 /sys/devices/system/cpu）';
+        else if (deg === 'no-cpu-metrics') reason = 'CPU 指标尚未采样（等待 /proc/stat 首次读数）';
+        else if (deg === 'ok') reason = '数据就绪但为空（异常）';
+        container.innerHTML = '<div class="empty-state" style="color:#ffd479">Per-CPU 数据降级：' + escapeHtml(reason) +
+            '<br><span style="font-size:10px;color:#888">degraded=' + escapeHtml(deg || '(空)') + ' · count=' + (data.count !== undefined ? data.count : 0) + '</span></div>';
+        if (summaryEl) summaryEl.textContent = '降级：' + (deg || '未知');
         return;
     }
     const cpus = [];
@@ -4381,6 +4511,32 @@ async function h4ProbeOnce() {
         g_execOk = (r && r.errno === 0 && r.stdout && r.stdout.indexOf('aatpe_probe') >= 0);
     } catch (e) { g_execOk = false; }
 }
+// #99: control-page HTTP state readout. Mirrors the top status bar's HTTP cell
+// exactly (same g_httpState/g_httpPort) so the two never disagree. Source of
+// truth is system.json http_state/http_port reconciled by ingestHttpChannelState().
+function renderCurHttpState() {
+    const el = document.getElementById('cur-http-state');
+    if (!el) return;
+    let txt, cls = '';
+    if (g_httpState === 'on' || g_httpPort > 0) {
+        txt = '运行中 (端口 ' + (g_httpPort > 0 ? g_httpPort : 'on') + ')';
+        cls = 'green';
+    } else if (g_httpState === 'disabled_by_config') {
+        txt = '已按配置关闭';
+        cls = '';
+    } else if (g_httpState === 'failed_token' || g_httpState === 'ports_busy') {
+        txt = (g_httpState === 'ports_busy' ? '端口占用' : 'token 启动失败') + ' · 见日志';
+        cls = 'red';
+    } else if (g_httpState === 'webview_blocked') {
+        txt = 'WebView 禁 HTTP (exec 模式)';
+        cls = '';
+    } else {
+        txt = '未运行 (exec 模式)';
+        cls = '';
+    }
+    el.textContent = txt;
+    el.className = 'value ' + cls;
+}
 function renderLinkStatus() {
     buildStatusBar();
     const stale = stateCache.timestamp ? Math.round((Date.now() - stateCache.timestamp) / 1000) : -1;
@@ -4542,7 +4698,7 @@ async function updateStatusFromData(S) {
     const mode = get('control_mode');
     const profile = get('current_profile');
     setText('cur-mode', mode || '--');
-    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0')));
+    setText('cur-profile', rel12ProfileLabel(profile, get('frame_source'), (get('profile_lock') === '1' || get('auto_profile') === '0'), get('current_game_scene')));
     if (!window._modeBtns) window._modeBtns = document.querySelectorAll('.btn-mode');
     if (!window._profBtns) window._profBtns = document.querySelectorAll('.btn-profile');
     window._modeBtns.forEach(b => b.classList.remove('active'));
@@ -4570,6 +4726,11 @@ async function updateStatusFromData(S) {
     }
     setText('cur-migrations', (get('migration_count') !== '' && get('migration_count') != null) ? get('migration_count') : '--');
     setText('cur-decisions', (get('decision_count') !== '' && get('decision_count') != null) ? get('decision_count') : '--');
+    // #99: HTTP channel state on the control page. MUST match the top status bar
+    // (renderLinkStatus) because both derive from the same g_httpState/g_httpPort
+    // which are reconciled from system.json's http_state/http_port by
+    // ingestHttpChannelState(). No independent port probe here.
+    renderCurHttpState();
     setText('mon-temp', (get('thermal_cpu_max') || '--') + '°C');
     // ROUND-009a: show thermal source zone if backend provides it.
     try {
@@ -4808,6 +4969,10 @@ function startRefresh() {
         // button must not stay on the static "--" placeholder). Fire-and-forget;
         // refreshThermalButton is cheap and self try/catch-guarded.
         refreshThermalButton();
+        // P2-3: external-scheduler banner refreshes on the GLOBAL tick (not just
+        // tab-control) so users on the monitor/system tab still see it within ~5s.
+        // refreshExternalScheduler() self-throttles to 5s and is idempotent.
+        refreshExternalScheduler();
         const activeTab = document.querySelector('.tab-content.active') ? document.querySelector('.tab-content.active').id : '';
         // When SSE is active, skip the core status fetch (SSE already
         // pushes /state/all every 500ms). Only do tab-specific data refreshes.
@@ -4991,8 +5156,12 @@ function faSourceText(src) {
 // that has not yet dropped back), do NOT present gaming as the live config -- mark
 // it honestly. A user-locked gaming tier is left untouched (that is the user's
 // explicit choice).
-function rel12ProfileLabel(profile, frameSrc, locked) {
-    if (profile === 'gaming' && !locked && frameSrc === 'non_game') {
+function rel12ProfileLabel(profile, frameSrc, locked, gameScene) {
+    // #103: game_scene=unknown is the backend's authoritative "foreground is not
+    // a game" signal (e.g. MT manager bin.mt.plus). Don't present a stale gaming
+    // tier as combat. frameSrc==='non_game' kept for older daemons.
+    const nonGame = (gameScene === 'unknown') || (frameSrc === 'non_game');
+    if (profile === 'gaming' && !locked && nonGame) {
         return 'gaming（前台非游戏·待回落）';
     }
     return profile || '--';

@@ -2,9 +2,9 @@
 # Do not hand-edit version=/versionCode here; the build regenerates them from VERSION.
 id=aatpe
 name=AATPE - Adaptive Android Task Placement Engine
-version=v6.0.0 (rel15)
+version=v6.0.0 (rel17)
 versionCode=4411
 author=AATPE
-description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel15, versionCode 4411) 真机反馈修复: 守护进程CPU空转根治(每秒全量重打分→仅活跃线程, 43-47%降至活跃量级), WebUI首屏7833ms→<1.5s(HTTP探测快速失败+per-file合并), ui-snapshot/system.json非法JSON修复, 丢帧/总帧口径对齐(丢帧≤总帧, 另列错过vsync), 前台active_ms/loading/全局FPS对账, C4 v1后端可用性独立显示. 含rel14四大根因修复. host 普通/ASan+UBSan/TSan 全0失败(race=0). C4_FREEZER/eBPF事件/联邦 默认ON, 安全与120°C硬墙强制ON. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
+description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel17, versionCode 4411) 真机反馈修复: ①控制模式切激进3秒内回弹被动根治(setRuntimeControlMode安全收口补用户锁门控,非emergency的看门狗降级不覆盖用户手动选择,温度emergency仍可覆盖); ②C4冻结8小时无目标根治(游戏识别从单一手动列表改为手动列表+conf GAME_PACKAGES+游戏引擎线程扫描三信号OR,自动识别游戏切后台即可冻结,前台/音频/不确定安全护栏全保留). 含rel16大小核颠倒修复(emergency退出后低切换worker首圈promote回大核)、状态机震荡、C4 v1 freezer探测、percpu.json、ML空簇就绪度、游戏场景门禁、前端显示修复及rel15及之前各轮. host 全量v94=154 ok/0 fail, 普通/ASan+UBSan/TSan 全0失败. C4_FREEZER/eBPF事件/联邦 默认ON, 安全与120°C硬墙强制ON. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
 updateJson=
 template=3

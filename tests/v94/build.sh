@@ -314,6 +314,8 @@ run_one() {
     event_monitor) build_test event_monitor "event_monitor uevent_monitor aatpe_ml" "log_stub v94_daemon_deps" ;;
     interfaces)    build_test interfaces   "aatpe_interfaces aatpe_ml" "v94_daemon_deps log_stub" ;;
     webui_json)    build_test webui_json    "webui_json aatpe_ml"   "webui_clusters_deps v94_daemon_deps log_stub scenewire" ;;
+    # #98: writePerCpuJson always emits percpu.json with an explicit degraded code.
+    webui_percpu)  build_test webui_percpu  "webui_json aatpe_ml"   "webui_clusters_deps v94_daemon_deps log_stub scenewire" ;;
     thermal)       export -f run_thermal_namespaced
                    RUN_CMD='run_thermal_namespaced' build_test thermal "thermal thermal_headroom aatpe_ml thermal_ff/thermal_ff" "thermal_deps log_stub" ;;
     # cli #includes aatpe-cli.cpp (main renamed) which self-provides its own
@@ -328,6 +330,9 @@ run_one() {
     # v600-fix2: header-only inline shouldRescoreThread() active/dirty gating.
     # No prod/stub deps -- test only calls inline helpers in aatped_utils.h.
     scoring_active) build_test scoring_active ""                   "" ;;
+    # rel15 大小核颠倒: forceRescore/wakeHint one-shot bypass of the active gate.
+    # Header-only inline shouldRescoreThread() in aatped_utils.h; no prod deps.
+    rel15_freeze)   build_test rel15_freeze   ""                   "" ;;
     # v4.1.1 hotfix: boot-grace / degraded self-heal / pidfile adoption.
     # Same include-the-.cpp pattern as watchdog above (main renamed inside test).
     watchdog_hotfix) build_test watchdog_hotfix ""                "" ;;
@@ -343,6 +348,9 @@ run_one() {
     thermal_clusters)  build_test thermal_clusters "thermal thermal_headroom aatpe_ml thermal_ff/thermal_ff"    "thermal_deps log_stub" "-DAATPE_HOST_TEST" ;;
     # P3-1: thermal emergency recovery honors an in-latch user mode override.
     emergency_recovery) build_test emergency_recovery "thermal thermal_headroom aatpe_ml thermal_ff/thermal_ff" "thermal_deps log_stub" "-DAATPE_HOST_TEST" ;;
+    # rel15: thermal emergency recovery debounce (30s + temp drop) and the
+    # entry-edge clock reset that covers the watchdog-forced emergency path.
+    emergency_timing)  build_test emergency_timing "thermal thermal_headroom aatpe_ml thermal_ff/thermal_ff" "thermal_deps log_stub" "-DAATPE_HOST_TEST" ;;
     # F1 #2: whole-TU include cold_start_rules.cpp; stubs live in the test TU.
     coldstart_release) build_test coldstart_release ""                   "" "-DAATPE_HOST_TEST" ;;
     # F3.1 (v4.3.8): whole-TU include cold_start_rules.cpp; drives the
@@ -507,6 +515,9 @@ run_one() {
     config)       build_test config       "aatped_config aatpe_ml aatped_hmac aatpe_config_schema aatpe_ml_hybrid_main aatpe_ml_hybrid_predict aatpe_ml_hybrid_train aatpe_ml_hybrid_persist aatpe_ml_hy_alpha" "log_stub config_deps hybrid_deps ml_deps" ;;
     state)        build_test state        "aatped_state aatpe_ml"  "state_deps log_stub ml_deps" ;;
     control)      build_test control      "aatped_control aatpe_ml aatpe_command_dispatcher aatpe_command_queue aatpe_ml_hybrid_main aatpe_ml_hybrid_predict aatpe_ml_hybrid_train aatpe_ml_hybrid_persist aatpe_ml_hy_alpha" "v94_daemon_deps log_stub control_deps hybrid_deps gamelist_stub" ;;
+    # ROUND-007c: WebUI 激进(active)->被动(passive) ~3s bounce. watchdog 3s tick 下发
+    # set_control_mode=passive 经 setRuntimeControlMode() 覆盖用户手动 active。同 control 链接集。
+    active_lock)  build_test active_lock  "aatped_control aatpe_ml aatpe_command_dispatcher aatpe_command_queue aatpe_ml_hybrid_main aatpe_ml_hybrid_predict aatpe_ml_hybrid_train aatpe_ml_hybrid_persist aatpe_ml_hy_alpha" "v94_daemon_deps log_stub control_deps hybrid_deps gamelist_stub" ;;
     # round-4 P1 #1/#2: real command queue directory. Same link set as
     # control (drain dispatches through the real executeControlLine()).
     cmdq)         build_test cmdq         "aatpe_command_queue aatped_control aatpe_ml aatpe_command_dispatcher aatpe_ml_hybrid_main aatpe_ml_hybrid_predict aatpe_ml_hybrid_train aatpe_ml_hybrid_persist aatpe_ml_hy_alpha" "v94_daemon_deps log_stub control_deps hybrid_deps gamelist_stub" ;;
@@ -550,6 +561,8 @@ run_one() {
     ebpf)         build_test ebpf         "aatpe_ebpf aatpe_subsystem"            "log_stub ebpf_deps hybrid_deps" ;;
     # round-2: ML drift detector + topology sidecar (#38/#39/#93).
     v343_ml)      build_test v343_ml      "aatpe_ml"             "ml_deps log_stub" ;;
+    # rel15 #97: empty/absent tier pool must not drag global maturity to 0%.
+    ml_empty_pool) build_test ml_empty_pool "aatpe_ml"           "ml_deps log_stub" ;;
     # v4.5.0: ML shadow sampling in observe-only (passive) mode.
     ml_shadow_v450) build_test ml_shadow_v450 "aatpe_ml"          "ml_deps log_stub" ;;
     # v6.0.0 P1: passive-sampler feature extraction contract (extractMlFeatures
@@ -662,6 +675,14 @@ run_one() {
     # rel12 Bug6: v1 freezer present but NO game target -> StateJson must still
     # report freezerAvailable=true / freezerBackend=v1 (not "unavailable").
     c4_freezer_rel12) build_test c4_freezer_rel12 "c4_freezer"              "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
+    # #96: v1 freezer mount exists (from /proc/mounts) but has NO root
+    # freezer.state node -> StateJson must still report freezerAvailable=true /
+    # freezerBackend=v1 (the old root-freezer.state probe missed real devices).
+    c4_freezer_mounts) build_test c4_freezer_mounts "c4_freezer"            "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
+    # v6.0.1: auto engine-thread game detection. Reproduces the 8h no-game-target
+    # bug (manual+config lists empty) and proves the auto signal primes lastGame
+    # and the game becomes a freezable background target after it backgrounds.
+    c4_freezer_autogame) build_test c4_freezer_autogame "c4_freezer"        "" "-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM" ;;
     *) echo "unknown test: $t (authoritative set: observability uevent event_monitor interfaces webui_json thermal cli probe watchdog; spsc_queue/ml/scoring/placement exist only as SKIPPED recipes)" ; return 1 ;;
   esac
 }
@@ -674,11 +695,11 @@ run_one() {
 ALL="observability uevent event_monitor interfaces webui_json thermal cli probe watchdog scoring placement spillover_rt \
 abtest gamescene arbitrator arb_wiring battery gpu audio applaunch logging utils uevent_fallback ebpf_agg \
 ml_hybrid_main ml_hybrid_train ml_hybrid_predict ml_hybrid_persist ml_hybrid_alpha \
-fed_main fed_aggregate hmac topology config state control \
+fed_main fed_aggregate hmac topology config state control active_lock \
 thread_scan threadutil frame webui_http ebpf main v343_ml f_v434_ml f_v434_hybrid v343_placement v342_round4 profile_arb profile_stress recovery cmdq v342_round5 \
 integrity adrc frame_binder config_schema caps diag mech_uclamp coldstart coldinstance thermal_hal gpu_boost gpu_boost_thermal ebpf_classify watchdog_hotfix rt_restore exec_timeout thermal_clusters coldstart_release gpu_devfreq_recovery ebpf_cpu_mask ml_pool_feature \
 numpools_d1100 thermal_gate degraded_gate diag_gpu \
-a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active"
+a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 c4_freezer_mounts c4_freezer_autogame tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery emergency_timing vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_empty_pool ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active rel15_freeze webui_percpu"
 if [ "$#" -eq 0 ]; then set -- $ALL; fi
 pass=0; fail=0; skipped=0
 declare -a FAILURES=()

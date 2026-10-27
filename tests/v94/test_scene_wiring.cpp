@@ -219,6 +219,65 @@ int main() {
         CHECK(d2.scene == Scene::TEAMFIGHT, "T11: TEAMFIGHT reached on 2 slopes w/o GPU");
     }
 
+    printf("T12: coexistence registry carries the two proven audit entries\n");
+    {
+        CHECK(scenewire::externalSchedRegistrySize() >= 2,
+              "T12: registry non-empty");
+        CHECK(scenewire::externalSchedRegistryHas("scene_fas_ft_provider"),
+              "T12: registry pins scene_fas_ft_provider");
+        CHECK(scenewire::externalSchedRegistryHas("scene_swap_controller"),
+              "T12: registry pins scene_swap_controller");
+    }
+
+    printf("T13: detectExternalSchedulers flags the audit processes, ignores normal ones\n");
+    {
+        // Quiet system: only ordinary processes.
+        scenewire::ExternalSchedReport quiet = scenewire::detectExternalSchedulers(
+            {"surfaceflinger", "system_server", "com.android.systemui", "mt_manager"});
+        CHECK(quiet.detected == false, "T13: ordinary processes -> no detection");
+        CHECK(quiet.matchCount == 0, "T13: matchCount 0 on quiet system");
+
+        // The exact two audit processes running.
+        scenewire::ExternalSchedReport hit = scenewire::detectExternalSchedulers(
+            {"surfaceflinger", "scene_fas_ft_provider", "system_server", "scene_swap_controller"});
+        CHECK(hit.detected == true, "T13: Scene工具箱 processes detected");
+        CHECK(hit.matchCount == 2, "T13: both competing schedulers counted");
+        CHECK(hit.matchedNames.find("scene_fas_ft_provider") != std::string::npos,
+              "T13: first name reported");
+        CHECK(hit.matchedNames.find("scene_swap_controller") != std::string::npos,
+              "T13: second name reported");
+
+        // Substring match on a module directory name, not just exact process basename.
+        scenewire::ExternalSchedReport mod = scenewire::detectExternalSchedulers(
+            {"some_scenetoolbox_module"});
+        CHECK(mod.detected == true, "T13: module-dir substring match detects Scene工具箱");
+    }
+
+    printf("T14: state-file contract for the WebUI external-scheduler banner (#102)\n");
+    {
+        // The publish path (externalSchedulerScanOnce, daemon-only) writes two files:
+        //   external_scheduler_detected <- rep.detected ? "1" : "0"
+        //   external_scheduler_names    <- rep.matchedNames  (comma-joined)
+        // The WebUI banner (webui/index.html refreshExternalScheduler) reads exactly
+        // these bytes. Pin the contract here so a future change to the report shape
+        // cannot silently break the JS banner.
+        scenewire::ExternalSchedReport clean = scenewire::detectExternalSchedulers(
+            {"surfaceflinger", "system_ui"});
+        CHECK(clean.detected == false, "T14: clean system -> detected=false (file would be '0')");
+        CHECK(clean.matchedNames.empty(), "T14: clean system -> names empty (no banner)");
+
+        scenewire::ExternalSchedReport hit = scenewire::detectExternalSchedulers(
+            {"scene_fas_ft_provider", "scene_swap_controller"});
+        CHECK(hit.detected == true, "T14: competing schedulers -> detected=true (file would be '1')");
+        // matchedNames must be comma-separated so the JS can split/display it.
+        CHECK(hit.matchedNames.find(',') != std::string::npos,
+              "T14: two matches -> names contain a comma separator");
+        CHECK(hit.matchedNames.find("scene_fas_ft_provider") != std::string::npos,
+              "T14: names carry scene_fas_ft_provider");
+        CHECK(hit.matchedNames.find("scene_swap_controller") != std::string::npos,
+              "T14: names carry scene_swap_controller");
+    }
+
     printf("\n=== Results: %d passed, %d failed ===\n", s_pass, s_fail);
     return s_fail == 0 ? 0 : 1;
 }

@@ -17,4 +17,12 @@ extern std::atomic<int> g_sceneChangeCount;
 const char* sceneToString(GameScene s);
 GameScene detectGameScene(float cpuLoad, float frameTimeJitter, float avgFrameTime);
 
+#ifdef AATPE_HOST_TEST
+// #103 (rel15) test seam: inject whether the foreground counts as a real game.
+// Production derives this from the live foreground package + game list; the host
+// test default is "true" so the historical load-only hysteresis tests are
+// unaffected, and the new regression test flips it to false for a non-game fg.
+namespace gamescene_test { void setLegacyFgIsGame(bool v); }
+#endif
+
 #endif // AATPED_GAMESCENE_H

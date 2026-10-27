@@ -16,10 +16,17 @@ tests/v94/build_check_asan/
 
 # Stripped/install mirror + logs.
 _system_install/
-_install/system/bin/
+_install/
 system/bin/
 logs/
 *.log
+
+# Root-level built binaries (the 4 NDK targets; the shipped copies live in
+# system/bin which is already ignored above).
+/aatped
+/aatpe-cli
+/aatpe-watchdog
+/aatpe-probe
 
 # Compiled eBPF object is a build product (regenerated from sched_events.bpf.c).
 ebpf/sched_events.bpf.o

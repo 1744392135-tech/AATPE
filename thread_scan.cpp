@@ -630,6 +630,30 @@ static RefreshResult refreshTrackedThread(ThreadInfo& ti, bool checkStarttime) {
         return RefreshResult::REUSE;
     }
 
+    // rel15 大小核颠倒 fix: wake-up evidence from eBPF. markThreadScoreDirty()
+    // keeps lastSwitchMs fresh on every real sched_switch. If the thread had been
+    // frozen by skipSchedstat (idleRefreshes >= threshold) but its lastSwitchMs
+    // is still recent (< kInactiveMs), it just woke up -> reset the idle-tier
+    // bookkeeping so we fall through and read schedstat this cycle, instead of
+    // waiting up to kLongIdleRescanPeriod calibration cycles for the forced
+    // rescan. We key off lastSwitchMs freshness (not a separate wakeHint flag)
+    // because shouldRescoreThread consumes wakeHint on the very next main-loop
+    // turn (~200ms) -- long before the 60s calibration scan -- so relying on it
+    // would lose the freeze-break. A fresh lastSwitchMs IS the wake evidence.
+    {
+        long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::lock_guard<std::mutex> lk(g_scoreCacheMutex);
+        auto sit = g_scoreCache.find(ti.tid);
+        if (sit != g_scoreCache.end()) {
+            long long lastSw = sit->second.lastSwitchMs;
+            if (lastSw != 0 && (nowMs - lastSw) < kInactiveMs) {
+                ti.idleRefreshes = 0;
+                ti.longIdleRescan = 0;
+            }
+        }
+    }
+
     // P2-17+19: long-idle tier. If the thread has been idle for >= threshold
     // refreshes and we are NOT due for a rescan this cycle, skip the schedstat
     // open() entirely and keep cached metrics. The eBPF sched_switch path keeps

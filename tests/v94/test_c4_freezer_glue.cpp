@@ -68,6 +68,10 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return g_fgIsGame; }
 }}
 
+// v6.0.1: C4 now also consults the config game list (global namespace).
+// These glue tests model the "manual list only" world; default it to empty.
+bool isPackageInGameList(const std::string&) { return false; }
+
 // Slow exec stub: 30 ms. Returns content that (a) contains no "uid:" so
 // resolveAppUid() yields 0, and (b) mentions a DIFFERENT package's playback
 // state=3 so mediaSessionMentionsPlaying() -> false (audio NOT active for our

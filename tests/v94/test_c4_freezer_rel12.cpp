@@ -55,6 +55,9 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return g_fgIsGame; }
 }}
 
+// v6.0.1: C4 now also consults the config game list (global namespace).
+bool isPackageInGameList(const std::string&) { return false; }
+
 std::string aatpeExec(const std::string& cmd, const char*) {
     (void)cmd;  // no game -> no uid resolution needed
     // media_session shows nothing playing for our target.

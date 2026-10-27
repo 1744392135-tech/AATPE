@@ -687,7 +687,25 @@ void markThreadScoreDirty(int tid, long long nowMs) {
     if (it != g_scoreCache.end()) {
         it->second.dirty = true;
         it->second.lastSwitchMs = nowMs;
+        // rel15 大小核颠倒 fix: a real sched_switch was observed for this tid.
+        // If the thread was previously frozen by skipSchedstat (idleRefreshes>=6),
+        // thread_scan consumes this hint on the next calibration scan and breaks
+        // the freeze immediately instead of waiting up to 10 cycles for the
+        // forced rescan. Harmless for threads that are already active.
+        it->second.wakeHint = true;
     }
+}
+
+// rel15 大小核颠倒 fix: set the one-shot forceRescore bypass on EVERY cached
+// score entry. Called by the main loop when a key control transition happens
+// (notably EMERGENCY->NORMAL) so threads that were moved to little cores during
+// emergency (or whose active signal was frozen) are re-scored once and promoted
+// back, even though shouldRescoreThread's active gate would otherwise skip them.
+// Each entry consumes its own forceRescore on the next decision cycle, so this
+// does NOT become a per-second full sweep.
+void forceRescoreAllScores() {
+    std::lock_guard<std::mutex> lock(g_scoreCacheMutex);
+    for (auto& kv : g_scoreCache) kv.second.forceRescore = true;
 }
 
 void invalidateAllScores() {
@@ -3994,6 +4012,34 @@ void daemonLoop() {
         // their dirty bits are left set, so they are picked up normally once jank
         // clears. Critical-thread responsiveness (and thus jank relief) is unchanged.
         bool jankActive = jankActiveNow;  // LED-006: reuse per-loop snapshot
+        // rel15 大小核颠倒 fix: key control-transition detector. When the system
+        // ENTERS NORMAL from a higher-priority state (EMERGENCY/DEGRADED/PASSIVE),
+        // force a one-shot bypass rescore of every cached thread. Rationale: during
+        // EMERGENCY the governor moved heavy workers to little cores to cool; when
+        // thermal recovers those workers must be promoted back. In rel15 the active
+        // gate skipped them because a low-switch-rate worker's schedstat view was
+        // frozen by skipSchedstat and its eBPF mark aged past kInactiveMs, so it
+        // was judged active=false and never re-scored (stuck on little cores until
+        // cycle ~11). forceRescoreAllScores() makes the very first NORMAL cycle
+        // re-score them regardless of the active signal; each entry consumes its
+        // own bypass, so this is a single sweep, not a per-second regression.
+        {
+            static SystemState s_prevSysState = getSystemState();
+            SystemState curSysState = getSystemState();
+            if (curSysState != s_prevSysState) {
+                bool enteredNormal =
+                    (curSysState == SystemState::NORMAL) &&
+                    (s_prevSysState == SystemState::EMERGENCY ||
+                     s_prevSysState == SystemState::DEGRADED ||
+                     s_prevSysState == SystemState::PASSIVE);
+                if (enteredNormal) {
+                    forceRescoreAllScores();
+                    LOG_WARN("[RESCORE] state transition %s->NORMAL: force one-shot rescore of all tracked threads",
+                             systemStateToString(s_prevSysState));
+                }
+                s_prevSysState = curSysState;
+            }
+        }
         // EMERGENCY-opt: under SystemState::EMERGENCY the thermal governor
         // already rejected ~25% of regular placements, so running the full
         // decidePlacement() computation per thread is pure CPU waste. Skip the

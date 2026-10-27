@@ -27,6 +27,18 @@ using namespace aatpe_ml;
 
 static time_t g_emergencyStartTime = 0;
 
+// rel15 oscillation fix: rising-edge tracker for "we are in EMERGENCY".
+// g_emergencyStartTime below used to be reset ONLY on the thermal self-detect
+// path (the over-wall block). The watchdog/setRuntimeControlMode path flips
+// SystemState to EMERGENCY between readThermal cycles without touching this
+// private timestamp, leaving the OLD (or zero) value in place. The next recovery
+// scan then saw `(now - g_emergencyStartTime) >= 30s` already true and bailed
+// out of EMERGENCY ~6s after the watchdog forced it; the watchdog re-forced it,
+// producing a 40-50s NORMAL->EMERGENCY->DEGRADED->NORMAL oscillation on real
+// hardware. We now observe the EMERGENCY entry edge ourselves and reset the clock
+// on it regardless of entry path.
+static bool s_emergencyObserved = false;
+
 // mutex protecting all global state modified by readThermal.
 static std::mutex g_thermalMutex;
 
@@ -342,6 +354,7 @@ void thermal_resetRuntimeStateForTest() {
     s_overTempStreak = 0;
     g_thermalCacheLastMs = 0;
     g_emergencyStartTime = 0;
+    s_emergencyObserved = false;
     // G6-001: reset fail-safe bookkeeping between test scenarios.
     s_lastGoodMaxTemp = -1;
     s_consecutiveReadFails = 0;
@@ -349,6 +362,26 @@ void thermal_resetRuntimeStateForTest() {
     g_thDegScanStuck.store(false, std::memory_order_release);
     s_consecutiveFreqAllFails = 0;
 }
+
+// rel15 oscillation fix: test seams for the EMERGENCY entry-edge clock reset.
+// Production readThermal() calls the equivalent logic inline every scan; these
+// expose it so host tests can prove BOTH emergency entry paths reset the clock
+// without walking a fake sysfs tree.
+#ifdef AATPE_HOST_TEST
+// Read the current emergency-start timestamp (0 = never armed).
+time_t thermalEmergencyStartTimeForTest() { return g_emergencyStartTime; }
+// Force a specific (e.g. deliberately stale) start timestamp.
+void thermalSetEmergencyStartTimeForTest(time_t t) { g_emergencyStartTime = t; }
+// Drive the entry-edge observation for one scan. Returns true iff this scan was a
+// rising edge (we just entered EMERGENCY) and therefore reset the clock to now.
+bool thermalObserveEmergencyEdgeForTest(SystemState cur) {
+    bool inEmergencyNow = (cur == SystemState::EMERGENCY);
+    bool edge = inEmergencyNow && !s_emergencyObserved;
+    if (edge) g_emergencyStartTime = time(nullptr);
+    s_emergencyObserved = inEmergencyNow;
+    return edge;
+}
+#endif
 #endif
 
 std::string aatpe_getThermalCpuZonePath() {
@@ -418,6 +451,30 @@ std::string thermalApplyEmergencyModeRecovery() {
                         restoredControlMode.c_str());
     }
     return restoredControlMode;
+}
+
+// PURE emergency-exit predicate (rel15 oscillation fix). Extracted from the
+// inline recovery block so host tests drive the exact debounce policy without a
+// fake sysfs tree. Returns true iff it is safe to leave EMERGENCY for DEGRADED:
+//   (1) we are actually in EMERGENCY;
+//   (2) the current temperature has FALLEN below the exit wall
+//       (emergencyWall - kEmergencyHysteresis); AND
+//   (3) we have been CONTINUOUSLY in EMERGENCY for >= kEmergencyRecoverySec.
+//
+// The `secSinceEmergencyEntry` argument MUST be derived from an entry timestamp
+// that is refreshed on EVERY emergency entry -- both the thermal self-detect path
+// AND the external watchdog/setRuntimeControlMode path. Passing a stale private
+// timestamp is exactly the 6-second early-exit defect this fixes. A pure function
+// takes the elapsed seconds explicitly so the test can assert the gate without
+// sleeping.
+bool thermalEmergencyShouldExit(SystemState cur, int emergencyTempC,
+                                int emergencyWallC, long secSinceEmergencyEntry) {
+    if (cur != SystemState::EMERGENCY) return false;
+    // Temperature has not dropped below the exit wall yet: hold.
+    if (emergencyTempC >= emergencyWallC - thermal::kEmergencyHysteresis) return false;
+    // Cooled, but not long enough yet: the 30s anti-flap debounce is not satisfied.
+    if (secSinceEmergencyEntry < (long)kEmergencyRecoverySec) return false;
+    return true;
 }
 
 void readThermal() {
@@ -1326,6 +1383,26 @@ void readThermal() {
     // (via aatpe_getThermalCpuZonePath() or the next readThermal() iteration).
     tLock.unlock();
 
+    // === rel15 oscillation fix: EMERGENCY entry-edge clock reset ===
+    // Observe whether we are in EMERGENCY on this scan. The first scan that sees
+    // EMERGENCY after a non-EMERGENCY scan is the entry edge -- regardless of who
+    // flipped the state:
+    //   * thermal self-detect (block below) also sets g_emergencyStartTime=now on
+    //     the commit cycle;
+    //   * the watchdog / setRuntimeControlMode("emergency") path flips
+    //     SystemState to EMERGENCY between readThermal cycles and does NOT know
+    //     about this private timestamp. This edge detector covers that path: on
+    //     the next scan after an external entry, we reset the clock to now so the
+    //     30s recovery debounce starts from the REAL entry instead of a stale
+    //     value (which made recovery fire after 6s and oscillate).
+    {
+        bool inEmergencyNow = (getSystemState() == SystemState::EMERGENCY);
+        if (inEmergencyNow && !s_emergencyObserved) {
+            g_emergencyStartTime = now;
+        }
+        s_emergencyObserved = inEmergencyNow;
+    }
+
     // EMERGENCY 触发阈值：normalized above (warningWall/emergencyWall) —
     // G6-005 corrected comment: default 120°C (thermalEmergencyThreshold),
     // hard ceiling 120 enforced at line ~489. emergencyWall already in scope.
@@ -1353,12 +1430,15 @@ void readThermal() {
     // immediately instead of lagging one ~1s cycle.
     writeFileAtomic((std::string(STATE_DIR) + "/thermal_emergency").c_str(),
                     g_thermalEmergency ? "1" : "0");
-    // EMERGENCY 温度回落后恢复。原逻辑要求 maxTemp < (emergency - hysteresis) 且
-    // 已持续 kEmergencyRecoverySec(30s), 再退到 DEGRADED。
-    // recovery 阈值同步使用新 emergencyWall。
-    if (getSystemState() == SystemState::EMERGENCY &&
-        emergencyTemp < emergencyWall - thermal::kEmergencyHysteresis &&
-        (now - g_emergencyStartTime) >= kEmergencyRecoverySec) {
+    // EMERGENCY 温度回落后恢复。必须同时满足：(1) 温度已落到 exit wall 以下
+    // (emergencyWall - kEmergencyHysteresis)；(2) 已在 EMERGENCY 持续冷却满
+    // kEmergencyRecoverySec(30s)。二者缺一不可——只看温度会 6 秒抖动，只看时间
+    // 会在高温下提前退出。secSinceEmergencyEntry 来自 g_emergencyStartTime，它在
+    // 上面的 entry-edge 观测里被任意一条进入路径重置，不再是陈旧值。
+    long secSinceEmergencyEntry = (g_emergencyStartTime > 0)
+                                      ? (long)(now - g_emergencyStartTime) : 0;
+    if (thermalEmergencyShouldExit(getSystemState(), emergencyTemp, emergencyWall,
+                                    secSinceEmergencyEntry)) {
         // Recover to DEGRADED (not NORMAL) — system may still be warm
         transitionToState(SystemState::DEGRADED, "thermal_recovery_30s");
         thermalApplyEmergencyModeRecovery();

@@ -29,3 +29,13 @@ namespace aatpe_recovery { void recoveryErase(int /*tid*/) {} }
 // RC6 (B2): per-tid uclamp floor ledger reap. Real impl in aatpe_placement_mech.cpp;
 // neutral host stub so thread_scan tests link without the mech object.
 namespace aatpe_mech { void aatpeUclampFloorReap(int /*tid*/) {} }
+
+// rel15 大小核颠倒: refreshTrackedThread() now consults g_scoreCache[tid] and
+// kInactiveMs to break the skipSchedstat freeze when lastSwitchMs is fresh. Provide
+// the same symbols the production aatped_main.cpp defines, so thread_scan.o links
+// under host test. The map is normally empty in these tests (no onSwitch wired).
+std::unordered_map<int, ThreadScoreEntry> g_scoreCache;
+std::mutex g_scoreCacheMutex;
+// Defined in aatped_main.cpp; host targets that link thread_scan.o without
+// aatped_main.o need the definition here. Must match kInactiveMs = 10000.
+const long long kInactiveMs = 10000;

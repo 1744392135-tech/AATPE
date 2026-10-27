@@ -74,6 +74,66 @@ int main() {
         CHECK(r == kRR_REUSE, "placeholder hydration beats checkStarttime read");
     }
 
+    // (e) rel15 大小核颠倒: lastSwitchMs-fresh freeze-break. A thread frozen by
+    //     skipSchedstat (idleRefreshes>=6) whose lastSwitchMs is still recent
+    //     (< kInactiveMs) -- i.e. markThreadScoreDirty just logged a real
+    //     sched_switch for it -- must have its idle tier reset on the very next
+    //     calibration scan, instead of waiting up to kLongIdleRescanPeriod cycles
+    //     for the forced rescan. The /proc schedstat read for this fake tid fails
+    //     (returns KEEP), but the freeze-break block runs BEFORE that read and
+    //     resets idleRefreshes. (P1-1: keys off lastSwitchMs freshness, not the
+    //     wakeHint flag, because shouldRescoreThread consumes wakeHint within one
+    //     main-loop turn, long before the 60s scan.)
+    {
+        long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        ThreadInfo ti;
+        ti.pid = getpid(); ti.tid = 777777;   // fake tid; schedstat open will fail
+        ti.needsHydration = false;
+        ti.starttime = 12345ULL;
+        ti.idleRefreshes = 20;                // frozen by skipSchedstat
+        ti.longIdleRescan = 0;
+        ti.switchesPerSec = 0.0;
+        ti.nrSwitches = 1000;
+        // Plant a FRESH lastSwitchMs (100ms ago) for this tid in the score cache.
+        {
+            std::lock_guard<std::mutex> lk(g_scoreCacheMutex);
+            g_scoreCache[777777].lastSwitchMs = nowMs - 100;
+        }
+        int r = threadScanRefreshForTest(ti, false);
+        CHECK(r == kRR_KEEP, "frozen thread refresh returns KEEP (schedstat unreadable)");
+        CHECK(ti.idleRefreshes == 0,
+              "fresh lastSwitchMs breaks skipSchedstat freeze: idleRefreshes reset to 0");
+    }
+
+    // (f) Control: a frozen thread whose lastSwitchMs is STALE (older than
+    //     kInactiveMs) stays frozen. This pins that the freeze-break is driven
+    //     specifically by a RECENT switch, not by the refresh itself.
+    {
+        long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        ThreadInfo ti;
+        ti.pid = getpid(); ti.tid = 888888;   // fake tid
+        ti.needsHydration = false;
+        ti.starttime = 12345ULL;
+        ti.idleRefreshes = 20;
+        ti.longIdleRescan = 0;
+        ti.switchesPerSec = 0.0;
+        ti.nrSwitches = 1000;
+        // Plant a STALE lastSwitchMs (60s ago, >> kInactiveMs=10s).
+        {
+            std::lock_guard<std::mutex> lk(g_scoreCacheMutex);
+            g_scoreCache[888888].lastSwitchMs = nowMs - 60000;
+        }
+        int r = threadScanRefreshForTest(ti, false);
+        CHECK(r == kRR_KEEP, "frozen thread with stale lastSwitchMs returns KEEP");
+        // idleRefreshes stays >= threshold: lastSwitchMs is not fresh, so the
+        // freeze-break block does NOT reset idleRefreshes; skipSchedstat short-
+        // circuits before any schedstat read.
+        CHECK(ti.idleRefreshes >= 6,
+              "stale lastSwitchMs: freeze persists (idleRefreshes untouched)");
+    }
+
     if (g_fail == 0) { printf("=== test_thread_scan_hydrate: ALL PASS ===\n"); return 0; }
     printf("=== test_thread_scan_hydrate: %d FAILURES ===\n", g_fail);
     return 1;

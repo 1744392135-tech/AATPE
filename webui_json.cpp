@@ -487,7 +487,13 @@ void writeModelJson() {
             m.learning_rate = 0.0f; m.sample_count = 0; m.alpha = 0.0f;
         }
         const char* pName = knownPool ? poolNames[poolIdx] : "UNKNOWN";
-        json += "{\"pool\":" + std::to_string(poolIdx) + ",\"name\":\"" + pName + "\",\"cpus\":[";
+        // #97: surface whether this tier actually has CPUs on this device. On the
+        // audit device MID slot 1 exists but has no mapped CPU (isPoolPresent==false).
+        // The online-learning page must render such slots as "无此簇/不适用" and MUST
+        // NOT include them in the readiness denominator (an untrained-but-present
+        // cluster still blocks readiness; an absent cluster does not).
+        const bool present = knownPool ? g_mlModel.isPoolPresent(poolIdx) : false;
+        json += "{\"pool\":" + std::to_string(poolIdx) + ",\"name\":\"" + pName + "\",\"present\":" + (present?"true":"false") + ",\"cpus\":[";
         if (knownPool) { bool cf=true; for(int cpu:*poolCpuLists[poolIdx]){if(!cf)json+=",";cf=false;json+=std::to_string(cpu);} }
         json += "],\"weights\":[";
         for (int w=0;w<ML_WEIGHT_COUNT;w++){if(w>0)json+=",";json+=fmtWeightJson(m.weights[w]);}
@@ -833,17 +839,33 @@ void writePerCpuJson() {
     for (int c:bigSnap)    cpuTypeMap[c]="big";
     std::string json = "{\"cpus\":[";
     bool first = true;
+    size_t emitted = 0;
     for (int cpuId:allCpuSnap) {
         auto it = metricsSnap.find(cpuId);
         if (it==metricsSnap.end()) continue;
         if (!first) json+=",";
         first=false;
+        emitted++;
         const CpuMetrics& m = it->second;
         auto typeIt = cpuTypeMap.find(cpuId);
         std::string cpuType = (typeIt!=cpuTypeMap.end())?typeIt->second:"unknown";
         json += "{\"cpu\":"+std::to_string(cpuId)+",\"type\":\""+cpuType+"\",\"util\":"+std::to_string(m.util)+",\"cur_freq\":"+std::to_string(m.curFreq)+",\"freq_pct\":"+std::to_string(m.freqPct)+",\"temp\":"+std::to_string(m.temp)+",\"capacity\":"+std::to_string(m.capacity)+"}";
     }
-    json += "]}";
+    // #98: ALWAYS emit the file (never silently skip it). When no per-CPU metrics
+    // could be serialized, carry an explicit reason code instead of a bare
+    // {"cpus":[]} that the WebUI renders identically to "data not ready":
+    //   - "no-topology"    : g_allCpus is empty (CPU topology not detected yet)
+    //   - "no-cpu-metrics" : topology known but g_cpuMetrics has no matching entry
+    //                        (early boot before readCpuMetrics()'s first /stat
+    //                        sample, or a metrics collection failure)
+    //   - "ok"             : at least one CPU's data was serialized.
+    // The frontend keeps reading data.cpus; count/degraded are additive and do not
+    // break the existing panel contract.
+    std::string degraded;
+    if (emitted == 0) degraded = allCpuSnap.empty() ? "no-topology" : "no-cpu-metrics";
+    else              degraded = "ok";
+    json += "],\"count\":" + std::to_string(emitted)
+          + ",\"degraded\":\"" + degraded + "\"}";
     atomicWriteJson(std::string(WEBUI_DIR) + "/percpu.json", json);
 }
 

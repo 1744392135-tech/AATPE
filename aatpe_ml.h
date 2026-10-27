@@ -231,6 +231,23 @@ public:
         if (poolIdx < 0 || poolIdx >= (int)models.size()) return false;
         return models[poolIdx].sample_count >= min_samples_threshold;
     }
+    // #97 (rel15): does this pool slot correspond to a REAL CPU cluster on this
+    // device? Presence is derived RUNTIME from the live cpu->pool assignment
+    // (setCpuPoolAssignment), never hardcoded: a tier slot that the topology left
+    // with zero CPUs (e.g. a 1+3+4 design that has no MID tier, or a future device
+    // with a tier the model still reserves a slot for) reports false.
+    //
+    // Semantics:
+    //   * No assignment has been synced yet (boot, host tests) -> treat every pool
+    //     as present (preserves the historical "all slots are clusters" behavior).
+    //   * Assignment synced and NO cpu maps to poolIdx -> ABSENT cluster.
+    //
+    // An absent pool:
+    //   - is excluded from isMature()'s per-pool maturity denominator (an empty
+    //     tier can never reach min samples, so it must not drag readiness to 0%);
+    //   - is surfaced to the UI as "no such tier / not applicable" instead of
+    //     "still learning".
+    bool isPoolPresent(int poolIdx) const;
     int getMinSamples() const { std::lock_guard<std::recursive_mutex> lk(mutex_); return min_samples_threshold; }
     void setMinSamples(int n) { std::lock_guard<std::recursive_mutex> lk(mutex_); min_samples_threshold = (n > 0) ? n : 1; }
     void setEnabled(bool v) { std::lock_guard<std::recursive_mutex> lk(mutex_); enabled = v; }
@@ -461,6 +478,11 @@ private:
     // P3-45: runtime anomaly latch (set under mutex; cleared by init()/reset()).
     mutable bool m_anomalyLatched = false;
     std::vector<int> m_cpuPoolAssignment;
+    // #97: callers must already hold mutex_. Returns true if at least one real CPU
+    // is mapped to poolIdx in the live cpu->pool assignment. When no assignment has
+    // been synced yet, conservatively reports true for every pool (historical
+    // behavior); once synced, a pool slot with zero mapped CPUs is an absent tier.
+    bool poolHasCpusUnlocked(int poolIdx) const;
     std::string m_topologyFingerprint;
     bool m_modelStale = false;
     bool m_modelLoaded = false;

@@ -16,6 +16,8 @@
 #define AATPE_SCENE_WIRING_H
 
 #include <cstdint>
+#include <string>
+#include <vector>
 #include "scene_infer.h"
 #include "aatped_gamescene.h"  // GameScene
 
@@ -126,6 +128,47 @@ void auxTickSlot3(float avgCpuLoad);
 // W5 §6 seam consumed by the C1 preboost block: true iff the engine is on and
 // the committed scene is LOADING.
 bool loadingActiveSuppressesPreboost();
+
+// ===========================================================================
+// #102 (rel15): external scheduler / Scene-toolbox coexistence detection.
+//
+// The audit found two competing schedulers installed on the device
+// (scene_fas_ft_provider, scene_swap_controller — the "Scene 工具箱 / OmniScene"
+// stack, which also does placement / frame-rate / swap). AATPE does NOT fight
+// them: this is a CONSERVATIVE observe-and-warn detector. It scans live process
+// basenames (+ installed module dir names) against a small, documented registry of
+// known competing-scheduler components and reports a match. It never mutates CPU
+// placement, boost, or swap state. The user owns the final decision whether the
+// external stack is intentionally enabled.
+//
+// The PURE matcher below takes already-collected name strings (zero I/O) and is
+// host-tested directly; the production collector (reads /proc, writes a state
+// file + a one-shot WARN) is compiled out under AATPE_HOST_TEST.
+// ===========================================================================
+struct ExternalSchedReport {
+    bool        detected    = false;  // at least one known competing scheduler seen
+    int         matchCount  = 0;      // number of distinct basenames that matched
+    std::string matchedNames;         // comma-joined matched basenames (for UI/log)
+};
+
+// PURE: scan observed basenames against the registry of known competing-scheduler
+// fragments. No I/O, no globals. Matching is a case-sensitive substring test.
+ExternalSchedReport detectExternalSchedulers(const std::vector<std::string>& observed);
+
+#ifdef AATPE_HOST_TEST
+// Test seams (keep the registry honest): count of registered fragments and an
+// exact-fragment membership predicate.
+int         externalSchedRegistrySize();
+bool        externalSchedRegistryHas(const char* fragment);
+#endif
+
+// Production collector (daemon only; host test compiles this out). Scans /proc/*/
+// cmdline basenames + /data/adb/modules/* directory names, runs the pure matcher,
+// caches the result, writes STATE_DIR/external_scheduler_detected (0/1) and
+// external_scheduler_names, and emits a one-shot LOG_WARN when a new external
+// scheduler appears. Cheap: callable from the slow aux slot. It takes NO placement
+// action (no avoidance, no adversarial writes) by default.
+void externalSchedulerScanOnce();
 
 } // namespace scenewire
 } // namespace aatpe

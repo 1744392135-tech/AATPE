@@ -447,6 +447,37 @@ static bool explicitStopRequested() {
 // ---------------------------------------------------------------------------
 enum class WdTempRead { HOT, SAFE, UNKNOWN };
 
+// PURE: derive the watchdog's independent emergency wall from the already-read
+// config values, mirroring thermal.cpp's effEmergencyThresholdC() EXACTLY so the
+// daemon (the SOLE authority on the emergency temperature wall) and its watchdog
+// never disagree.
+//
+// rel15 oscillation root cause: the watchdog used to read its own
+// WATCHDOG_INDEP_THERMAL_WALL=90C while the daemon used THERMAL_EMERGENCY=120C.
+// On a real Dimensity 1100 at ~100C under game load (with the system already
+// throttling every core), the watchdog saw ">=90C -> emergency" and forced
+// EMERGENCY, while the daemon correctly saw "100C < 120C -> not emergency". The
+// watchdog then forced control_mode=emergency, the daemon's stale recovery clock
+// bailed out 6s later, and the loop oscillated every 40-50s.
+//
+// Resolution: the watchdog derives the wall from the SAME config keys as the
+// daemon (THERMAL_EMERGENCY_THRESHOLD, else THERMAL_EMERGENCY, else 120), clamped
+// to the same 120C hard ceiling. The legacy WATCHDOG_INDEP_THERMAL_WALL override
+// is honored ONLY as a LOOSENING (raising) of the backup wall -- an operator may
+// make the backup scan less aggressive, but may never make it TIGHTER than the
+// daemon's own wall (the direction that caused the fight).
+//
+//   thresholdCfg : raw THERMAL_EMERGENCY_THRESHOLD (<=0 = unset)
+//   emergencyCfg : raw THERMAL_EMERGENCY (<=0 = unset)
+//   overrideCfg  : raw WATCHDOG_INDEP_THERMAL_WALL (<=0 = unset)
+static int wdComputeEmergencyWallC(int thresholdCfg, int emergencyCfg, int overrideCfg) {
+    int wall = thresholdCfg > 0 ? thresholdCfg : emergencyCfg;
+    if (wall <= 0) wall = 120;                 // production default (Config::thermalEmergency)
+    if (wall > 120) wall = 120;               // hard ceiling, matches thermal.cpp G6-003
+    if (overrideCfg > 0 && overrideCfg > wall) wall = overrideCfg;  // may only LOOSEN
+    return wall;
+}
+
 // Pure decision on a single independent reading.
 //   maxC     : watchdog's own max temp across thermal zones, in °C; -1 if no zone readable.
 //   wallC    : the emergency temperature wall in °C (at/above = really hot).
@@ -1313,16 +1344,18 @@ int main(int argc, char* argv[]) {
     time_t emergClearSince = 0;
     const int emergencyClearSec = thermal_runtime::kMinRecoverySec;  // 30s hysteresis
     // ROUND-003: independent thermal backup authority. Watchdog reads the sensors
-    // itself while in EMERGENCY. A configurable wall (default 90C, conservative)
-    // with a 5C margin: only when the independently-read max temp has been SAFE
-    // for a full emergencyClearSec does the watchdog trust "it has cooled" even if
-    // the daemon's thermal_emergency file is still stuck at 1.
-    int indThermalWallC = readConfigInt("WATCHDOG_INDEP_THERMAL_WALL", 90);
-    if (indThermalWallC < 40 || indThermalWallC > 150) {
-        logWatchdog("WATCHDOG_INDEP_THERMAL_WALL=%d out of range, using 90C", indThermalWallC);
-        indThermalWallC = 90;
-    }
-    const int indThermalMarginC = 5;
+    // itself while in EMERGENCY. The wall is the SAME as the daemon's emergency
+    // wall (derived from THERMAL_EMERGENCY_THRESHOLD/THERMAL_EMERGENCY, default
+    // 120C) so the backup scan never second-guesses the authoritative thermal
+    // decision. The margin is the SAME hysteresis the daemon uses to EXIT
+    // EMERGENCY (kEmergencyHysteresis=10C): only when the independently-read max
+    // temp has been <= wall-margin for a full emergencyClearSec does the watchdog
+    // trust "it has cooled" even if the daemon's thermal_emergency file is stuck.
+    int indThermalWallC = wdComputeEmergencyWallC(
+        readConfigInt("THERMAL_EMERGENCY_THRESHOLD", 0),
+        readConfigInt("THERMAL_EMERGENCY", 0),
+        readConfigInt("WATCHDOG_INDEP_THERMAL_WALL", 0));
+    const int indThermalMarginC = thermal::kEmergencyHysteresis;
     int emergIndSafeStreak = 0;
     // D-006: sample count must CEILING-divide emergencyClearSec by INTERVAL so the
     // wall-clock covered by emergIndNeedSamples consecutive safe samples is

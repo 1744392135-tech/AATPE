@@ -197,6 +197,30 @@ int main(){
     CHECK(wdClassifyIndTemp(95, wall, margin) == WdTempRead::HOT, "95C = HOT");
     CHECK(wdClassifyIndTemp(-1, wall, margin) == WdTempRead::UNKNOWN, "no zone readable = UNKNOWN (fail-safe)");
 
+    // ---- rel15: unified emergency wall (watchdog == daemon) -----------------
+    printf("=== Watchdog: rel15 wdComputeEmergencyWallC mirrors the daemon wall ===\n");
+    // No config at all -> 120C, EXACTLY the daemon's Config::thermalEmergency default.
+    CHECK(wdComputeEmergencyWallC(0, 0, 0) == 120,
+          "no config -> 120C (matches daemon default, NOT the old 90C)");
+    // THERMAL_EMERGENCY_THRESHOLD wins (same as thermal.cpp effEmergencyThresholdC).
+    CHECK(wdComputeEmergencyWallC(105, 120, 0) == 105,
+          "THERMAL_EMERGENCY_THRESHOLD=105 wins over THERMAL_EMERGENCY=120");
+    // Falls back to THERMAL_EMERGENCY when threshold unset.
+    CHECK(wdComputeEmergencyWallC(0, 110, 0) == 110,
+          "threshold unset -> THERMAL_EMERGENCY=110 used");
+    // Hard ceiling 120, matches thermal.cpp G6-003 clamp.
+    CHECK(wdComputeEmergencyWallC(150, 0, 0) == 120,
+          "threshold=150 clamped to 120 hard ceiling");
+    // Legacy WATCHDOG_INDEP_THERMAL_WALL may ONLY LOOSEN, never tighten.
+    CHECK(wdComputeEmergencyWallC(0, 0, 80) == 120,
+          "override=80 (tighter than daemon 120) IGNORED -- no second wall fighting");
+    CHECK(wdComputeEmergencyWallC(0, 0, 130) == 130,
+          "override=130 (looser) honored -- operator may relax backup scan");
+    CHECK(wdComputeEmergencyWallC(110, 0, 90) == 110,
+          "daemon wall=110, override=90 tighter -> kept 110 (daemon wins)");
+    CHECK(wdComputeEmergencyWallC(110, 0, 115) == 115,
+          "daemon wall=110, override=115 looser -> 115");
+
     int streak = 0;
     // (a) flag=1 but independent reads cool for the full window -> forced clear.
     for (int i = 0; i < 9; ++i) wdIndTempSample(WdTempRead::SAFE, streak, 10);

@@ -3,6 +3,10 @@
 // compiled only outside AATPE_HOST_TEST so the host link needs no daemon stubs.
 #include "scene_infer_wiring.h"
 
+#include <vector>
+#include <string>
+#include <cstring>
+
 #ifndef AATPE_HOST_TEST
 // Production glue only (daemon build). These MUST be included at global scope,
 // not inside namespace aatpe::scenewire, or libc++/daemon headers nest in the
@@ -15,6 +19,8 @@
 #include "aatped_config.h"
 #include "input_monitor.h"
 #include <chrono>
+#include <dirent.h>
+#include <cstdio>
 #endif
 
 // Live thermal HAL accessor (defined in thermal.cpp). Forward-declared at the
@@ -122,6 +128,50 @@ TickSlopeOut computeTickSlopes(const TickSlopeState& prev,
     out.dGpuBusy_dt  = (curGpuBusyPct - prev.gpuBusyPct) / dt;
     out.dTaps_dt     = (tapsPerSec - prev.tapsPerSec) / dt;
     out.dRunDelay_dt = (curRunDelayPerMs - prev.runDelayPerMs) / dt;
+    return out;
+}
+
+// ---- #102 (rel15): external scheduler coexistence detection (pure) ----------
+// Registry of known competing root-level scheduler / scene-toolbox components.
+// These are process basename fragments (substring, case-sensitive). Extend here
+// when a new competing stack is confirmed on real hardware; the host tests pin the
+// two proven audit entries so an accidental shrink is caught. This is a DETECTION
+// registry, not a device/perf tuning table — no CPU/freq/package numbers.
+static const char* kExternalSchedRegistry[] = {
+    "scene_fas_ft_provider",   // Scene工具箱: FAS frame-timing/scheduling provider
+    "scene_swap_controller",   // Scene工具箱: swap / memory-scheduling controller
+    "scenetoolbox",            // generic Scene工具箱 launcher/service
+    "scene_toolbox",
+    "omnisched",               // OmniScene / OmniSched siblings
+    "omni_scene",
+};
+constexpr int kExternalSchedRegistryCount =
+    (int)(sizeof(kExternalSchedRegistry) / sizeof(kExternalSchedRegistry[0]));
+
+#ifdef AATPE_HOST_TEST
+int externalSchedRegistrySize() { return kExternalSchedRegistryCount; }
+bool externalSchedRegistryHas(const char* fragment) {
+    if (!fragment) return false;
+    for (int i = 0; i < kExternalSchedRegistryCount; i++)
+        if (std::strcmp(kExternalSchedRegistry[i], fragment) == 0) return true;
+    return false;
+}
+#endif
+
+ExternalSchedReport detectExternalSchedulers(const std::vector<std::string>& observed) {
+    ExternalSchedReport out;
+    bool warned = false;
+    for (const std::string& name : observed) {
+        bool hit = false;
+        for (int i = 0; i < kExternalSchedRegistryCount; i++) {
+            if (name.find(kExternalSchedRegistry[i]) != std::string::npos) { hit = true; break; }
+        }
+        if (!hit) continue;
+        out.matchCount++;
+        if (!warned) { out.matchedNames = name; warned = true; }
+        else         out.matchedNames += "," + name;
+    }
+    out.detected = (out.matchCount > 0);
     return out;
 }
 
@@ -257,6 +307,73 @@ void auxTickSlot3(float avgCpuLoad) {
         int halLevel = ::aatpe::aatpeThermalHalLevel();
         c2env::c2Tick(nowMs, d, in.headroom01, halLevel,
                       g_thermalEmergency.load(std::memory_order_relaxed));
+    }
+
+    // #102: throttle the external-scheduler scan to ~every 20 aux ticks (≈8 min on
+    // the 25s aux cadence). Cheap, passive, observe-only.
+    {
+        static int s_extScanTick = 0;
+        if (++s_extScanTick >= 20) { s_extScanTick = 0; externalSchedulerScanOnce(); }
+    }
+}
+
+// #102 production collector. Reads /proc/*/cmdline basenames + installed module
+// directory names, runs the pure matcher, publishes two state files and emits a
+// one-shot WARN on a newly-detected competing scheduler. No placement action.
+void externalSchedulerScanOnce() {
+    std::vector<std::string> observed;
+
+    // 1. Process basenames from /proc/<pid>/cmdline (first NUL-terminated field).
+    DIR* proc = opendir("/proc");
+    if (proc) {
+        struct dirent* de;
+        while ((de = readdir(proc)) != nullptr) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;   // numeric pid only
+            std::string path = std::string("/proc/") + de->d_name + "/cmdline";
+            FILE* f = fopen(path.c_str(), "re");
+            if (!f) continue;
+            char buf[256];
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            fclose(f);
+            if (n == 0) continue;
+            buf[n] = '\0';
+            // cmdline fields are NUL-separated; field 0 is the executable path/name.
+            std::string exe(buf);
+            // take basename of an absolute path if present
+            size_t slash = exe.find_last_of('/');
+            if (slash != std::string::npos) exe = exe.substr(slash + 1);
+            if (!exe.empty()) observed.push_back(exe);
+        }
+        closedir(proc);
+    }
+
+    // 2. Installed module directory names under /data/adb/modules.
+    DIR* mods = opendir("/data/adb/modules");
+    if (mods) {
+        struct dirent* de;
+        while ((de = readdir(mods)) != nullptr) {
+            if (de->d_name[0] == '.') continue;
+            observed.push_back(std::string(de->d_name));
+        }
+        closedir(mods);
+    }
+
+    ExternalSchedReport rep = detectExternalSchedulers(observed);
+
+    // Publish best-effort state for the WebUI/doctor (read-only; no daemon action).
+    atomicWriteFile((std::string(STATE_DIR) + "/external_scheduler_detected").c_str(),
+                    rep.detected ? 1 : 0);
+    atomicWriteFile((std::string(STATE_DIR) + "/external_scheduler_names").c_str(),
+                    rep.matchedNames);
+
+    // One-shot WARN on the edge from "not seen" to "seen".
+    static bool s_everDetected = false;
+    if (rep.detected && !s_everDetected) {
+        s_everDetected = true;
+        LOG_WARN("[ext-sched] detected external scheduler(s) co-resident: %s. "
+                 "AATPE will NOT fight them; verify in Scene/OmniScene whether they are "
+                 "intentionally enabled, or disable one to avoid placement tug-of-war.",
+                 rep.matchedNames.c_str());
     }
 }
 

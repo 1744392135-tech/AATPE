@@ -60,6 +60,17 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return true; }
 }}
 
+// v6.0.1: C4 now also consults the config game list (global namespace).
+bool isPackageInGameList(const std::string&) { return false; }
+
+// v6.0.1: this test does NOT define C4_FREEZER_TEST_SEAM, so the real
+// fgHasGameEngineThreads() #else branch calls aatpe::isGameEngineThread.
+// This test models the "manual list says game" path; engine threads are a
+// no-op here (return false).
+namespace aatpe {
+bool isGameEngineThread(const char*, const char*) { return false; }
+}
+
 // ---- tiny CHECK harness -------------------------------------------------------
 static int s_pass = 0, s_fail = 0;
 #define CHECK(cond, msg) do { \

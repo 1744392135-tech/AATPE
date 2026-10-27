@@ -1,6 +1,35 @@
 // AATPE - Game scene detection (extracted from aatped_main.cpp)
 #include "aatped.h"
 
+// #103 (rel15): the legacy detector gates on whether the foreground package is a
+// real game. Those accessors live in the daemon TU; under AATPE_HOST_TEST the
+// production I/O is compiled out and a test-seam flag is used instead.
+#ifndef AATPE_HOST_TEST
+#include "aatped_config.h"   // isPackageInGameList
+#include "aatped_state.h"    // aatpeGetForegroundPackage
+#endif
+
+namespace {
+#ifdef AATPE_HOST_TEST
+// Host-test seam. Default true: preserves the historical load-only hysteresis
+// tests which never establish a foreground package. The #103 regression test flips
+// this to false to model a non-game foreground (e.g. MT manager).
+std::atomic<bool> g_legacyFgIsGameForTest{true};
+#else
+// Runtime foreground-game evidence: the resumed package is a known game. This is
+// the SAME evidence the scenewire engine uses (scene_infer_wiring.cpp), so the two
+// routes agree. No package names are hardcoded here.
+bool legacyFgForegroundIsGame() {
+    std::string pkg = aatpeGetForegroundPackage();
+    return !pkg.empty() && isPackageInGameList(pkg);
+}
+#endif
+} // namespace
+
+#ifdef AATPE_HOST_TEST
+namespace gamescene_test { void setLegacyFgIsGame(bool v) { g_legacyFgIsGameForTest.store(v, std::memory_order_relaxed); } }
+#endif
+
 // Game scene detection
 // atomic<int> storing GameScene cast to int (see aatped_gamescene.h).
 std::atomic<int> g_currentScene{(int)GameScene::UNKNOWN};
@@ -25,6 +54,38 @@ const char* sceneToString(GameScene s) {
 struct SceneConfig { float combatCpu=60, combatGpu=50, combatJitter=2; float loadingCpu=70, loadingGpu=30, loadingJitter=1; float menuCpu=30, menuGpu=20; int stableCount=3; } g_sceneConfig;
 
 GameScene detectGameScene(float cpuLoad, float frameTimeJitter, [[maybe_unused]] float avgFrameTime) {
+    // #103 (rel15): foreground-game gate. The audit device had MT manager
+    // (bin.mt.plus) in the foreground yet current_game_scene was stuck "combat",
+    // because this legacy path thresholds CPU+jitter with ZERO game evidence. A
+    // non-game foreground must never be classified into a game scene. The evidence
+    // is the same runtime package-in-game-list check the scenewire engine uses.
+#ifdef AATPE_HOST_TEST
+    bool fgIsGame = g_legacyFgIsGameForTest.load(std::memory_order_relaxed);
+#else
+    bool fgIsGame = legacyFgForegroundIsGame();
+#endif
+
+    // P2-8: these statics are only accessed from detectGameScene() which runs on
+    // the daemon main loop (single-threaded). No mutex needed. Moved to the top so
+    // the non-game gate below can reset them.
+    static GameScene s_lastScene = GameScene::UNKNOWN;
+    static int s_sceneStableCount = 0;
+    GameScene prevStable = (GameScene)g_currentScene.load(std::memory_order_acquire);
+
+    if (!fgIsGame) {
+        // Not a confirmed game foreground: never hold a game scene. Reset the
+        // hysteresis so a later real game re-arms the >=3-consecutive gate cleanly.
+        s_lastScene = GameScene::UNKNOWN;
+        s_sceneStableCount = 0;
+        if (prevStable != GameScene::UNKNOWN) g_sceneChangeCount++;
+        g_currentScene.store((int)GameScene::UNKNOWN, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> diagLk(g_stateDiagMutex);
+            g_sceneState.currentScene = (int)GameScene::UNKNOWN;
+        }
+        return GameScene::UNKNOWN;
+    }
+
     // P6: Multi-dimensional scene detection with GPU, audio, and hysteresis
     GameScene detected = GameScene::UNKNOWN;
 
@@ -56,11 +117,8 @@ GameScene detectGameScene(float cpuLoad, float frameTimeJitter, [[maybe_unused]]
     }
 
     // Hysteresis: require >= 3 consecutive same detections (stableCount threshold)
-    // P2-8: these statics are only accessed from detectGameScene() which runs on
-    // the daemon main loop (single-threaded). No mutex needed.
-    static GameScene s_lastScene = GameScene::UNKNOWN;
-    static int s_sceneStableCount = 0;
-    GameScene prevStable = (GameScene)g_currentScene.load(std::memory_order_acquire);
+    // s_lastScene / s_sceneStableCount / prevStable are declared at the top of this
+    // function so the #103 non-game gate can reset them.
     if (detected == s_lastScene) {
         s_sceneStableCount++;
         // Clamp at stableCount: once the scene is locked in, there's no need to

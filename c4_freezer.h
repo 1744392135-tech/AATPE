@@ -103,6 +103,16 @@ bool cgroupPathBelongsToUid(const std::string& v2Path, int appUid);
 // present (v2-only / unknown / corrupt).
 std::string parseV1FreezerPath(const std::string& procCgroupContent);
 
+// PURE (#96): parse the body of /proc/mounts for the cgroup v1 freezer mount.
+// A v1 cgroup mount line is whitespace-separated:
+//   none  /sys/fs/cgroup/freezer  cgroup  rw,relatime,freezer  0  0
+// We require vfstype=="cgroup" (v2 unified is "cgroup2") and an exact "freezer"
+// entry in the comma-separated controller list. Returns the mount point WITHOUT a
+// trailing slash ("/sys/fs/cgroup/freezer"), or "" when no such mount exists.
+// Runtime-detects wherever the v1 freezer hierarchy is actually mounted on a
+// given device -- never hardcodes the conventional path.
+std::string parseV1FreezerMountPoint(const std::string& procMountsContent);
+
 // PURE: normalize the contents of a v1 freezer.state file. Trims trailing
 // whitespace/newline. Returns "FROZEN", "THAWED", "FREEZING", or "THAWING"
 // verbatim; "" on empty/unknown content.
@@ -154,6 +164,17 @@ C4FrozenState parseC4Frozen(const std::string& content);
 std::string c4ChooseTarget(const std::string& lastGame,
                            const std::string& fgPkg,
                            bool fgIsGame);
+
+// PURE (v6.0.1): OR the three independent "foreground is a game" signals.
+//   manualGame   = pkg in game_overrides.list (WebUI game_add=, frame.cpp)
+//   configGame   = pkg in GAME_PACKAGES= (aatpe.conf, aatped_config.cpp)
+//   engineThread = a live thread of this pkg matches Unity/Unreal/Vulkan/etc
+//                  signatures (aatped_threadutil.cpp isGameEngineThread)
+// The historical v6.0.0 code only consulted manualGame, so a fresh device with
+// no manual entry sat at degraded="no-game-target" forever even while the user
+// was actively gaming. Any one positive signal is enough; all three are
+// conservative (empty/unknown -> false) so a non-game app is never promoted.
+bool c4FgIsGameSignals(bool manualGame, bool configGame, bool engineThreadGame);
 
 // PURE (v4.4.6 WebUI; v6.1.0 backend): build the read-only C4 state JSON object.
 // Produces: {"enabled":..,"target":..,"frozen":..,"cgDir":..,"lastAction":..,

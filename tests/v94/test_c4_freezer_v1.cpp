@@ -57,6 +57,9 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return g_fgIsGame; }
 }}
 
+// v6.0.1: C4 now also consults the config game list (global namespace).
+bool isPackageInGameList(const std::string&) { return false; }
+
 // Smart exec stub:
 //   "pm list packages -U com.game" -> "package:com.game uid:10123\n"
 //   "dumpsys media_session"       -> non-playing session for a DIFFERENT pkg

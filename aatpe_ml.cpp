@@ -873,9 +873,40 @@ bool LearningModel::isMature() const {
     int total = 0;
     for (const auto& m : models) total += m.sample_count;
     if (total <= 100) return false;
-    for (const auto& m : models) if (m.sample_count <= 20) return false;
+    // #97 (rel15): the per-pool maturity gate must only consider clusters that
+    // ACTUALLY EXIST on this device. The model reserves a fixed slot per tier
+    // (LITTLE/MID/BIG/PRIME), but sparse-tier designs (e.g. 1+3+4 with NO MID tier)
+    // leave a slot with zero CPUs and therefore zero samples. The old loop required
+    // EVERY pool to have >20 samples, so an empty MID pool (sample_count==0 <= 20)
+    // made maturity permanently false and the online-learning page read "就绪度0%"
+    // forever even though LITTLE/BIG/PRIME were fully trained. Skip absent tiers:
+    // they are not in the readiness denominator and are reported separately as
+    // "no such tier" (isPoolPresent()==false), not as "still learning".
+    for (int p = 0; p < (int)models.size(); p++) {
+        if (!poolHasCpusUnlocked(p)) continue;   // absent cluster -> never a gate
+        if (models[p].sample_count <= 20) return false;
+    }
     if (!m_modelLoaded) return false;
     return true;
+}
+
+// #97: presence derived from the live cpu->pool assignment (caller holds mutex_).
+bool LearningModel::poolHasCpusUnlocked(int poolIdx) const {
+    if (poolIdx < 0 || poolIdx >= (int)models.size()) return false;
+    // No assignment synced yet (boot before first topology push, or host test that
+    // never calls setCpuPoolAssignment): we cannot tell which slots are real clusters.
+    // Preserve the historical "every pool slot is a cluster" behavior rather than
+    // wrongly declaring the whole model absent.
+    if (m_cpuPoolAssignment.empty()) return true;
+    for (int cpuPool : m_cpuPoolAssignment) {
+        if (cpuPool == poolIdx) return true;
+    }
+    return false;
+}
+
+bool LearningModel::isPoolPresent(int poolIdx) const {
+    std::lock_guard<std::recursive_mutex> lk(mutex_);
+    return poolHasCpusUnlocked(poolIdx);
 }
 
 void LearningModel::recomputeAllAlphas() {
