@@ -177,7 +177,7 @@ select:focus{outline:none;border-color:#00d4aa}
 <div class="header">
 <h1>AATPE</h1>
 <div class="ver">Adaptive Android Task Placement Engine v6.0.0
-  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel17 · 构建于 2026-10-27</span>
+  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel18 · 构建于 2026-10-29</span>
 </div>
 <div class="status-bar">
 <span class="status-pill offline" id="daemonStatus">守护进程: 未运行</span>
@@ -1646,7 +1646,16 @@ async function readJson(path) {
         if (cached !== null) return cached;
     }
     const text = await readFile(path);
-    if (!text) return null;
+    if (text === null || text === undefined || text === '') return null;
+    // SukiSU root-bridge mode: exec ui-snapshot inlines percpu_raw/system_raw as
+    // already-parsed JSON OBJECTS, and snapCache stores them as objects. Feeding
+    // an object into JSON.parse() coerces it to "[object Object]" and throws, so
+    // percpu.json / system.json permanently read as "unavailable" — the on-device
+    // "percpu.json 不可用" bug. Pass already-parsed objects straight through.
+    if (typeof text === 'object') {
+        if (isCacheable) setCachedJson(path, text);
+        return text;
+    }
     try {
         const parsed = JSON.parse(text);
         if (isCacheable) setCachedJson(path, parsed);

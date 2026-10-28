@@ -272,7 +272,7 @@ int main(){
     printf("=== Watchdog: WD-02 aggregated watchdog_degraded reasons ===\n");
     // Start clean.
     g_degradedSet.clear();
-    CHECK(degradedReasonsString()=="normal", "empty set -> 'normal'");
+    CHECK(degradedReasonsString()=="none", "empty set -> 'none'");
     addDegradedReason("rapid_crash_loop");
     CHECK(degradedReasonsString()=="rapid_crash_loop", "one reason -> itself");
     // A second independent subsystem raises its reason: must NOT clobber the first.
@@ -293,7 +293,7 @@ int main(){
           agg.find("binary_broken")!=std::string::npos, "binary_broken + rapid coexist");
     // Clear-all (crash-loop unlock path) empties the set.
     clearAllDegradedReasons();
-    CHECK(degradedReasonsString()=="normal", "clearAll -> normal");
+    CHECK(degradedReasonsString()=="none", "clearAll -> none");
 
     printf("\n========================================\nWatchdog results: %d passed, %d failed\n========================================\n", g_pass, g_fail);
     return g_fail==0?0:1;

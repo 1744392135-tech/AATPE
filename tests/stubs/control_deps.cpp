@@ -50,7 +50,7 @@ void mkdirIfNotExist(const char* path, mode_t mode) {
 
 // control.cpp also reaches into hybrid/config/main on device; neutral stubs here.
 std::mutex g_hybridMutex;
-unsigned long g_mlSaveSuccess = 0, g_mlSaveFail = 0;
+std::atomic<unsigned long> g_mlSaveSuccess{0}, g_mlSaveFail{0};
 std::atomic<int> g_explainTid{0};
 void backupModelFile(const char*) {}
 void loadConfig() {}

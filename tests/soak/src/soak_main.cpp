@@ -289,7 +289,16 @@ int main(int argc, char** argv) {
     printf("\n=== SOAK SUMMARY ===\n");
     printf("fastTicks=%ld wallSeconds=%ld matrixFail=%d faultFail=%d signalFail=%d credBootFail=%d residualPaths=%ld credRounds=%ld\n",
            fastTicks, wallSeconds, totalMatrixFail, totalFaultFail, totalSignalFail, cbFail, resid, rounds);
-    // exit 0 always; report findings in the markdown. Non-zero reserved for
-    // hard harness failures.
+    // C08: any phase reporting a non-zero fail count MUST fail the process.
+    // Previously main() assigned the per-phase fail counts to locals but then
+    // unconditionally `return 0;`, so matrix/fault/signal/credBoot regressions
+    // never failed the harness. `resid` (runtime-materialized file count) is a
+    // coverage enumeration that is expected to be >0, so it does NOT gate.
+    int totalFails = cbFail + totalMatrixFail + totalFaultFail + totalSignalFail;
+    if (totalFails != 0) {
+        printf("  [FAIL] soak: %d total phase failure(s) -> exit 1\n", totalFails);
+        return 1;
+    }
+    printf("  [PASS] soak: no phase failures\n");
     return 0;
 }

@@ -283,7 +283,9 @@ static time_t g_recoverySince = 0;
 // publish only fires when the set actually changes (no per-tick rewrite).
 // ---------------------------------------------------------------------------
 static std::set<std::string> g_degradedSet;
-// Pure: join the active reasons into the on-disk value ("r1+r2"), "normal" when empty.
+// Pure: join the active reasons into the on-disk value ("r1+r2"), "none" when empty.
+// "none" matches the WebUI healthy sentinel (index.html watchdog row treats
+// empty/"none" as healthy -> "—"; the old "normal" was rendered as a red row).
 // Split out so host tests can assert the aggregated string without touching /dev.
 static std::string degradedReasonsString() {
     std::string v;
@@ -291,7 +293,7 @@ static std::string degradedReasonsString() {
         if (!v.empty()) v += "+";
         v += r;
     }
-    return v.empty() ? "normal" : v;
+    return v.empty() ? "none" : v;
 }
 static void publishDegraded() {
     writeState("watchdog_degraded", degradedReasonsString().c_str());
@@ -1264,7 +1266,13 @@ int main(int argc, char* argv[]) {
     // daemon is genuinely mid-crash-loop and heartbeatFresh never becomes true.
     writeState("watchdog_runtime_state", wdStateName(g_wdState));  // NORMAL
     writeState("watchdog_state_reason", "watchdog_startup");
-    clearAllDegradedReasons();   // publishes "normal" if set was non-empty
+    clearAllDegradedReasons();   // publishes if a stale on-disk set was non-empty
+    // Fresh-boot seed: on a clean start g_degradedSet is EMPTY, so
+    // clearAllDegradedReasons() above is a no-op and watchdog_degraded would
+    // never be written — the WebUI then showed "—" and could not tell
+    // "watchdog running & healthy" from "watchdog not running". Publish the
+    // healthy state ("none") unconditionally here.
+    publishDegraded();
 
     // WD-12 / INC-013: who watches the watchdog? This C++ process cannot
     // self-reap (if it deadlocks in D-state, no internal thread can respawn it).

@@ -598,7 +598,11 @@ void writeSystemJson() {
     std::string apkAge = readFile((std::string(STATE_DIR)+"/fg_apk_age").c_str());
     std::string apkPath = readFile((std::string(STATE_DIR)+"/fg_apk_path").c_str());
     int cpuTemp = readInt((std::string(STATE_DIR)+"/thermal_cpu_max").c_str(),0);
-    int skinTemp = readInt((std::string(STATE_DIR)+"/thermal_skin").c_str(),0);
+    // thermal_skin: thermal.cpp writes an EMPTY file when no skin zone was found
+    // (no skin sensor). readInt(empty, -1) == -1 == the unavailable sentinel; emit
+    // JSON null instead of a misleading -1/0 temperature. Real skin temps are >0.
+    int skinTemp = readInt((std::string(STATE_DIR)+"/thermal_skin").c_str(),-1);
+    std::string skinJson = (skinTemp >= 0) ? std::to_string(skinTemp) : "null";
     int batteryTemp = readInt((std::string(STATE_DIR)+"/thermal_battery").c_str(),0);
     int thermalEmergency = readInt((std::string(STATE_DIR)+"/thermal_emergency").c_str(),0);
     int loadAvg = readInt((std::string(STATE_DIR)+"/system_load").c_str(),0);
@@ -668,7 +672,7 @@ void writeSystemJson() {
         "\"safety_latency_active\":" + (safetyLatencyActive?"true":"false") + ","
         "\"target_frame_time\":" + std::to_string(targetFrameTime) + ","
         "\"apk_diagnostic\":{\"status\":\"" + jsonEscape(apkStatus) + "\",\"age\":\"" + jsonEscape(apkAge) + "\",\"path\":\"" + jsonEscape(apkPath) + "\"},"
-        "\"thermal\":{\"cpu\":" + std::to_string(cpuTemp) + ",\"skin\":" + std::to_string(skinTemp) + ",\"battery\":" + std::to_string(batteryTemp) + ",\"emergency\":" + std::to_string(thermalEmergency) + ",\"skin_pressure\":" + std::to_string(skinPressure) + ",\"battery_pressure\":" + std::to_string(batteryPressure) + "}," +
+        "\"thermal\":{\"cpu\":" + std::to_string(cpuTemp) + ",\"skin\":" + skinJson + ",\"battery\":" + std::to_string(batteryTemp) + ",\"emergency\":" + std::to_string(thermalEmergency) + ",\"skin_pressure\":" + std::to_string(skinPressure) + ",\"battery_pressure\":" + std::to_string(batteryPressure) + "}," +
         psiBlock +
         "\"thermal_limit\":" + std::to_string(cfgSnap.thermalLimitCpu) + ","
         // v94-hotreload: emit the exact field names the frontend fieldDefs request

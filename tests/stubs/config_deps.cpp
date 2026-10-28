@@ -12,8 +12,8 @@ const char* CONF_DIR  = "/tmp/aatpe_v94_state";
 
 std::atomic<bool> g_reloadConfigRequested{false};
 std::atomic<sig_atomic_t> g_reloadProfile{0};
-unsigned long g_mlSaveSuccess = 0;
-unsigned long g_mlSaveFail = 0;
+std::atomic<unsigned long> g_mlSaveSuccess{0};
+std::atomic<unsigned long> g_mlSaveFail{0};
 std::mutex g_hybridMutex;
 
 RefreshRateMode g_refreshRateModeEnum = RefreshRateMode::PEAK;

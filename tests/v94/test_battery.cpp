@@ -175,6 +175,17 @@ int main() {
         CHECK(aged == false,  "no_design: not aged");
         CHECK(getBatteryAgePenalty(6) == 0, "no_design: BIG penalty 0");
 
+    } else if (sc == "fresh_spurious_soh") {
+        // Real-device bug: OEM health=Good(100), cycle_count=1, but an unlearned
+        // charge_full/charge_full_design gives SOH=70. A lone sub-80% derived SOH
+        // on a fresh battery must NOT declare aged (screenshot: "已老化" on a
+        // 100%-health, 1-cycle battery).
+        CHECK(health == 100, "fresh_spurious_soh: health=Good -> 100");
+        CHECK(cycles == 1,   "fresh_spurious_soh: cycle_count=1");
+        CHECK(soh == 70,     "fresh_spurious_soh: SOH=70 (spurious low)");
+        CHECK(aged == false, "fresh_spurious_soh: aged=FALSE (fresh gauge, no wear corroboration)");
+        CHECK(getBatteryAgePenalty(6) == 0, "fresh_spurious_soh: BIG penalty 0");
+
     } else {
         CHECK(false, (std::string("unknown scenario: ") + sc).c_str());
     }

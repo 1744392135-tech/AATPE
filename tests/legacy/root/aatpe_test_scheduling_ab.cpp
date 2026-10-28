@@ -227,8 +227,8 @@ std::mutex g_historyMutex;
 aatpe_ml::LearningModel g_mlModel;
 std::mutex g_mlMutex;
 time_t g_mlLastSave = 0;
-unsigned long g_mlSaveSuccess = 0;
-unsigned long g_mlSaveFail = 0;
+std::atomic<unsigned long> g_mlSaveSuccess{0};
+std::atomic<unsigned long> g_mlSaveFail{0};
 
 // --- Atomic counters ---
 std::atomic<long long> g_totalDecisions{0};

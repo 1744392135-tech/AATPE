@@ -2,9 +2,9 @@
 # Do not hand-edit version=/versionCode here; the build regenerates them from VERSION.
 id=aatpe
 name=AATPE - Adaptive Android Task Placement Engine
-version=v6.0.0 (rel17)
-versionCode=4411
+version=v6.0.0 (rel18)
+versionCode=4412
 author=AATPE
-description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel17, versionCode 4411) 真机反馈修复: ①控制模式切激进3秒内回弹被动根治(setRuntimeControlMode安全收口补用户锁门控,非emergency的看门狗降级不覆盖用户手动选择,温度emergency仍可覆盖); ②C4冻结8小时无目标根治(游戏识别从单一手动列表改为手动列表+conf GAME_PACKAGES+游戏引擎线程扫描三信号OR,自动识别游戏切后台即可冻结,前台/音频/不确定安全护栏全保留). 含rel16大小核颠倒修复(emergency退出后低切换worker首圈promote回大核)、状态机震荡、C4 v1 freezer探测、percpu.json、ML空簇就绪度、游戏场景门禁、前端显示修复及rel15及之前各轮. host 全量v94=154 ok/0 fail, 普通/ASan+UBSan/TSan 全0失败. C4_FREEZER/eBPF事件/联邦 默认ON, 安全与120°C硬墙强制ON. Build: NDK r30, Clang21, -O3 -flto=thin, stripped, -Werror zero warnings.
+description=AATPE - Adaptive Android Task Placement Engine C++ Edition. v6.0.0 (rel18, versionCode 4412) 最后一版: 逐行穷尽复核外部深度审查报告并修复 H01-H04 与系统性测试假通过. H01: tracefs不可读时eBPF软信任门控矛盾(锁定ROM上除exec/exit外事件全被offsetFilteredCount_丢弃而WebUI仍显TRUSTED_BUILTIN),新增offsetDeliveryAllowed谓词让已软信任的UNKNOWN偏移放行投递; H02: bpftool兜底只attach 4/6 tracepoint(wakeup/wakeup_new从不挂载致runq延迟静默失效),补全6个tracepoint attach表并删kprobe猜测; H03: thermal_ff集成测试被未闭合块注释整体吞掉(9用例+main不参与编译),补闭合并注册入构建; H04: g_mlSaveSuccess/Fail非原子跨线程RMW(C++UB)改std::atomic; 假通过门根治: v74 classify_failure补PRODUCTION_BUG分支(故意失败验证rc=1)、soak_main汇总失败返回1、run_storm_san.sh补pipefail(故意崩溃rc=7)、归档AB裸return 0修复. 真机截图字段修复: uclamp五项"-"(writeStateFiles在mkdir前+聚合键不匹配)、watchdog"-"(健康token normal改none且启动无条件publish)、timestats永久"未知"(健康tick误写unknown)、percpu.json不可用(前端readJson把内嵌JSON对象parse成[object Object]抛异常,三份index.html透传修复); 皮肤温度-1°C(MTK无skin zone写裸哨兵,读失败改写空显示--)、电池100%健康/1循环却"已老化"(派生SOH<80需循环磨损佐证才采信)、帧危急/JANK误红(全局SF延迟门控在有前台游戏时才报警). host全量v94=155 ok/0 fail, -Werror zero warnings. C4_FREEZER/eBPF事件/联邦 默认ON, 安全与120°C硬墙强制ON. Build: NDK r30, Clang21, -O3 -flto=thin, stripped.
 updateJson=
 template=3

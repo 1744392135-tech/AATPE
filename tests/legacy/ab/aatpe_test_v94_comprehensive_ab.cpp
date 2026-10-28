@@ -159,8 +159,8 @@ std::mutex g_historyMutex;
 aatpe_ml::LearningModel g_mlModel;
 std::mutex g_mlMutex;
 time_t g_mlLastSave = 0;
-unsigned long g_mlSaveSuccess = 0;
-unsigned long g_mlSaveFail = 0;
+std::atomic<unsigned long> g_mlSaveSuccess{0};
+std::atomic<unsigned long> g_mlSaveFail{0};
 
 std::atomic<long long> g_totalDecisions{0};
 std::atomic<long long> g_totalMigrations{0};
@@ -1292,5 +1292,14 @@ int main() {
         printf("  %s: %d/%d passed\n", ds.first.c_str(), ds.second.second, ds.second.first);
     }
 
+    // C02: fail the process (non-zero exit) when any dimension test failed, so CI
+    // does not see a green build from a red harness. Previously this was a bare
+    // `return 0;` regardless of g_totalTests - g_passedTests.
+    int failed = g_totalTests - g_passedTests;
+    if (failed != 0) {
+        printf("\n  [FAIL] %d test(s) failed -> exiting non-zero\n", failed);
+        return 1;
+    }
+    printf("\n  [PASS] all %d tests passed\n", g_totalTests);
     return 0;
 }

@@ -38,7 +38,7 @@ std::mutex g_topologyRwMutex;
 aatpe_ml::LearningModel g_mlModel;
 std::mutex g_mlMutex;
 std::mutex g_hybridMutex;
-unsigned long g_mlSaveSuccess = 0, g_mlSaveFail = 0;
+std::atomic<unsigned long> g_mlSaveSuccess{0}, g_mlSaveFail{0};
 
 // frame.cpp closure globals (fz_pkglist inlines frame.cpp)
 PerAppConfig g_currentAppConfig{};

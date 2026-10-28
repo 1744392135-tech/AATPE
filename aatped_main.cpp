@@ -87,9 +87,15 @@ const char* ML_MODEL_PATH = "/data/adb/modules/aatpe/model.dat";
 LearningModel g_mlModel;
 time_t g_mlLastSave = 0;
 std::mutex g_mlMutex;
-// fix39: ML persistence diagnostic counters
-unsigned long g_mlSaveSuccess = 0;
-unsigned long g_mlSaveFail = 0;
+// fix39: ML persistence diagnostic counters.
+// B2/H04: std::atomic (memory_order default seq-cst; relaxed would also suffice)
+// because the periodic-save path (here) and the control model_save= path
+// (aatped_control.cpp) both ++ these AFTER releasing g_mlMutex, while
+// updateMlSaveStateFiles() snapshots them. A plain unsigned long RMW across two
+// threads is C++ UB / lost updates on arm64. Atomic makes the ++ and the
+// snapshot race-free without moving disk IO back under g_mlMutex.
+std::atomic<unsigned long> g_mlSaveSuccess{0};
+std::atomic<unsigned long> g_mlSaveFail{0};
 
 // Frame-time outcome providers (global instances)
 aatpe_ml::GfxInfoFrameTimeProvider g_gfxInfoProvider;
@@ -1614,9 +1620,13 @@ void daemonInit() {
         }
     }
     // ROUND-010: probe device capabilities (cgroup/uclamp/PSI/loader).
+    // probe() is read-only (sysfs/proc walk) and may run before the runtime
+    // dirs exist. writeStateFiles() MUST NOT run here: on tmpfs /dev/aatpe
+    // the state dir does not exist yet below, so the atomic write silently
+    // failed on every boot and the whole capabilities surface (uclamp knobs)
+    // never hit disk. It is re-issued after the mkdir block further down.
     try {
         aatpe::caps::probe();
-        aatpe::caps::writeStateFiles(STATE_DIR);
     } catch (const std::exception& e) { recordStartupCrash("caps_probe", e.what()); }
     catch (...) { recordStartupCrash("caps_probe", "?"); }
     // P0-opt2: pre-reserve g_threads bucket count to avoid rehashing during
@@ -1638,6 +1648,13 @@ void daemonInit() {
     // placement_success_rate must not leak into this boot's smoothing).
     scoringHistorySweepStale();
     mkdirIfNotExist((std::string(RUN_DIR) + "/thread_db").c_str(), 0700);
+    // Dir tree exists now — publish the packed capabilities line AND the
+    // per-knob state files (task_uclamp / cgroup_uclamp_v1 / ...) that the
+    // WebUI "机制与调试" panel aggregates by filename. Running this BEFORE the
+    // mkdirs above was a silent no-op on tmpfs and left every uclamp row "—".
+    try { aatpe::caps::writeStateFiles(STATE_DIR); }
+    catch (const std::exception& e) { recordStartupCrash("caps_write", e.what()); }
+    catch (...) { recordStartupCrash("caps_write", "?"); }
     // #74: audit helper directory for sensitive content.
     helperDirAudit();
 

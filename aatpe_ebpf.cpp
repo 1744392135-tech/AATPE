@@ -1719,6 +1719,17 @@ void EbpfScheduler::hostTestSetOffsetDegraded(char kind) {
         case 'e': offsetStatus_exec_.store(TpOffsetStatus::DEGRADED, std::memory_order_relaxed); break;
     }
 }
+
+// H01 host seam: set any ctx-reading tracepoint's offset verdict to an arbitrary
+// value so the UNKNOWN soft-trust vs UNKNOWN-no-soft-trust delivery split can be
+// exercised on the host (kind: 'f'=fork 's'=switch 'w'=wakeup).
+void EbpfScheduler::hostTestSetOffsetStatus(char kind, TpOffsetStatus s) {
+    switch (kind) {
+        case 'f': offsetStatus_fork_.store(s, std::memory_order_relaxed); break;
+        case 's': offsetStatus_switch_.store(s, std::memory_order_relaxed); break;
+        case 'w': offsetStatus_wakeup_.store(s, std::memory_order_relaxed); break;
+    }
+}
 #endif
 
 // ============================================================================
@@ -3513,6 +3524,47 @@ static int runBpftoolLoadall(const std::string& bin, const std::string& obj,
     return runBpftoolArgv(argv);
 }
 
+// H02 fix: the bpftool fallback attach table. sched_events.bpf.c is a
+// TRACEPOINT-ONLY object: all six programs live in a tracepoint/sched/* section
+// (fork/exit/switch/exec/wakeup/wakeup_new). bpftool `prog loadall` loads and
+// pins every program; this table lists, for each pinned program (by its ELF
+// function name handle_*), the tracepoint id path we resolve from tracefs to
+// attach it.
+//
+// H02 bug being fixed: the old table listed only 4 programs (handle_fork/
+// exit/switch/exec) and paired them with kprobe guesses (do_fork/do_exit/
+// finish_task_switch/search_binary_handler). Two problems:
+//   1. sched_wakeup / sched_wakeup_new were never opened or attached, so the
+//      wakeup_cache map those two programs write was never populated and the
+//      run-queue latency derived from it was silently dead on the bpftool path.
+//   2. The .o has NO kprobe sections, so the kprobe guesses were always a type
+//      mismatch on a tracepoint program fd; they only wasted an attach attempt
+//      and leaked kprobe_events rows. They are removed -- every program here is
+//      attached straight to its tracepoint.
+struct BpftoolAttachRow { const char* progName; const char* tpPath; };
+static const BpftoolAttachRow kBpftoolAttachTable[] = {
+    {"handle_fork",       "tracepoint/sched/sched_process_fork"},
+    {"handle_exit",       "tracepoint/sched/sched_process_exit"},
+    {"handle_switch",     "tracepoint/sched/sched_switch"},
+    {"handle_exec",       "tracepoint/sched/sched_process_exec"},
+    {"handle_wakeup",     "tracepoint/sched/sched_wakeup"},
+    {"handle_wakeup_new",  "tracepoint/sched/sched_wakeup_new"},
+};
+#ifdef AATPE_HOST_TEST
+const std::vector<std::pair<std::string,std::string>>&
+EbpfScheduler::hostTestBpftoolAttachTable(void) {
+    static const std::vector<std::pair<std::string,std::string>> tbl = {
+        {kBpftoolAttachTable[0].progName, kBpftoolAttachTable[0].tpPath},
+        {kBpftoolAttachTable[1].progName, kBpftoolAttachTable[1].tpPath},
+        {kBpftoolAttachTable[2].progName, kBpftoolAttachTable[2].tpPath},
+        {kBpftoolAttachTable[3].progName, kBpftoolAttachTable[3].tpPath},
+        {kBpftoolAttachTable[4].progName, kBpftoolAttachTable[4].tpPath},
+        {kBpftoolAttachTable[5].progName, kBpftoolAttachTable[5].tpPath},
+    };
+    return tbl;
+}
+#endif
+
 bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
     // P2-22: fixed absolute path check instead of "command -v bpftool".
     std::string bpftoolBin = findBpftoolPath();
@@ -3551,12 +3603,9 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
         // mkdir -p <mapPinDir>` — glob expansion is impossible without a shell, so
         // we unlink the known pin names explicitly (stale extras are harmless:
         // loadall re-pins to the same paths).
-        static const char* kKnownPinNames[] = {
-            "handle_fork", "handle_exit", "handle_switch", "handle_exec", nullptr
-        };
-        for (int pi = 0; kKnownPinNames[pi]; pi++)
-            ::unlink((pinBase + kKnownPinNames[pi]).c_str());
-        for (int pi = 0; pi < 4; pi++)
+        for (size_t pi = 0; pi < (sizeof(kBpftoolAttachTable)/sizeof(kBpftoolAttachTable[0])); pi++)
+            ::unlink((pinBase + kBpftoolAttachTable[pi].progName).c_str());
+        for (int pi = 0; pi < (int)(sizeof(kBpftoolAttachTable)/sizeof(kBpftoolAttachTable[0])); pi++)
             ::unlink((pinBase + "prog_" + std::to_string(pi)).c_str());
         // R1 (v4.2.3): use absolute-path rm (no PATH lookup). If none found, skip
         // the exec — rm cleanup is best-effort; mkdirIfNotExist below re-creates
@@ -3597,25 +3646,14 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
         }
         if (ret != 0) continue;
 
-        // Open pinned programs — try kprobe function names first, then tracepoint paths
-        static const char* progNames[] = {
-            "handle_fork", "handle_exit", "handle_switch", "handle_exec", nullptr
-        };
-        // KPROBE attach points (matches our kprobe-built .o)
-        static const char* kprobeFuncs[] = {
-            "do_fork", "do_exit", "finish_task_switch", "search_binary_handler", nullptr
-        };
-        static const int kprobeIsRet[] = {
-            1, 0, 0, 0  // do_fork is kretprobe, others are kprobe
-        };
-        // TRACEPOINT fallback paths
-        static const char* tpPaths[] = {
-            "tracepoint/sched/sched_process_fork",
-            "tracepoint/sched/sched_process_exit",
-            "tracepoint/sched/sched_switch",
-            "tracepoint/sched/sched_process_exec",
-            nullptr
-        };
+        // Open each pinned program and attach it to its tracepoint. The object is
+        // tracepoint-only (see kBpftoolAttachTable), so there is no kprobe step:
+        // bpftool loaded these as tracepoint programs and we attach them by
+        // resolving the tracepoint id from tracefs. (H02: this table now covers
+        // all six programs, incl. sched_wakeup / sched_wakeup_new whose
+        // wakeup_cache writes are what feed run-queue latency.)
+        const int kProgCount =
+            (int)(sizeof(kBpftoolAttachTable)/sizeof(kBpftoolAttachTable[0]));
 
         // Bug 4 fix: Open the program's internal events_map from pinned bpffs path,
         // NOT create a new separate map. This ensures perf ring buffer updates go
@@ -3641,9 +3679,10 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
         if (ncpus <= 0) ncpus = 8;
         onlineCpuIds_ = readOnlineCpuIds();  // #24
         int progsLoaded = 0;
-        for (int p = 0; progNames[p]; p++) {
+        for (int p = 0; p < kProgCount; p++) {
             if (loadTimeoutExceeded(deadline)) break;
-            std::string pinPath = pinBase + progNames[p];
+            const char* progName = kBpftoolAttachTable[p].progName;
+            std::string pinPath = pinBase + progName;
             int pfd = open(pinPath.c_str(), O_RDONLY | O_CLOEXEC);
             if (pfd < 0) {
                 pinPath = pinBase + "prog_" + std::to_string(p);
@@ -3652,60 +3691,15 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
             if (pfd < 0) continue;
             progFds_.push_back(pfd);
 
+            // Tracepoint-only object: attach each program straight to its
+            // tracepoint by resolving the tracepoint id from tracefs (single,
+            // 4.14-safe attach). The wakeup programs (p==4,5) do not emit to the
+            // ring -- they only write wakeup_cache -- so they need no ring setup;
+            // attaching them is what makes their map updates fire.
             int attached = 0;
-            // Try KPROBE attach first
-            if (kprobeFuncs[p]) {
-                // EBPF-18: iterate the REAL online CPU id list (populated above
-                // from /sys/devices/system/cpu/online, #24) instead of the old
-                // `if (cpu != 0) continue;` which only ever tried cpu==0. On
-                // devices where cpu0 is offline (isolated/PSCI-disabled
-                // big.LITTLE configs) the old loop attempted kprobe attach on
-                // an offline CPU and always fell through to the tracepoint
-                // fallback. Fall back to an ordinal 0..ncpus-1 scan only when
-                // onlineCpuIds_ is empty (e.g. sysfs unreadable).
-                std::vector<int> kprobeCpuList;
-                if (!onlineCpuIds_.empty()) {
-                    kprobeCpuList = onlineCpuIds_;
-                } else {
-                    for (long i = 0; i < ncpus; i++) kprobeCpuList.push_back((int)i);
-                }
-                for (int cpu : kprobeCpuList) {
-                    if (attached != 0) break;
-                    if (loadTimeoutExceeded(deadline)) break;
-                    int perfFd = -1;
-                    std::string eventName;
-                    if (attachKprobe(pfd, kprobeFuncs[p], kprobeIsRet[p] != 0,
-                                     cpu, perfFd, eventName)) {
-                        tracepointFds_.push_back(perfFd);
-                        // EBPF-01/02 fix: do NOT mmap the kprobe attachFd (a
-                        // PERF_TYPE_TRACEPOINT fd) directly as a BPF output ring.
-                        // On 4.14 that causes bpf_perf_event_output() to silently
-                        // fail (the v82 anti-pattern). Instead, for progIndex==0
-                        // (the only program that owns the shared events_map), call
-                        // setupPerCpuRingBuffers() which opens independent
-                        // PERF_TYPE_SOFTWARE/BPF_OUTPUT events per online CPU.
-                        // The kprobe attachFd stays in tracepointFds_ for SET_BPF
-                        // ownership and is closed at unload(); it is NOT mmap'd.
-                        if (p == 0 && rings_.empty()) {
-                            int ringsMapped = setupPerCpuRingBuffers(0, perfFd, cpu,
-                                                                      (int)ncpus, p);
-                            if (ringsMapped == 0) {
-                                LOG_ERROR("bpftool kprobe: setupPerCpuRingBuffers "
-                                          "mapped 0 rings — cannot deliver events; "
-                                          "aborting kprobe path");
-                                // Roll back: close the kprobe attach fd we just pushed.
-                                tracepointFds_.pop_back();
-                                close(perfFd);
-                                // Fall through to tracepoint fallback below.
-                            }
-                        }
-                        attached++;
-                    }
-                }
-            }
-            // Fallback to TRACEPOINT if kprobe failed — 4.14-safe single-attach
-            if (attached == 0 && tpPaths[p]) {
-                int tpId = readTracepointId(tpPaths[p]);
+            const char* tpPath = kBpftoolAttachTable[p].tpPath;
+            if (tpPath) {
+                int tpId = readTracepointId(tpPath);
                 if (tpId > 0) {
                     int attachFd = -1;
                     int attachCpu = -1;
@@ -3728,7 +3722,7 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
                 }
             }
             if (attached > 0) progsLoaded++;
-            LOG_INFO("bpftool: prog[%d] %s attached=%d", p, progNames[p], attached);
+            LOG_INFO("bpftool: prog[%d] %s attached=%d", p, progName, attached);
         }
 
         if (progsLoaded > 0 && !rings_.empty()) {

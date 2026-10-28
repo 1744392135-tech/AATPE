@@ -111,6 +111,20 @@ int main(){
         CHECK(g_thermalCpu.load()>=95, "bootgrace: high boot temp read (>=95C)");
         CHECK(getSystemState()!=SystemState::EMERGENCY,
               "bootgrace: single high read at boot does NOT immediately latch EMERGENCY");
+    } else if (sc=="noskin") {
+        // Real-device bug: no thermal zone type matches "skin"/"pmic_therm"
+        // (mock zone1 type="ap_therm", which thermal.cpp routes to CPU die). The
+        // old code wrote the raw sentinel "-1" to thermal_skin and the WebUI
+        // rendered "-1C". Fix: on unavailable the state file is EMPTY so the WebUI
+        // numeric reader shows "--"; g_thermalSkin stays -1 for the in-memory state.
+        printf("=== Thermal scenario: noskin (no skin zone) ===\n");
+        readThermal();
+        std::string sf = readStateStr("thermal_skin");
+        printf("  [INFO] atomic skin=%d state-file thermal_skin='%s'\n",
+               g_thermalSkin.load(), sf.c_str());
+        CHECK(g_thermalSkin.load()==-1, "noskin: g_thermalSkin atomic stays -1 (state-machine contract)");
+        CHECK(sf != "-1", "noskin: thermal_skin state file must NOT leak the -1 sentinel");
+        CHECK(sf.empty(), "noskin: thermal_skin state file EMPTY -> WebUI renders '--' (not -1C)");
     }
     else if (sc=="hermetic") {
         // ROUND-009e: pure-hermetic load-correlation test via setTestRoot.

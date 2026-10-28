@@ -159,15 +159,15 @@ run_thermal_namespaced() {
   local mock; mock=$(mktemp -d /tmp/aatpe_thermal.XXXXXX)
   mkdir -p "$mock/thermal/thermal_zone0" "$mock/thermal/thermal_zone1" \
            "$mock/thermal/thermal_zone2" "$mock/power_supply/battery"
-  # thermal.cpp identifies the cpu/skin/battery zones by their `type` file.
-  echo "mtktscpu" > "$mock/thermal/thermal_zone0/type"
-  echo "skin" > "$mock/thermal/thermal_zone1/type"
-  echo "battery" > "$mock/thermal/thermal_zone2/type"
   local rc=0
   # v4.1.1 hotfix acceptance scenarios (boot0/mcjitter/clampregress/fallbackonly/
   # secondary/throttle0) build their OWN fake sys tree via thermalSetTestRoot, so
   # the bind-mock seeding below is inert for them; they run as fresh processes.
-  for sc in normal emergency bootgrace battclamp freshness degrdecouple hwmontempn pmicnotcpu thread zonestick constclamp constclamp_throttled constclamp_cooling boot0 mcjitter clampregress fallbackonly secondary throttle0; do
+  for sc in normal emergency bootgrace battclamp freshness degrdecouple hwmontempn pmicnotcpu thread zonestick constclamp constclamp_throttled constclamp_cooling boot0 mcjitter clampregress fallbackonly secondary throttle0 noskin; do
+    # thermal.cpp identifies the cpu/skin/battery zones by their `type` file.
+    echo "mtktscpu" > "$mock/thermal/thermal_zone0/type"
+    echo "skin"     > "$mock/thermal/thermal_zone1/type"
+    echo "battery"  > "$mock/thermal/thermal_zone2/type"
     # readThermal() auto-detects units by magnitude (thermal.cpp v66 P2#14):
     #   tRaw>1500 -> milli-C (/1000); tRaw>150 -> deci-C (/10); else degC.
     # Seed each zone to a cool baseline, then override per-scenario with the
@@ -187,6 +187,11 @@ run_thermal_namespaced() {
       bootgrace) echo 100000 > "$mock/thermal/thermal_zone0/temp" ;;
       battclamp) # battery raw 900000mC must clamp to 100C
         echo 900000 > "$mock/power_supply/battery/temp" ;;
+      noskin) # real-device: no zone type contains "skin"/"pmic_therm" (MTK names
+              # the skin sensor differently; ap_therm is deliberately CPU-die).
+              # foundSkinZone=false -> thermal_skin state file must be EMPTY (WebUI
+              # shows "--"), NOT the raw -1 sentinel that rendered "-1C".
+        echo "ap_therm" > "$mock/thermal/thermal_zone1/type" ;;
     esac
     echo "  --- scenario: $sc ---"
     # tmpfs over /sys/class so we control thermal + power_supply entirely
@@ -212,7 +217,7 @@ run_battery_namespaced() {
   mkdir -p "$mock/power_supply/battery"
   local rc=0
   for sc in power empty good_new aged_soh65 aged_soh40 aged_soh20 \
-            overheat dead cycle_only_700 cycle_only_1k no_design; do
+            overheat dead cycle_only_700 cycle_only_1k no_design fresh_spurious_soh; do
     # Reset the battery dir per scenario (scenarios omit some nodes).
     rm -rf "$mock/power_supply/battery"
     mkdir -p "$mock/power_supply/battery"
@@ -258,6 +263,12 @@ run_battery_namespaced() {
         echo "Good"      > "$mock/power_supply/battery/health"
         echo 100         > "$mock/power_supply/battery/cycle_count"
         echo 3000000     > "$mock/power_supply/battery/charge_full" ;;
+      fresh_spurious_soh)  # real-device bug: OEM Good + 1 cycle but an unlearned
+                           # charge_full gives SOH=70 -> must NOT declare aged.
+        echo "Good"      > "$mock/power_supply/battery/health"
+        echo 1           > "$mock/power_supply/battery/cycle_count"
+        echo 2800000     > "$mock/power_supply/battery/charge_full"
+        echo 4000000     > "$mock/power_supply/battery/charge_full_design" ;;
     esac
     echo "  --- scenario: $sc ---"
     AATPE_BATTERY_SCENARIO="$sc" unshare --map-root-user --mount bash -c "
@@ -428,6 +439,22 @@ run_one() {
     mech_uclamp)   build_test mech_uclamp  "aatpe_placement_mech aatpe_caps"  "log_stub" ;;
     coldstart)     build_test coldstart    "cold_start_rules aatpe_recovery aatpe_ml"   "placement_deps ml_deps recovery_caps_stub" "-DAATPE_HOST_TEST" ;;
     thermal_hal)   build_test thermal_hal  "thermal thermal_headroom aatpe_ml thermal_ff/thermal_ff"            "v94_daemon_deps log_stub" ;;
+    # H03: thermal_ff directed regression (heating/stable/cooling/spike/sensor-fault/
+    # wall-overlay/hysteresis/adapter-map/concurrent). Self-contained: links ONLY the
+    # frozen thermal_ff.c core. Its own main() lives at thermal_ff/test/test_integration.cpp
+    # (NOT tests/v94/test_<name>.cpp), so compile it directly rather than via build_test.
+    thermal_ff_intg)
+      echo "==> [thermal_ff_intg]"
+      mkdir -p "$OUT"
+      if ! gcc -std=c11 -O1 -Wall -Wextra -fPIC -pthread $INCLUDES -c "$SRC/thermal_ff/thermal_ff.c" -o "$OUT/thermal_ff/thermal_ff.o" -lm 2>"$OUT/thermal_ff_intg.c.err"; then
+        echo "  [FAIL] thermal_ff.c compile"; head -20 "$OUT/thermal_ff_intg.c.err"; return 1; fi
+      if ! g++ $TFLAGS -I$SRC/thermal_ff -c "$SRC/thermal_ff/test/test_integration.cpp" -o "$OUT/thermal_ff_intg.o" 2>"$OUT/thermal_ff_intg.t.err"; then
+        echo "  [FAIL] test_integration.cpp does not compile under -Werror:"; head -30 "$OUT/thermal_ff_intg.t.err"; return 1; fi
+      if ! g++ $TFLAGS "$OUT/thermal_ff/thermal_ff.o" "$OUT/thermal_ff_intg.o" -o "$OUT/test_thermal_ff_intg" -lm 2>"$OUT/thermal_ff_intg.link.err"; then
+        echo "  [FAIL] link:"; head -30 "$OUT/thermal_ff_intg.link.err"; return 1; fi
+      echo "  RUN:"
+      "$OUT/test_thermal_ff_intg" && return 0 || { echo "  [FAIL] exit=$?"; return 1; }
+      ;;
     gpu_boost)     build_test gpu_boost    "gpu_boost"          "gpu_deps log_stub" "-DAATPE_GPU_BOOST_TEST" ;;
     gpu_boost_thermal) build_test gpu_boost_thermal "gpu_boost" "gpu_deps log_stub" "-DAATPE_GPU_BOOST_TEST" ;;
     ebpf_classify) build_test ebpf_classify "aatpe_ebpf aatpe_subsystem integrity" "ebpf_deps log_stub" ;;
@@ -435,6 +462,7 @@ run_one() {
     ebpf_failsafe) build_test ebpf_failsafe "aatpe_ebpf aatpe_subsystem" "log_stub ebpf_deps hybrid_deps" "-DAATPE_HOST_TEST" ;;
     ebpf_elf_robust_v449) build_test ebpf_elf_robust_v449 "aatpe_ebpf aatpe_subsystem" "log_stub ebpf_deps hybrid_deps" "-DAATPE_HOST_TEST" ;;
     ebpf_p3_fixes) build_test ebpf_p3_fixes "aatpe_ebpf aatpe_subsystem" "ebpf_deps log_stub" "-DAATPE_HOST_TEST" ;;
+    ebpf_h01h02) build_test ebpf_h01h02 "aatpe_ebpf aatpe_subsystem" "ebpf_deps log_stub" "-DAATPE_HOST_TEST" ;;
     crypto_v449)          build_test crypto_v449          "" "" ;;
     session_v449)         build_test session_v449         "aatpe_session_token" "log_stub" ;;
     uclamp_restart_v449) build_test uclamp_restart_v449 "" "" "-DAATPE_HOST_TEST" ;;
@@ -697,7 +725,7 @@ abtest gamescene arbitrator arb_wiring battery gpu audio applaunch logging utils
 ml_hybrid_main ml_hybrid_train ml_hybrid_predict ml_hybrid_persist ml_hybrid_alpha \
 fed_main fed_aggregate hmac topology config state control active_lock \
 thread_scan threadutil frame webui_http ebpf main v343_ml f_v434_ml f_v434_hybrid v343_placement v342_round4 profile_arb profile_stress recovery cmdq v342_round5 \
-integrity adrc frame_binder config_schema caps diag mech_uclamp coldstart coldinstance thermal_hal gpu_boost gpu_boost_thermal ebpf_classify watchdog_hotfix rt_restore exec_timeout thermal_clusters coldstart_release gpu_devfreq_recovery ebpf_cpu_mask ml_pool_feature \
+integrity adrc frame_binder config_schema caps diag mech_uclamp coldstart coldinstance thermal_hal thermal_ff_intg gpu_boost gpu_boost_thermal ebpf_classify watchdog_hotfix rt_restore exec_timeout thermal_clusters coldstart_release gpu_devfreq_recovery ebpf_cpu_mask ml_pool_feature \
 numpools_d1100 thermal_gate degraded_gate diag_gpu \
 a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 c4_freezer_mounts c4_freezer_autogame tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery emergency_timing vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_empty_pool ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active rel15_freeze webui_percpu"
 if [ "$#" -eq 0 ]; then set -- $ALL; fi

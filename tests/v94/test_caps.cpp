@@ -171,6 +171,20 @@ int main() {
         std::string s = readFile(root + "/state/capabilities");
         CHECK(!s.empty(), "caps state file written");
         CHECK(s.find("cgroup=v1") != std::string::npos, "state file contains cgroup=v1");
+
+        // v4.1.x: per-knob state files must be published for the WebUI
+        // 机制与调试 panel (it aggregates by file name; the packed line alone
+        // never reaches get('task_uclamp') etc.).
+        std::string tu = readFile(root + "/state/task_uclamp");
+        CHECK(tu == "0" || tu == "1", "task_uclamp knob file published");
+        CHECK(readFile(root + "/state/cgroup_uclamp_v1") == "0", "no uclamp v1 node -> knob 0");
+        CHECK(readFile(root + "/state/cgroup_uclamp_v2") == "0", "no uclamp v2 node -> knob 0");
+        // Honesty gate: cgroup v1 device must NOT publish threads_v2=1.
+        CHECK(readFile(root + "/state/cgroup_threads_v2") == "0", "v1 device: threads_v2 honest 0");
+        // No uclamp node anywhere -> scale file EMPTY (panel shows '—', not '未知').
+        CHECK(readFile(root + "/state/cgroup_uclamp_scale").empty(), "no uclamp node -> scale empty");
+        // Packed line mirrors the honest threads_v2 value.
+        CHECK(s.find("cgroup_threads_v2=0") != std::string::npos, "packed line threads_v2 honest");
     }
 
     printf("\n=== Caps: ROUND-013 ABI layout guards ===\n");

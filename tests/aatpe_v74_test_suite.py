@@ -102,10 +102,20 @@ def classify_failure(category, name, detail):
     stale_kw = ('ebpf_bytecode', 'perf_ring', 'refpattern', 'refcount',
                 'offset', 'map', 'md5', 'sha', 'version', 'legacy_',
                 'removed', 'embeddedprog', 'mmap_')
+    # C06: a genuine functional value-mismatch (the assert_eq/assert_ne/assert_in/
+    # assert_gt/lt/ge helpers below emit exactly these signatures) that is NOT
+    # environment- or stale-gold-related is a PRODUCTION_BUG and MUST fail CI.
+    # Previously this function only had env/stale/AMBIGUOUS branches, so a real
+    # behavior regression always landed in AMBIGUOUS, real_regressions stayed 0,
+    # and the process always exited 0.
+    prod_kw = ('expected', 'not in', 'not >', 'not <', 'not >=', 'not <=',
+               'mismatch', 'incorrect', 'assertion failed')
     if any(k in blob for k in env_kw):
         return 'TEST_ENVIRONMENT'
     if any(k in blob for k in stale_kw):
         return 'TEST_STALE_GOLD'
+    if any(k in blob for k in prod_kw):
+        return 'PRODUCTION_BUG'
     return 'AMBIGUOUS'
 
 class TestResult:

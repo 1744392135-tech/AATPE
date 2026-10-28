@@ -450,6 +450,16 @@ void writeStateFiles(const char* stateDir) {
     DeviceCaps c = getCaps();
     std::string dir = stateDir;
 
+    // Honesty gate: cgroup.threads is a cgroup-v2-only knob. Publishing the
+    // perThreadCgroupV2 default ("true" at struct init) as-is would stamp a
+    // "1" on cgroup-v1 devices that have no v2 mount at all. It is "1" only
+    // where the device really mounts v2 AND the kernel accepted a thread write.
+    const bool threadsV2Real =
+        (c.cgroupVer == DeviceCaps::CgroupVersion::V2 && c.perThreadCgroupV2);
+    // Scale is only meaningful where a uclamp cgroup node actually exists.
+    // Elsewhere the panel must render "—" (unsupported), not "未知".
+    const bool uclampNodePresent = c.uclampCgroupV1 || c.uclampCgroupV2;
+
     // capabilities: single-line semicolon-separated (exec safe).
     std::string line = "kernel=" + c.kernelVersion +
                       ";cgroup=" + std::string(c.cgroupVer == DeviceCaps::CgroupVersion::V1 ? "v1" :
@@ -457,8 +467,8 @@ void writeStateFiles(const char* stateDir) {
                       ";task_uclamp=" + std::string(c.uclampTaskAvailable ? "1" : "0") +
                       ";cgroup_uclamp_v1=" + std::string(c.uclampCgroupV1 ? "1" : "0") +
                       ";cgroup_uclamp_v2=" + std::string(c.uclampCgroupV2 ? "1" : "0") +
-                      ";cgroup_threads_v2=" + std::string(c.perThreadCgroupV2 ? "1" : "0") +
-                      ";cgroup_uclamp_scale=" + c.cgroupUclampScale +
+                      ";cgroup_threads_v2=" + std::string(threadsV2Real ? "1" : "0") +
+                      ";cgroup_uclamp_scale=" + std::string(uclampNodePresent ? c.cgroupUclampScale : "unknown") +
                       ";schedtune=" + std::string(c.schedtuneAvailable ? "1" : "0") +
                       ";psi=" + std::string(c.psiAvailable ? "1" : "0") +
                       ";gpu=" + std::string(c.gpuDetected ? "1" : "0") +
@@ -470,6 +480,25 @@ void writeStateFiles(const char* stateDir) {
 
     // ROUND-010: use project-unified atomic write (tmp + rename, 0600).
     atomicWriteFile((dir + "/capabilities").c_str(), line);
+
+    // v4.1.x (WebUI 机制与调试 page fix): that panel reads these knobs as
+    // TOP-LEVEL aggregate keys — ui-snapshot and /state/all key their JSON by
+    // state FILE NAME. The single packed "capabilities" line above never
+    // reaches get('task_uclamp') etc., so every uclamp row rendered "—" even
+    // when the probe had run and found support. Emit one tiny state file per
+    // knob so the panel sees the real verdict on BOTH transport channels
+    // (HTTP /state/all and the KSU-exec ui-snapshot dump).
+    atomicWriteFile((dir + "/task_uclamp").c_str(),
+                    c.uclampTaskAvailable ? "1" : "0");
+    atomicWriteFile((dir + "/cgroup_uclamp_v1").c_str(),
+                    c.uclampCgroupV1 ? "1" : "0");
+    atomicWriteFile((dir + "/cgroup_uclamp_v2").c_str(),
+                    c.uclampCgroupV2 ? "1" : "0");
+    atomicWriteFile((dir + "/cgroup_threads_v2").c_str(),
+                    threadsV2Real ? "1" : "0");
+    // Empty scale file when no uclamp node exists (panel: "—" = unsupported).
+    atomicWriteFile((dir + "/cgroup_uclamp_scale").c_str(),
+                    uclampNodePresent ? c.cgroupUclampScale.c_str() : "");
 }
 
 } // namespace caps

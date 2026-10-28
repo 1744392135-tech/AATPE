@@ -82,6 +82,13 @@ int g_batteryCycleCount = -1;
 int g_batterySohPercent = -1;       // F2.1: real SOH% from charge_full/design
 bool g_batteryAged = false;          // F2.3: CHRONIC aging only (Overheat excluded)
 bool g_batteryOverheat = false;      // F2.3: transient thermal state
+// A derived SOH below the 80% EOL line is only trusted once the cycle count
+// shows real wear. A fresh fuel gauge (cycle_count present but small) frequently
+// reports an unlearned charge_full far below charge_full_design, or resolves the
+// two nodes to different power_supply supplies/units -> a spurious low SOH while
+// the OEM health string still says "Good". Below this, a lone SOH<80 does NOT
+// declare aged (the real-device bug: 100% health + 1 cycle showed "已老化").
+static constexpr int kAgedSohMinCyclesToTrust = 200;
 
 // F2.1: probe a numeric sysfs node across candidate power_supply names.
 // Some devices (Exynos/Samsung/custom kernels) expose charge_full/charge_full_design
@@ -158,9 +165,10 @@ void readBatteryHealth(void) {
     // thermal loop already handles; treating it as chronic wear would spuriously
     // raise the BIG-core penalty for the entire ~20s poll window.
     bool aged = false;
-    if (soh >= 0 && soh < 80)               aged = true;
-    else if (cycles >= 0 && cycles > 500)   aged = true;
-    else if (health == 20 /*Dead*/)         aged = true;
+    if (health == 20 /*Dead*/)              aged = true;   // unambiguous chronic HW failure
+    else if (cycles >= 0 && cycles > 500)    aged = true;   // cycle fallback (SOH nodes absent)
+    else if (soh >= 0 && soh < 80 &&
+             (cycles < 0 || cycles >= kAgedSohMinCyclesToTrust)) aged = true;
 
     std::lock_guard<std::mutex> lk(g_batteryStateMutex);
     g_batteryHealthPercent = health;
@@ -200,7 +208,12 @@ int getBatteryAgePenalty(int cpuId) {
     // with chronic wear (soh<80), the factor comes from SOH (chronic); if it is
     // the only signal, the penalty is 0.
     float factor = 0.0f;
-    if (soh >= 0) {
+    // Same corroboration gate as the aged flag: a derived SOH is only trusted once
+    // the cycle count shows real wear (or is unknown). A fresh gauge (cycles small)
+    // commonly reports an unlearned charge_full far below charge_full_design, which
+    // would needlessly penalize a brand-new battery. cycles<0 cannot contradict SOH.
+    bool sohCorroborated = (cycles < 0 || cycles >= kAgedSohMinCyclesToTrust);
+    if (soh >= 0 && sohCorroborated) {
         // 80% EOL threshold -> 0; 20% -> 1.0.
         factor = (80.0f - (float)soh) / 60.0f;
         if (factor < 0.0f) factor = 0.0f;

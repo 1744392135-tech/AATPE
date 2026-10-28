@@ -218,21 +218,22 @@ bool validateConfig() {
 }
 
 // Write ML diagnostic state files (called after each save attempt)
-// P2-4: g_mlSaveSuccess/g_mlSaveFail are unsigned long counters incremented under
-// g_mlMutex at every save site (aatped_main.cpp periodic save, aatped_control.cpp
-// model_save). They cannot be converted to std::atomic here because their
-// definitions live in aatped_main.cpp (out of scope for this fix). Every
-// production caller already invokes this function WHILE HOLDING g_mlMutex, so we
-// snapshot the counters into locals under that caller-provided lock contract
-// rather than reading them unlocked. (We deliberately do NOT lock g_mlMutex here
-// — it is a non-recursive mutex that callers already hold; re-locking would
-// deadlock.)
+// P2-4 / B2-H04: g_mlSaveSuccess/g_mlSaveFail are now std::atomic<unsigned long>
+// (defined in aatped_main.cpp). The periodic-save path (aatped_main.cpp) and the
+// control model_save= path (aatped_control.cpp) deliberately run backup/stat/
+// state-file writes OUTSIDE g_mlMutex (holding the lock across a full-file
+// fsync+rename blocked webui model.json readers), but they ++ the counters and
+// we snapshot them here. Because the increments happen on two threads WITHOUT a
+// common lock, a plain unsigned long RMW was C++ UB (lost updates on arm64).
+// Atomic makes the ++ (fetch_add) and these loads race-free; the snapshot below
+// is therefore safe whether or not the caller holds g_mlMutex. We still do NOT
+// lock g_mlMutex here (it is non-recursive; some callers hold it, some don't).
 void updateMlSaveStateFiles(bool success, const char* path) {
     unsigned long saveSuccessSnap, saveFailSnap;
     {
-        // caller holds g_mlMutex; snapshot under that contract.
-        saveSuccessSnap = g_mlSaveSuccess;
-        saveFailSnap   = g_mlSaveFail;
+        // atomic loads; no caller-lock assumption needed.
+        saveSuccessSnap = g_mlSaveSuccess.load(std::memory_order_relaxed);
+        saveFailSnap   = g_mlSaveFail.load(std::memory_order_relaxed);
     }
     writeFile((std::string(STATE_DIR) + "/ml_model_path").c_str(), path ? path : "");
     writeFile((std::string(STATE_DIR) + "/ml_last_save_time").c_str(), (long long)time(nullptr));

@@ -13,6 +13,14 @@ static int g_pass = 0, g_fail = 0;
 
 using namespace aatpe::frameaware;
 
+// Real-device false-positive seam: global-SF-latency alarms gated on foreground game.
+namespace aatpe { namespace frameaware {
+    struct FrameLatencyAlarm { bool latCritical; bool jank; };
+    FrameLatencyAlarm aatpeFrameLatencyAlarm(bool sfLatValid, int avgLatUs, int maxLatUs,
+                                             int effectiveThresholdUs, int frameTimeUs,
+                                             float jankThresholdPct, bool alarmAllowed);
+} }
+
 // F-group regressions (F-1/F-2/F-3/F-5) — test seams defined in frame.cpp.
 extern std::string g_foregroundApp;
 namespace aatpe { namespace gamelist {
@@ -1039,6 +1047,33 @@ int main() {
         for (auto& s : out)
             if (s.pkg == "com.g5.a" || s.pkg == "com.g5.b" || s.pkg == "com.g5.c") tracked++;
         CHECK(tracked == 3, "F-5: all 3 manual apps tracked after single pass");
+    }
+
+    // ---- Real-device false-positive: idle global-SF-latency alarms -------------
+    // Screenshot: 120Hz panel, avgLat=13000us, effectiveThreshold=12500us
+    // (8333*1.5), jankThreshold~8583us. At 05:43 idle the launcher read ~13ms but
+    // frame_critical=是 / jank=是 while CPU was only 76C. The global ViewRoot/HWUI
+    // latency must NOT alarm when there is no foreground game on screen.
+    {
+        const bool valid = true;
+        const int avgLat = 13000, maxLat = 13000, effThr = 12500, ft = 8333;
+        const float jpct = 3.0f;
+
+        FrameLatencyAlarm idle = aatpeFrameLatencyAlarm(valid, avgLat, maxLat, effThr, ft, jpct, false);
+        CHECK(idle.latCritical == false, "idle(no game): global-SF 13ms must NOT latch frame_critical");
+        CHECK(idle.jank == false,        "idle(no game): global-SF 13ms must NOT flag jank");
+
+        FrameLatencyAlarm game = aatpeFrameLatencyAlarm(valid, avgLat, maxLat, effThr, ft, jpct, true);
+        CHECK(game.latCritical == true,   "game: 13ms > 12500us threshold still alarms (no behavior change)");
+        CHECK(game.jank == true,          "game: 13ms > 8583us jank threshold still flags");
+
+        FrameLatencyAlarm calm = aatpeFrameLatencyAlarm(valid, 4000, 4000, effThr, ft, jpct, true);
+        CHECK(calm.latCritical == false, "game@4ms: healthy render -> no critical");
+        CHECK(calm.jank == false,        "game@4ms: healthy render -> no jank");
+
+        FrameLatencyAlarm novalid = aatpeFrameLatencyAlarm(false, 99999, 99999, effThr, ft, jpct, true);
+        CHECK(novalid.latCritical == false && novalid.jank == false,
+              "sfLatValid=false -> never alarm");
     }
 
     printf("\n========================================\n"

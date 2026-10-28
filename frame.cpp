@@ -1223,6 +1223,33 @@ bool gameSamplingRequired(bool sfLatValid, bool fgIsGame) {
     return fgIsGame || !sfLatValid;
 }
 
+// PURE (host-tested): decide the GLOBAL-SF-latency frame-critical + jank alarms.
+//
+// aatpeDetectSFLatency()'s binder path reads the GLOBAL SurfaceFlinger latency,
+// which tracks the ViewRoot/HWUI main layer and is "almost always valid" even on
+// an idle launcher/SystemUI. Comparing that number against the PANEL frame budget
+// only means something for a performance-sensitive foreground surface (a game):
+// a launcher rendering at ~60fps legitimately reads ~13ms on a 120Hz panel
+// (budget 8.33ms) and must NOT latch frame_critical / jank. `alarmAllowed` is the
+// foreground-is-a-game gate; when false we stay silent. When true the math below
+// is byte-for-byte the legacy decision (no behavior change for real games).
+struct FrameLatencyAlarm { bool latCritical; bool jank; };
+FrameLatencyAlarm aatpeFrameLatencyAlarm(
+        bool sfLatValid, int avgLatUs, int maxLatUs, int effectiveThresholdUs,
+        int frameTimeUs, float jankThresholdPct, bool alarmAllowed) {
+    FrameLatencyAlarm r{false, false};
+    if (!alarmAllowed) return r;                 // no foreground game -> never alarm on global SF
+    r.latCritical = sfLatValid && (avgLatUs > effectiveThresholdUs);
+    if (sfLatValid && jankThresholdPct > 0.0f) {
+        int jankThresholdUs = (int)(frameTimeUs * (1.0f + jankThresholdPct / 100.0f));
+        r.jank = (avgLatUs > jankThresholdUs) ||
+                 (maxLatUs > jankThresholdUs *
+                  aatpe::frame_latency::kJankMaxMultiplierNum /
+                  aatpe::frame_latency::kJankMaxMultiplierDen);
+    }
+    return r;
+}
+
 // F-04/F-06: honest game-fps resolution from real measurements.
 //   renderFps : measured present rate over the latency ring (0 when <2 present
 //               frames / sparse — layer-switch warmup, static frame).
@@ -3712,24 +3739,32 @@ void readSurfaceFlinger() {
     int frameTimeUs = (rate >= refresh::kMinRate && rate <= refresh::kMaxRate) ? actualFrameTime : targetFrameTime;
     int dynamicThreshold = (int)(frameTimeUs * refresh::kFrameCriticalMultiplier);
     int effectiveThreshold = (dynamicThreshold > sfCfg.frameCriticalThreshold) ? dynamicThreshold : sfCfg.frameCriticalThreshold;
-    // P0-2: only trigger latency-based frame critical when real SF
-    // latency data was obtained. When avgLat is just the theoretical vsync
-    // period (fallback), it is NOT actual rendering latency and must not
-    // trigger frame-critical (which would cause permanent frame-critical mode).
-    bool latCritical = sfLatValid && (avgLat > effectiveThreshold);
+    // Resolve foreground package + is-a-game gate UP FRONT so the global-SF-latency
+    // alarms below can be suppressed when there is no performance-sensitive
+    // foreground surface (idle launcher/SystemUI). This is the same resolution the
+    // per-layer game sampler uses later in this function; moved here, not duplicated.
+    std::string fgPkg = aatpeGetForegroundPackage();
+    if (fgPkg.empty() || fgPkg == "unknown") {
+        std::string manualFg = gamelist::detectManualGameForeground();
+        if (!manualFg.empty()) fgPkg = manualFg;
+    }
+    const bool fgIsGame = !fgPkg.empty() && fgPkg != "unknown" &&
+                          (aatpe::gamelist::isManualGame(fgPkg) ||
+                           isPackageInGameList(fgPkg));
+    // P0-2 / real-device false positive: the GLOBAL SurfaceFlinger latency tracks
+    // the ViewRoot/HWUI main layer and is "almost always valid" even on an idle
+    // launcher. Comparing it to the PANEL frame budget there is meaningless (a 60fps
+    // launcher legitimately reads ~13ms on a 120Hz panel whose budget is 8.33ms),
+    // which is exactly the idle 05:43 screenshot: frame_critical=是 / jank=是 at 13ms
+    // while CPU was only 76°C. Gate the latency alarms on fgIsGame; layerCritical
+    // (raw layer-count resource pressure) stays ungated.
+    aatpe::frameaware::FrameLatencyAlarm fa = aatpe::frameaware::aatpeFrameLatencyAlarm(
+        sfLatValid, avgLat, maxLat, effectiveThreshold, frameTimeUs,
+        sfCfg.jankThresholdPercent, fgIsGame);
+    bool latCritical = fa.latCritical;
     bool layerCritical = (layers > sfCfg.layerCriticalThreshold);
     bool frameCritical = latCritical || layerCritical;
-    // P1-2: Jank threshold uses actual frame time (frameTimeUs), not config baseline.
-    // Previously used targetFrameTime (hardcoded 16667us), causing 120Hz devices to
-    // detect jank at wrong threshold (16667us instead of 8333us).
-    bool jankDetected = false;
-    if (sfLatValid && sfCfg.jankThresholdPercent > 0.0f) {
-        int jankThresholdUs = (int)(frameTimeUs * (1.0f + sfCfg.jankThresholdPercent / 100.0f));
-        // Jank detection uses both average and max latency.
-        // Previously only avgLat was used, causing transient stutters (high maxLat but
-        // normal avgLat) to be missed. fix87: 1.5x threshold (was 2x in fix86), catches 2-frame stutters at 120Hz.
-        jankDetected = (avgLat > jankThresholdUs) || (maxLat > jankThresholdUs * aatpe::frame_latency::kJankMaxMultiplierNum / aatpe::frame_latency::kJankMaxMultiplierDen);
-    }
+    bool jankDetected = fa.jank;
     writeFile((std::string(STATE_DIR) + "/jank_detected").c_str(), jankDetected ? 1 : 0);
 
     // ROUND-007c #6: sustained-jank bounded boost vote. Google official jank =
@@ -3853,25 +3888,14 @@ void readSurfaceFlinger() {
         return;
     }
 
-    // F-01: resolve the foreground package up front so the game per-layer sampler
-    // can be gated on "is this a game?" independently of the GLOBAL sfLatValid.
-    std::string fgPkg = aatpeGetForegroundPackage();
-    // v4.2.6: fallback — if standard foreground detection failed (MIUI/SukiSU edge
-    // cases), check if any user-added manual game is currently resumed.
-    if (fgPkg.empty() || fgPkg == "unknown") {
-        std::string manualFg = gamelist::detectManualGameForeground();
-        if (!manualFg.empty()) fgPkg = manualFg;
-    }
-    // F-01: foreground-is-a-game predicate. A game must ALWAYS get its per-layer
-    // SurfaceView FPS measured, even when the global binder --latency (which tracks
-    // the ViewRoot/HWUI main layer and always looks "valid" at 5-15ms) reports
+    // F-01: fgPkg / fgIsGame were resolved UP FRONT (just above the frame-critical
+    // vote) so the global-SF-latency alarms could be gated on "is this a game".
+    // They are reused here to gate the per-layer game sampler: a game must ALWAYS
+    // get its per-layer SurfaceView FPS measured, even when the global binder
+    // --latency (ViewRoot/HWUI main layer, always looks "valid" at 5-15ms) reports
     // sfLatValid. Without this, a SurfaceView game was short-circuited into the
     // else-branch, its per-layer channel never ran, and gfxinfo has no SurfaceView
     // app rows -> 5s later background_stale -> WebUI showed 0 / single-digit fps.
-    const bool fgIsGame = !fgPkg.empty() && fgPkg != "unknown" &&
-                          (aatpe::gamelist::isManualGame(fgPkg) ||
-                           isPackageInGameList(fgPkg));
-
     if (!sfLatValid || fgIsGame) {
         // Channel 1: timestats (SurfaceView-aware, per P2 research). On success
         // it is the authoritative source; on failure/unavailable we fall through
@@ -3923,11 +3947,18 @@ void readSurfaceFlinger() {
         // when latency/gfxinfo fallback succeeds.
         // v4.1.1 final-round: publish WHY the timestats channel failed (read-only
         // diagnostic; the TTL short-circuit also carries session.lastReason).
+        // v4.1.x fix: write the reason RAW. On a successful tick lastReason is
+        // cleared (tick()) and tsr.reason is empty, so the old fallback wrote
+        // "unknown" on EVERY tick — a healthy SF timestats channel permanently
+        // rendered "未知" in the WebUI. The classifier only emits a concrete
+        // token (disabled/selinux_denied/no_layer/parse_empty) on real failures;
+        // an empty file renders "—" (no problem to report) which is the honest
+        // state for warmup AND for a working channel.
         std::string tsrReason;
         {
             tsrReason = !tsr.reason.empty() ? tsr.reason : s_tsSession.lastReason;
             writeFile((std::string(STATE_DIR) + "/frame_timestats_reason").c_str(),
-                      tsrReason.empty() ? "unknown" : tsrReason.c_str());
+                      tsrReason.c_str());
         }
         // v4.2.8: snapshot will be written at the END of this tick (after fallback
         // channels complete) — see below. Early write removed to avoid inconsistency

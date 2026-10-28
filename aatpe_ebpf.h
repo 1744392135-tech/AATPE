@@ -568,6 +568,18 @@ public:
     // EBPF-16 host seam: drive deliverForkEvent() directly (it is private) with
     // a synthetic event, so the flag lifecycle around unload() can be asserted.
     void hostTestDeliverFork(const ForkEvent& ev) { deliverForkEvent(ev); }
+    // H01 host seams: drive the other ctx-reading deliver*Event gates directly.
+    void hostTestDeliverSwitch(const SwitchEvent& ev) { deliverSwitchEvent(ev); }
+    void hostTestDeliverRunq(const RunqEvent& ev) { deliverRunqEvent(ev); }
+    // H01 host seam: set any tracepoint's offset verdict to an arbitrary value
+    // (kind: 'f'=fork 's'=switch 'w'=wakeup), so the UNKNOWN soft-trust vs
+    // UNKNOWN-no-soft-trust delivery split can be exercised on the host.
+    void hostTestSetOffsetStatus(char kind, TpOffsetStatus s);
+    // H02 host seam: return the bpftool fallback (progName, tracepoint path)
+    // attach table verbatim so the host test can prove it covers EVERY tracepoint
+    // section the embedded .o provides (including sched_wakeup / sched_wakeup_new).
+    static const std::vector<std::pair<std::string,std::string>>&
+        hostTestBpftoolAttachTable();
     // EBPF-20 host seam: parse an ELF .o and return the per-program mapIndices
     // vectors exactly as parseElfPrograms produced them (including the
     // no-.rel fallback), so the fallback sizing can be asserted on the host.
@@ -576,31 +588,43 @@ public:
     // EBPF-13 host seam: expose the PERCPU_ARRAY buffer slot sizing.
     static int hostTestEmbeddedCpuBufferSlots(long possibleCpus);
 #endif
-    // P2-12: hardcoded ctx offsets are ONLY trusted when we actively verified
-    // them against the live tracepoint format file (VERIFIED) or when the
-    // tracepoint does not read ctx at all (NO_CTX). UNKNOWN (tracefs not
-    // readable) and DEGRADED (format mismatch) both cause events from this
-    // tracepoint to be filtered. This prevents us from blindly parsing kernel
-    // structures at guessed offsets when we cannot verify them.
+    // P2-12 / H01 fix: hardcoded ctx offsets are trusted for delivery when we
+    // actively verified them against the live tracepoint format file (VERIFIED)
+    // or when the tracepoint does not read ctx at all (NO_CTX).
+    //
+    // DEGRADED (live format != baked offsets) is NEVER trusted: that is concrete
+    // evidence the program is reading ctx at the wrong bytes, so we must drop.
+    //
+    // UNKNOWN means tracefs was unreadable (locked ROM). There is no evidence
+    // either way. postLoadOffsetDegradeDecision() already makes the load-level
+    // call: on a known 4.14 layout family it commits to trusting the baked-in
+    // offsets and stays EVENT_DRIVEN, raising offsetUnverifiedButTrusted_. When
+    // that soft-trust decision is in force, UNKNOWN events MUST also be delivered
+    // -- otherwise the load decided to "trust built-in offsets" while the delivery
+    // gate silently dropped every fork/switch/wakeup event, leaving the daemon in
+    // a fake EVENT_DRIVEN/TRUSTED_BUILTIN state with zero events flowing. When
+    // UNKNOWN is NOT soft-trusted (unknown kernel family, or after a VERIFIED load
+    // that left this one tracepoint unreadable) we stay conservative and drop.
+    bool offsetDeliveryAllowed(TpOffsetStatus s) const {
+        if (s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX) return true;
+        if (s == TpOffsetStatus::UNKNOWN &&
+            offsetUnverifiedButTrusted_.load(std::memory_order_relaxed)) return true;
+        return false;  // DEGRADED, or UNKNOWN without soft-trust -> drop
+    }
     bool isSwitchOffsetTrusted(void) const {
-        const auto s = offsetStatus_switch_.load(std::memory_order_relaxed);
-        return s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX;
+        return offsetDeliveryAllowed(offsetStatus_switch_.load(std::memory_order_relaxed));
     }
     bool isForkOffsetTrusted(void) const {
-        const auto s = offsetStatus_fork_.load(std::memory_order_relaxed);
-        return s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX;
+        return offsetDeliveryAllowed(offsetStatus_fork_.load(std::memory_order_relaxed));
     }
     bool isExecOffsetTrusted(void) const {
-        const auto s = offsetStatus_exec_.load(std::memory_order_relaxed);
-        return s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX;
+        return offsetDeliveryAllowed(offsetStatus_exec_.load(std::memory_order_relaxed));
     }
     bool isExitOffsetTrusted(void) const {
-        const auto s = offsetStatus_exit_.load(std::memory_order_relaxed);
-        return s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX;
+        return offsetDeliveryAllowed(offsetStatus_exit_.load(std::memory_order_relaxed));
     }
     bool isWakeupOffsetTrusted(void) const {
-        const auto s = offsetStatus_wakeup_.load(std::memory_order_relaxed);
-        return s == TpOffsetStatus::VERIFIED || s == TpOffsetStatus::NO_CTX;
+        return offsetDeliveryAllowed(offsetStatus_wakeup_.load(std::memory_order_relaxed));
     }
     // Cumulative events dropped by deliver*Event() because their tracepoint's
     // ctx offsets were known to be wrong (WebUI "ebpf_offset_filtered").

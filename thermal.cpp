@@ -1335,7 +1335,18 @@ void readThermal() {
     // Published CPU max follows the trusted high side (matches g_sysfsCpuMaxTempC
     // re-stored in the selector block above).
     writeFile((std::string(STATE_DIR) + "/thermal_cpu_max").c_str(), decisionTemp);
-    writeFile((std::string(STATE_DIR) + "/thermal_skin").c_str(), foundSkinZone ? skinTemp : -1);
+    // Real-device bug: when no thermal zone type matched "skin"/"pmic_therm"
+    // (MTK names the skin sensor differently, and mtktsAP/ap_therm are deliberately
+    // classified as CPU die), foundSkinZone was false and we wrote the raw sentinel
+    // "-1" to thermal_skin. The WebUI numeric state reader parses "-1" as a valid
+    // integer and rendered a bogus "-1°C". On unavailable we now write an EMPTY
+    // state file: the reader renders empty/missing as "--" (readIntFile -> null).
+    // g_thermalSkin stays -1 for the in-memory thermal state machine + host test.
+    if (foundSkinZone) {
+        writeFile((std::string(STATE_DIR) + "/thermal_skin").c_str(), skinTemp);
+    } else {
+        writeFile((std::string(STATE_DIR) + "/thermal_skin").c_str(), "");
+    }
     writeFile((std::string(STATE_DIR) + "/thermal_battery").c_str(), batteryTemp);
     // populate global thermal stats (previously always 0 in state.json)
     g_thermalSkin.store(foundSkinZone ? skinTemp : -1, std::memory_order_relaxed);

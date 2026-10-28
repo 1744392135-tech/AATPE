@@ -45,7 +45,7 @@ static ThermFfConfig mkcfg(void) {
     return c;
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_heating(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -69,7 +69,7 @@ static void test_heating(void) {
     CHECK(o.ff_gear >= FF_GEAR_LIGHT);              // reached at least LIGHT
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_stable(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -82,7 +82,7 @@ static void test_stable(void) {
     CHECK(o.eta_warning_s >= cfg.max_horizon_s);
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_cooling(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -96,7 +96,7 @@ static void test_cooling(void) {
     CHECK(o.ff_gear == FF_GEAR_NONE);
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_spike(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -111,7 +111,7 @@ static void test_spike(void) {
     CHECK(o.ff_gear != FF_GEAR_SEVERE);   // spike must not forge a severe pre-throttle
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_sensor_fault(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -147,7 +147,7 @@ static void test_sensor_fault(void) {
     CHECK(o.eta_warning_s >= cfg.max_horizon_s);
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_wall_overlay(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -179,7 +179,7 @@ static void test_wall_overlay(void) {
               "no pre-throttle bit while a wall is already active");
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_hysteresis(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -219,7 +219,7 @@ static void test_hysteresis(void) {
     CHECK_MSG(relaxed_after_band, "gear must RELAX once eta_w exceeds entry+band(2s)");
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_adapter_map(void) {
     CHECK(aatpe_therm_ff_map_wall(true,  false, false) == THERM_HW_EMERGENCY);
     CHECK(aatpe_therm_ff_map_wall(false, true,  true)  == THERM_HW_CRITICAL); // critical wins
@@ -232,7 +232,7 @@ static void test_adapter_map(void) {
     CHECK(aatpe_therm_ff_pre_throttle(FF_GEAR_LIGHT, FF_GEAR_LIGHT) == false);
 }
 
-/* ---- /dev/null
+// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_concurrent_racefree(void) {
     std::atomic<int> failures{0};
     auto worker = [&](int seed) {
