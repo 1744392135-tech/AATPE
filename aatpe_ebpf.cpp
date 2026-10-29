@@ -2871,6 +2871,24 @@ bool EbpfScheduler::tryLoadEmbeddedSyscall() {
     mode_ = EbpfMode::EVENT_DRIVEN;
     active_ = true;
     state_ = EbpfState::EVENT_DRIVEN;   // ROUND-014 P3: seven-state ladder
+    // final-review fix (postLoadOffsetDegrade timing): run the offset verdict
+    // BEFORE the poll thread starts. Previously postLoadOffsetDegradeDecision()
+    // ran in load() AFTER startPollThread(), so deliverSwitchEvent()'s
+    // second-layer offset filter observed offsetDegraded_ /
+    // offsetUnverifiedButTrusted_ only with a delay — early UNKNOWN events were
+    // conservatively dropped in that gap. The decision now runs here and gates
+    // thread start.
+    postLoadOffsetDegradeDecision();
+    if (offsetDegraded_.load(std::memory_order_relaxed)) {
+        // The decision already latched mode_=POLLING / state_=DEGRADED_RING and
+        // called stopPollThread() (no-op here: the thread has not started).
+        // Rings stay mapped but undrained — starting a consumer for proven-wrong
+        // ctx offsets would only drain garbage, so skip the thread entirely.
+        unloaded_.store(false, std::memory_order_relaxed);  // EBPF-04 guard: loaded (degraded)
+        LOG_WARN("eBPF: offset-degraded after attach (embedded); poll thread NOT "
+                 "started (early-UNKNOWN event-drop window eliminated)");
+        return true;
+    }
     // EBPF-04 fix: if the poll thread cannot start, rings_ cannot be drained.
     // Previously we called degrade() and returned true, leaving rings mapped
     // with no consumer (silent overflow). Now: tear down everything we just
@@ -3421,6 +3439,16 @@ bool EbpfScheduler::tryLoadSyscallPrecompiled() {
             mode_ = EbpfMode::EVENT_DRIVEN;
             active_ = true;
             state_ = EbpfState::EVENT_DRIVEN;
+            // final-review fix: offset verdict BEFORE startPollThread() (see the
+            // embedded path for the rationale). Degraded verdict latches
+            // POLLING and we skip the poll thread instead of starting one.
+            postLoadOffsetDegradeDecision();
+            if (offsetDegraded_.load(std::memory_order_relaxed)) {
+                unloaded_.store(false, std::memory_order_relaxed);
+                LOG_WARN("eBPF: offset-degraded after attach (syscall_precompiled); "
+                         "poll thread NOT started");
+                return true;
+            }
             // EBPF-04 fix: same as embedded path — if poll thread cannot start,
             // tear down and return false so load() tries the next phase.
             if (!startPollThread()) {
@@ -3730,6 +3758,15 @@ bool EbpfScheduler::tryLoadBpftoolPrecompiled() {
             mode_ = EbpfMode::EVENT_DRIVEN;
             active_ = true;
             state_ = EbpfState::EVENT_DRIVEN;
+            // final-review fix: offset verdict BEFORE startPollThread() (same
+            // rationale as the embedded path).
+            postLoadOffsetDegradeDecision();
+            if (offsetDegraded_.load(std::memory_order_relaxed)) {
+                unloaded_.store(false, std::memory_order_relaxed);
+                LOG_WARN("eBPF: offset-degraded after attach (bpftool_precompiled); "
+                         "poll thread NOT started");
+                return true;
+            }
             // EBPF-04 fix: same as embedded/syscall_precompiled paths.
             if (!startPollThread()) {
                 LOG_ERROR("eBPF: poll thread start failed (bpftool_precompiled) — "
@@ -4700,18 +4737,19 @@ bool EbpfScheduler::load() {
 
     // v94-r3 fix / G4-001: if sched_switch (the load-bearing tracepoint) is not
     // VERIFIED, the eBPF switch data would be garbage. We still run the attach
-    // (constraint: do not change the load path) but after a successful attach we
-    // flip to a DISTINCT offset-caused degradation that must NOT auto-recover:
-    //   * set offsetDegraded_ = true
-    //   * force mode = POLLING (not the generic HYBRID used for ring loss)
-    //   * stop the poll thread
-    // The kernel layout does not self-correct, so recoverIfHealthy() refuses to
-    // flip back to EVENT_DRIVEN while offsetDegraded_ is set. It clears only when a
-    // later load() re-runs verifyTracepointOffsets() and sched_switch is VERIFIED.
+    // (constraint: do not change the load path). The offset verdict now runs
+    // INSIDE each load phase immediately after a successful attach and BEFORE
+    // startPollThread() — previously it ran here, after the poll thread was
+    // already draining rings, which left a window where early UNKNOWN events
+    // were conservatively dropped before the flags existed. post-load outcomes:
+    //   * VERIFIED            -> healthy, flags cleared.
+    //   * DEGRADED (readable but != built-in) -> evidence of a different layout:
+    //                            the phase latches POLLING/DEGRADED_RING and does
+    //                            NOT start the poll thread (fail-safe, no
+    //                            auto-recover — recoverIfHealthy() refuses to
+    //                            flip back while offsetDegraded_ is set).
+    //   * UNKNOWN + known family -> soft-trust flag set, EVENT_DRIVEN kept.
     // deliverSwitchEvent() also filters events as a second layer of defense.
-    auto postLoadOffsetDegrade = [this]() {
-        postLoadOffsetDegradeDecision();
-    };
 
     // v94 fix / 问题46: product-level embedded-bytecode SIZE assertion.
     // P1-5: replaced hardcoded kExpectedSizes with self-validation — iterate
@@ -4771,7 +4809,7 @@ bool EbpfScheduler::load() {
     if (tryLoadEmbeddedSyscall()) {
         LOG_FORCE("LOAD OK via embedded_syscall (prog_type=%d, attach=%s)",
                  activeProgType_, activeAttachMethod_.c_str());
-        postLoadOffsetDegrade();
+        // Offset verdict already ran inside the phase (pre-poll-thread).
         aatpe::subsys::safemode::resetStreak(aatpe::subsys::safemode::EBPF_STREAK);  // G1-001
         return true;
     }
@@ -4786,7 +4824,6 @@ bool EbpfScheduler::load() {
     LOG_FORCE("--- Phase 2: tryLoadSyscallPrecompiled ---");
     if (tryLoadSyscallPrecompiled()) {
         LOG_FORCE("LOAD OK via syscall_precompiled");
-        postLoadOffsetDegrade();
         aatpe::subsys::safemode::resetStreak(aatpe::subsys::safemode::EBPF_STREAK);  // G1-001
         return true;
     }
@@ -4797,7 +4834,6 @@ bool EbpfScheduler::load() {
     LOG_FORCE("--- Phase 3: tryLoadBpftoolPrecompiled ---");
     if (tryLoadBpftoolPrecompiled()) {
         LOG_FORCE("LOAD OK via bpftool_precompiled");
-        postLoadOffsetDegrade();
         aatpe::subsys::safemode::resetStreak(aatpe::subsys::safemode::EBPF_STREAK);  // G1-001
         return true;
     }

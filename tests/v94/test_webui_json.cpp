@@ -197,6 +197,39 @@ int main(){
         printf("  [INFO] system.json (%zu bytes)\n", c1.size());
     }
 
+    printf("\n=== M1/S2: battery-unknown and no-sample MAE emit JSON null ===\n");
+    {
+        // M1: thermal.cpp publishes an EMPTY thermal_battery state file when no
+        // power_supply temp node exists. webui_json must emit "battery":null (not a
+        // fabricated 0). S2: prediction_mae EMPTY (no samples) must emit JSON null,
+        // not "0.000000" which the UI read as a perfect zero-error predictor.
+        static char sTmp[]="/tmp/aatpe_webui_sentinel_XXXXXX";
+        char* sd=mkdtemp(sTmp);
+        if(sd){ extern const char* STATE_DIR; STATE_DIR=sd; }
+        auto w=[&](const char* name,const std::string& v){
+            std::ofstream o(std::string(sd)+"/"+name); o<<v; o.close();
+        };
+        // No thermal_battery, no prediction_mae -> both unavailable.
+        writeSystemJson();
+        std::ifstream f0(std::string(WEBUI_DIR)+"/system.json");
+        std::string c0((std::istreambuf_iterator<char>(f0)), std::istreambuf_iterator<char>());
+        CHECK(c0.find("\"battery\":null")!=std::string::npos,
+              "M1: missing thermal_battery -> thermal.battery is JSON null (not 0)");
+        CHECK(c0.find("\"prediction_mae\":null")!=std::string::npos,
+              "S2: missing prediction_mae -> prediction_mae is JSON null (not 0.000000)");
+        // A real reading passes through as a number / quoted string.
+        w("thermal_battery","35");
+        w("prediction_mae","2.500000");
+        writeSystemJson();
+        std::ifstream f1(std::string(WEBUI_DIR)+"/system.json");
+        std::string c1((std::istreambuf_iterator<char>(f1)), std::istreambuf_iterator<char>());
+        CHECK(c1.find("\"battery\":35")!=std::string::npos,
+              "M1: planted thermal_battery=35 -> thermal.battery is 35");
+        CHECK(c1.find("\"prediction_mae\":\"2.500000\"")!=std::string::npos,
+              "S2: planted prediction_mae=2.500000 -> quoted value preserved");
+        printf("  [INFO] system.json (%zu bytes)\n", c1.size());
+    }
+
     printf("\n=== v4.2.2 P3-1: PSI three-tier (avg10/60/300) in system.json ===\n");
     {
         // g_stubPsi is the stubbed diag snapshot (webui_clusters_deps.cpp).

@@ -304,6 +304,7 @@ float predictCpuLoadMultiStep(int cpuId, int steps);
 void recordPredictionError(int cpuId, float predicted, float actual);
 float getPredictionConfidence(int cpuId);
 float getAveragePredictionMAE();
+bool hasAnyPredictionErrorSamples();
 int proactiveMigrationCheck();
 
 #endif // AATPED_STATE_H

@@ -211,6 +211,17 @@ float getAveragePredictionMAE() {
     }
     return count > 0 ? totalMAE / count : 0.0f;
 }
+
+// S2: true iff at least one CPU has >=1 recorded prediction error. Used by the
+// WebUI state writer to publish an EMPTY prediction_mae state file (frontend shows
+// "--", webui_json emits JSON null) instead of a fabricated "0.000000" which the
+// UI would read as a perfect zero-error predictor on a fresh boot.
+bool hasAnyPredictionErrorSamples() {
+    for (int i = 0; i < (int)g_predictionErrors.size(); i++) {
+        if (!g_predictionErrors[i].snapshot().empty()) return true;
+    }
+    return false;
+}
 // Contains: capacity/latency/cache/thermal/power/frame/pool scores,
 // migration/contention penalties, placement success tracking, ML feature helpers,
 // and computeScore (the fused scoring function).

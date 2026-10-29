@@ -603,7 +603,12 @@ void writeSystemJson() {
     // JSON null instead of a misleading -1/0 temperature. Real skin temps are >0.
     int skinTemp = readInt((std::string(STATE_DIR)+"/thermal_skin").c_str(),-1);
     std::string skinJson = (skinTemp >= 0) ? std::to_string(skinTemp) : "null";
-    int batteryTemp = readInt((std::string(STATE_DIR)+"/thermal_battery").c_str(),0);
+    // M1: thermal.cpp writes an EMPTY file when no battery temp node is present
+    // (or the node value is outside every recognized unit range). readInt(empty,
+    // -1) == -1 == the unavailable sentinel; emit JSON null instead of a misleading
+    // 0°C. A real 0°C battery reading is a valid value and passes through as 0.
+    int batteryTemp = readInt((std::string(STATE_DIR)+"/thermal_battery").c_str(),-1);
+    std::string batteryJson = (batteryTemp >= 0) ? std::to_string(batteryTemp) : "null";
     int thermalEmergency = readInt((std::string(STATE_DIR)+"/thermal_emergency").c_str(),0);
     int loadAvg = readInt((std::string(STATE_DIR)+"/system_load").c_str(),0);
     int uptime = readInt((std::string(STATE_DIR)+"/daemon_uptime").c_str(),0);
@@ -672,7 +677,7 @@ void writeSystemJson() {
         "\"safety_latency_active\":" + (safetyLatencyActive?"true":"false") + ","
         "\"target_frame_time\":" + std::to_string(targetFrameTime) + ","
         "\"apk_diagnostic\":{\"status\":\"" + jsonEscape(apkStatus) + "\",\"age\":\"" + jsonEscape(apkAge) + "\",\"path\":\"" + jsonEscape(apkPath) + "\"},"
-        "\"thermal\":{\"cpu\":" + std::to_string(cpuTemp) + ",\"skin\":" + skinJson + ",\"battery\":" + std::to_string(batteryTemp) + ",\"emergency\":" + std::to_string(thermalEmergency) + ",\"skin_pressure\":" + std::to_string(skinPressure) + ",\"battery_pressure\":" + std::to_string(batteryPressure) + "}," +
+        "\"thermal\":{\"cpu\":" + std::to_string(cpuTemp) + ",\"skin\":" + skinJson + ",\"battery\":" + batteryJson + ",\"emergency\":" + std::to_string(thermalEmergency) + ",\"skin_pressure\":" + std::to_string(skinPressure) + ",\"battery_pressure\":" + std::to_string(batteryPressure) + "}," +
         psiBlock +
         "\"thermal_limit\":" + std::to_string(cfgSnap.thermalLimitCpu) + ","
         // v94-hotreload: emit the exact field names the frontend fieldDefs request
@@ -700,7 +705,16 @@ void writeSystemJson() {
     if (controlMode.empty()) controlMode = "assist";
     std::string predMae = readFile((std::string(STATE_DIR)+"/prediction_mae").c_str());
     std::string predConf = readFile((std::string(STATE_DIR)+"/prediction_confidence").c_str());
-    if (predMae.empty()) predMae = "0.000000";
+    // S2: an EMPTY prediction_mae file means "no prediction samples yet" (aatped_main
+    // writes empty instead of 0.000000). Emit JSON null -- the frontend already maps
+    // null/missing to "--" (see sys-pred-mae). Old fallback "0.000000" was read as a
+    // perfect zero-error predictor on a fresh boot, which is a lie.
+    std::string predMaeJson;
+    if (predMae.empty()) {
+        predMaeJson = "null";
+    } else {
+        predMaeJson = "\"" + jsonEscape(predMae) + "\"";
+    }
     if (predConf.empty()) predConf = "0.500000";
     // G-001 fix: the cpu_topology object was already fully closed above by
     //   json += "]},";   (closes the "prime" array then the cpu_topology object)
@@ -733,7 +747,7 @@ void writeSystemJson() {
         // P1-14: predMae/predConf are free-text values read from STATE_DIR files
         // (prediction_mae / prediction_confidence). They could in principle contain
         // a quote/backslash; escape them before embedding in JSON.
-        "\"prediction_mae\":\"" + jsonEscape(predMae) + "\","
+        "\"prediction_mae\":" + predMaeJson + ","
         "\"prediction_confidence\":\"" + jsonEscape(predConf) + "\","
         "\"prediction_proactive_migrations\":" + std::to_string(readInt((std::string(STATE_DIR)+"/prediction_proactive_migrations").c_str(),0)) + ","
         // v66: Battery aging protection state

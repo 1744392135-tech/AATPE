@@ -1,41 +1,19 @@
 // test_ebpf_cpu_mask.cpp — host test for #24 (CPU online mask parser).
+//
+// final-review fix: this TU previously contained a self-copied duplicate of
+// parseCpuOnlineMask() AND the build recipe linked no production object, so
+// the test had ZERO sensitivity to the production parser — editing or
+// regressing the real function in aatpe_ebpf.cpp left this test green.
+// The duplicate was deleted and the recipe now links the REAL aatpe_ebpf.o
+// (same prod/stub closure as the d3hotplug recipe), so every case below
+// executes the production parser itself.
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 namespace aatpe_ebpf {
+// Production symbol, defined in aatpe_ebpf.cpp and linked via aatpe_ebpf.o.
 std::vector<int> parseCpuOnlineMask(const std::string& text);
-}
-
-// Test-local copy of the production parser (identical logic).
-namespace aatpe_ebpf {
-std::vector<int> parseCpuOnlineMask(const std::string& text) {
-    std::vector<int> out;
-    if (text.empty()) return out;
-    char* work = strdup(text.c_str());
-    if (!work) return out;
-    char* saveptr = nullptr;
-    for (char* tok = strtok_r(work, ",", &saveptr); tok;
-         tok = strtok_r(nullptr, ",", &saveptr)) {
-        while (*tok == ' ' || *tok == '\t') tok++;
-        int lo = 0, hi = 0;
-        if (strchr(tok, '-')) {
-            if (sscanf(tok, "%d-%d", &lo, &hi) == 2) {
-                if (lo > hi) { int t = lo; lo = hi; hi = t; }
-                for (int c = lo; c <= hi; c++) out.push_back(c);
-            }
-        } else {
-            if (sscanf(tok, "%d", &lo) == 1) out.push_back(lo);
-        }
-    }
-    free(work);
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
-    return out;
-}
 }
 
 using namespace aatpe_ebpf;

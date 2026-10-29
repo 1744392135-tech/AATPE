@@ -3272,7 +3272,16 @@ void daemonLoop() {
                 writeLogsJson();  // v66 P2-2: real log output for WebUI
                 writeConfigJson();  // fix65: current config JSON
                 // P2-5: Write prediction diagnostics state files
-                writeFile((std::string(STATE_DIR) + "/prediction_mae").c_str(), getAveragePredictionMAE());
+                // S2: when NO prediction error samples exist yet, do NOT write a
+                // fabricated 0.000000 (WebUI read that as "perfect zero error").
+                // Publish an EMPTY file instead: webui_json emits JSON null and the
+                // frontend renders "--". getAveragePredictionMAE() still returns 0
+                // in that case, so we gate explicitly on hasAnyPredictionErrorSamples().
+                if (hasAnyPredictionErrorSamples()) {
+                    writeFile((std::string(STATE_DIR) + "/prediction_mae").c_str(), getAveragePredictionMAE());
+                } else {
+                    writeFile((std::string(STATE_DIR) + "/prediction_mae").c_str(), "");
+                }
                 writeFile((std::string(STATE_DIR) + "/prediction_confidence").c_str(), getPredictionConfidence(0));
                 // P2-5: Write event monitor and frame sync stats
                 aatpe::event::EventMonitor::instance().writeStats(STATE_DIR);
@@ -4885,6 +4894,20 @@ void daemonLoop() {
                 }
             }
             const auto& fedStats = g_federatedLearner.getStats();
+            // final-review fix (dead telemetry): g_federatedTrustedImports is
+            // read by aatped_state.cpp writeStateJson(), but NOTHING in
+            // production ever incremented it -> state JSON always published
+            // "trusted_imports":0. The FederatedLearner stats are the single
+            // source of truth (trustedImports is bumped ONLY for peer models
+            // that pass the HMAC signature + replay checks inside
+            // checkAndImportModels()). Mirror the absolute counters into the
+            // exported globals immediately after each import/aggregation cycle.
+            // (g_federatedRounds/Exports/Imports were equally dead; the state
+            // JSON emits all four together, so they are mirrored consistently.)
+            g_federatedRounds.store(fedStats.rounds, std::memory_order_relaxed);
+            g_federatedExports.store(fedStats.exports, std::memory_order_relaxed);
+            g_federatedImports.store(fedStats.imports, std::memory_order_relaxed);
+            g_federatedTrustedImports = fedStats.trustedImports;
             // P2 Problem8: federated stats + ab p-value are slow-changing display
             // values; gate on diagTick. checkHmacKeyRotation() below stays every loop.
             if (diagTick) {

@@ -528,6 +528,12 @@ void readThermal() {
     int maxTemp = 0, skinTemp = -1, batteryTemp = 0;
     bool throttle = false;
     bool foundSkinZone = false;
+    // M1: battery sensor presence. False when NO power_supply node exposes a
+    // readable temp; batteryTemp then stays -1 (unknown) and we publish an EMPTY
+    // thermal_battery state file (mirrors the skin-unknown pattern at ~1345).
+    // The in-memory g_thermalBattery atomic holds -1; scheduling gates on
+    // `batteryTemp > 0` so -1/0 are both inert and scheduling behavior is unchanged.
+    bool batterySensorKnown = false;
     int cpuMaxTemp = 0;
     bool foundCpuZone = false;
     // P3-c: track WHICH zone feeds primary/cpuMax (not just the value) so
@@ -1050,16 +1056,27 @@ void readThermal() {
             if (v != INT_MIN) { batteryRaw = v; break; }
         }
         bool batteryKnown = (batteryRaw != INT_MIN);
+        batterySensorKnown = batteryKnown;
         if (batteryRaw >= 200 && batteryRaw <= 1500) {
             batteryTemp = batteryRaw / 10;
         } else if (batteryRaw >= 20 && batteryRaw <= 80) {
             batteryTemp = batteryRaw;
         } else if (batteryRaw > 1500) {
             batteryTemp = batteryRaw / 1000;
+        } else if (batteryKnown) {
+            // Node exists but the raw value is outside every recognized unit
+            // range. Treat as an untrusted reading: do NOT fabricate a 0°C truth,
+            // mark the sensor unknown so the state file is published empty.
+            batterySensorKnown = false;
+            batteryTemp = -1;
         } else {
-            batteryTemp = batteryKnown ? 0 : -1;  // ROUND-010: missing -> unknown
+            // ROUND-010 / M1: no battery temp node at all -> unknown.
+            // Previously the sentinel -1 was clamped to 0 right below, which
+            // then got written to thermal_battery as a fake "0°C" and surfaced
+            // in WebUI/system.json as a truthful 0. We now keep -1 in memory and
+            // let the publish block write an EMPTY state file (see ~1350).
+            batteryTemp = -1;
         }
-        if (batteryTemp < 0) batteryTemp = 0;
         if (batteryTemp > 100) batteryTemp = 100;
     }
 
@@ -1347,10 +1364,19 @@ void readThermal() {
     } else {
         writeFile((std::string(STATE_DIR) + "/thermal_skin").c_str(), "");
     }
-    writeFile((std::string(STATE_DIR) + "/thermal_battery").c_str(), batteryTemp);
+    // M1: battery unknown (no readable node, or node value outside every unit
+    // range) publishes an EMPTY state file -- the WebUI numeric reader renders
+    // empty/missing as "--" and webui_json.cpp emits JSON null. g_thermalBattery
+    // below stores -1 so the in-memory state machine sees "unknown" (the
+    // `batteryTemp > 0` scheduling gate treats -1 and 0 identically as inert).
+    if (batterySensorKnown) {
+        writeFile((std::string(STATE_DIR) + "/thermal_battery").c_str(), batteryTemp);
+    } else {
+        writeFile((std::string(STATE_DIR) + "/thermal_battery").c_str(), "");
+    }
     // populate global thermal stats (previously always 0 in state.json)
     g_thermalSkin.store(foundSkinZone ? skinTemp : -1, std::memory_order_relaxed);
-    g_thermalBattery.store(batteryTemp, std::memory_order_relaxed);
+    g_thermalBattery.store(batterySensorKnown ? batteryTemp : -1, std::memory_order_relaxed);
     writeFile((std::string(STATE_DIR) + "/thermal_headroom").c_str(), headroom);
     writeFile((std::string(STATE_DIR) + "/thermal_headroom_pct").c_str(), headroomPct);
     // C1/C3 exploration: promote headroomPct to in-memory atomic so C1 thermal

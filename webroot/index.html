@@ -177,7 +177,7 @@ select:focus{outline:none;border-color:#00d4aa}
 <div class="header">
 <h1>AATPE</h1>
 <div class="ver">Adaptive Android Task Placement Engine v6.0.0
-  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel18 · 构建于 2026-10-29</span>
+  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel19 · 构建于 2026-10-29</span>
 </div>
 <div class="status-bar">
 <span class="status-pill offline" id="daemonStatus">守护进程: 未运行</span>
@@ -2791,7 +2791,11 @@ async function refreshSystem() {
         ['int','federated_trusted_imports'],
         ['int','vsync_enabled'], ['int','vsync_refresh_rate'], ['int','vsync_frame_interval'],
         ['int','vsync_decisions'], ['int','vsync_migrations'], ['int','vsync_overruns'],
-        ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations']
+        ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations'],
+        // S1: gate SF frame latency on sf_latency_valid, mirroring the monitoring
+        // page (mon-sf). A theoretical fallback (timestats disabled) must render
+        // "--" instead of a misleading "0 μs = perfect".
+        ['str','sf_latency_valid']
     ];
     // Fast path — if all keys present in aggData, resolve synchronously (zero awaits)
     let allResults;
@@ -2828,7 +2832,8 @@ async function refreshSystem() {
         eventTotal, eventJank, eventThermal, eventFreq, eventHotplug, eventAppSwitch,
         fedRounds, fedExports, fedImports, fedTrusted,
         vsyncEnabled, vsyncRate, vsyncInterval, vsyncDecisions, vsyncMigrations, vsyncOverruns,
-        predMae, predConf, predProactive
+        predMae, predConf, predProactive,
+        sfLatValid
     ] = allResults;
     // Update each DOM element independently (try-catch per field)
     setText('sys-fps', (fps || 0) + ' Hz');
@@ -2837,7 +2842,10 @@ async function refreshSystem() {
         fcEl.textContent = frameCritical ? '是 ⚠' : '否';
         fcEl.className = 'value ' + (frameCritical ? 'red' : 'green');
     } catch(e) {}
-    setText('sys-frame-latency', (frameLatency || 0) + ' μs');
+    // S1: only show SF frame latency when it was actually measured (sf_latency_valid
+    // === '1'). A missing/invalid reading (timestats disabled -> theoretical 0) must
+    // render "--" instead of "0 μs", which previously looked like a perfect score.
+    setText('sys-frame-latency', (sfLatValid === '1' && (frameLatency != null) && !isNaN(frameLatency)) ? (frameLatency + ' μs') : '--');
     try {
         const jankEl = getEl('sys-jank-detected');
         if (jankEl) { jankEl.textContent = jankDetected ? '是 ⚠' : '否'; jankEl.className = 'value ' + (jankDetected ? 'red' : 'green'); }
@@ -4854,7 +4862,11 @@ async function refreshSystemFromData(aggData) {
         ['int','federated_trusted_imports'],
         ['int','vsync_enabled'], ['int','vsync_refresh_rate'], ['int','vsync_frame_interval'],
         ['int','vsync_decisions'], ['int','vsync_migrations'], ['int','vsync_overruns'],
-        ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations']
+        ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations'],
+        // S1: gate SF frame latency on sf_latency_valid, mirroring the monitoring
+        // page (mon-sf). A theoretical fallback (timestats disabled) must render
+        // "--" instead of a misleading "0 μs = perfect".
+        ['str','sf_latency_valid']
     ];
     const allInAgg = fieldDefs.every(([_, name]) => aggData[name] !== undefined);
     let allResults;
@@ -4883,10 +4895,14 @@ async function refreshSystemFromData(aggData) {
         eventTotal, eventJank, eventThermal, eventFreq, eventHotplug, eventAppSwitch,
         fedRounds, fedExports, fedImports, fedTrusted,
         vsyncEnabled, vsyncRate, vsyncInterval, vsyncDecisions, vsyncMigrations, vsyncOverruns,
-        predMae, predConf, predProactive
+        predMae, predConf, predProactive,
+        sfLatValid
     ] = allResults;
     setText('sys-fps', (fps || 0) + ' Hz');
-    setText('sys-frame-latency', (frameLatency || 0) + ' μs');
+    // S1: only show SF frame latency when it was actually measured (sf_latency_valid
+    // === '1'). A missing/invalid reading (timestats disabled -> theoretical 0) must
+    // render "--" instead of "0 μs", which previously looked like a perfect score.
+    setText('sys-frame-latency', (sfLatValid === '1' && (frameLatency != null) && !isNaN(frameLatency)) ? (frameLatency + ' μs') : '--');
     setText('sys-target-frame', (targetFrame || 0) + ' μs');
     setText('sys-temp-cpu', (tempCpu != null && !isNaN(tempCpu)) ? tempCpu.toFixed(0) + '°C' : '--');
     setText('sys-temp-skin', (tempSkin != null && !isNaN(tempSkin)) ? tempSkin.toFixed(0) + '°C' : '--');

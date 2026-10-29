@@ -338,7 +338,11 @@ def main():
         lines.append(f'      "{c_escape(prog["name"])}", "{c_escape(prog["func_name"])}",')
         lines.append(f'      {prog["prog_type"]}, {prog["is_kretprobe"]} }},')
     lines.append('};')
-    lines.append(f'static const int kEmbeddedProgramCount = {len(programs)};')
+    # final-review fix: emit a table-derived count instead of a hardcoded
+    # literal, so regenerating the header after adding/removing a program cannot
+    # desync kEmbeddedProgramCount from kEmbeddedPrograms[].
+    lines.append('static const int kEmbeddedProgramCount = '
+                 '(int)(sizeof(kEmbeddedPrograms) / sizeof(kEmbeddedPrograms[0]));')
     lines.append('')
     lines.append('} // namespace aatpe_ebpf')
     lines.append('#endif // AATPE_EBPF_EMBEDDED_H')

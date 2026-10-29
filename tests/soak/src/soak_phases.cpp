@@ -151,8 +151,20 @@ int phaseStateMatrix() {
     SP(!bogus, "M-C3 invalid mode rejected (false)", "bogus=%d", (int)bogus);
     // emergency internal-only via user path rejected
     bool emergUser = setRuntimeControlMode("emergency", "m-user-emerg");
-    // emergency IS accepted by the setter (watchdog latch uses it); just verify state consistent
-    SP(true, "M-C4 emergency mode routable", "ret=%d", (int)emergUser);
+    // setRuntimeControlMode() IS the watchdog/thermal choke point: "emergency" is a
+    // valid mode there (targetState=EMERGENCY, enterSafeLock=true, and it bypasses
+    // the user-mode lock because isEmergency==true). Previously this was SP(true)
+    // (only "no crash"). Assert the FULL observable effect:
+    //   (a) returns true,
+    //   (b) g_cfg.controlMode == "emergency",
+    //   (c) on-disk STATE_DIR/control_mode == "emergency",
+    //   (d) the state machine actually drove EMERGENCY.
+    SP(emergUser, "M-C4a setRuntimeControlMode(emergency) accepted by watchdog choke point", "ret=%d", (int)emergUser);
+    { std::lock_guard<std::mutex> lk(g_cfgMutex);
+      SP(g_cfg.controlMode=="emergency", "M-C4b g_cfg.controlMode==emergency", "got=%s", g_cfg.controlMode.c_str()); }
+    std::string emergDisk = readOnDisk(std::string(g_it.stateDir) + "/control_mode");
+    SP(emergDisk=="emergency", "M-C4c on-disk control_mode==emergency", "got=%s", emergDisk.c_str());
+    SP(getSystemState()==SystemState::EMERGENCY, "M-C4d state machine drove EMERGENCY", "state=%s", systemStateToString(getSystemState()));
     setRuntimeControlMode("assist", "m-reset");
 
     printf("  [matrix] checks=%d fails=%d\n", g_checks, g_fail);
@@ -178,9 +190,13 @@ int phaseFaultInjection() {
     SP(getSystemState()==SystemState::NORMAL, "F1 empty control mailbox -> NORMAL unchanged", "state=%s", systemStateToString(getSystemState()));
 
     // F2. Truncated/partial command line (no newline, no '=') -> rejected, no crash.
+    // "set_mode" does NOT match the "set_mode=" prefix executor, so it falls through
+    // to the unknown-command path and must leave control_mode untouched.
     itWriteFile(run+"/control", "set_mode");
+    std::string cmBefore2 = readOnDisk(st+"/control_mode");
     processControlCommands();
-    SP(true, "F2 truncated command line tolerated", "");
+    std::string cmAfter2 = readOnDisk(st+"/control_mode");
+    SP(cmBefore2==cmAfter2, "F2 truncated 'set_mode' (no '=') NOT applied, control_mode unchanged", "before=%s after=%s", cmBefore2.c_str(), cmAfter2.c_str());
 
     // F3. Garbage/binary junk in control -> rejected by whitelist, no crash.
     itWriteFile(run+"/control", "\x01\x02\xff\x00 set_mode=active; rm -rf /");
@@ -198,9 +214,17 @@ int phaseFaultInjection() {
     }
 
     // F5. Leftover control.processing from a crashed prior run -> handled, no deadlock.
+    // processControlCommands() renames /control -> /control.processing to claim it.
+    // With NO live /control (only the stale staging file) that rename fails (ENOENT)
+    // and the drain bails out WITHOUT deadlock and WITHOUT touching state. Assert
+    // the observable outcome: we returned, state stayed NORMAL, and the stale staging
+    // bytes ("set_mode=assist") were NOT spuriously applied.
     itWriteFile(run+"/control.processing", "set_mode=assist\n");
     processControlCommands();
-    SP(true, "F5 stale control.processing residue consumed without deadlock", "");
+    SP(getSystemState()==SystemState::NORMAL, "F5 stale control.processing: no deadlock, state stayed NORMAL", "state=%s", systemStateToString(getSystemState()));
+    std::string cmAfter5 = readOnDisk(st+"/control_mode");
+    SP(cmAfter5=="assist", "F5 stale staging bytes NOT applied (control_mode unchanged)", "control_mode=%s", cmAfter5.c_str());
+    ::unlink((run+"/control.processing").c_str());   // clean the fixture; F6b renames /control over it otherwise
 
     // F6. EACCES: write into the read-only tmpfs must FAIL closed (no crash,
     // writeFile returns false, no half-init / no false success).
@@ -229,7 +253,16 @@ int phaseFaultInjection() {
     itWriteFile(st+"/state.json", "{ \"control_mode\": ");  // truncated JSON
     itWriteFile(st+"/state.json", "\xff\xfe garbage{{{");    // full garbage
     writeStateJson();
-    SP(true, "F7 malformed state.json tolerated, writer recovers", "");
+    // writeStateJson() publishes via atomicWriteFile (temp+rename). After feeding
+    // garbage it must RECOVER and overwrite state.json with a well-formed document,
+    // not leave the garbage on disk. Assert the published file is valid JSON.
+    {
+        std::string sj = itReadFile(st+"/state.json");
+        bool sjValid = !sj.empty() && sj.front()=='{' &&
+                       sj.find("\"control_mode\"")!=std::string::npos;
+        SP(sjValid, "F7 writer recovered: state.json overwritten with valid JSON (garbage not left behind)",
+           "len=%zu head='%.24s'", sj.size(), sj.c_str());
+    }
 
     // F7b. Disk full (ENOSPC): write into the 60KB tmpfs must fail closed.
     {
@@ -248,18 +281,39 @@ int phaseFaultInjection() {
     itWriteFile("/sys/class/thermal/thermal_zone0/temp","30000");
 
     // F9. state dir permission denied for a write -> writeStateJson fail-closed (no crash).
+    // NOTE (honest labeling): inside the unprivileged user+mount namespace the test
+    // process runs as namespace-root, whose DAC_OVERRIDE may or may not let the temp
+    // write through a 0500 dir; we therefore do NOT assert on whether this single
+    // write was blocked (that is environment-dependent and would flake). This check
+    // is crash-only for the failed-write attempt itself. What IS deterministic and
+    // worth asserting: after restoring perms the daemon is NOT wedged and can publish
+    // a valid state.json again.
     ::chmod(st.c_str(), 0500);
-    writeStateJson();
+    writeStateJson();                 // must not crash/abort even if the write fails
     bool threw = false; (void)threw;
     ::chmod(st.c_str(), 0755);
-    SP(true, "F9 state dir EACCES on write tolerated (fail-closed)", "");
+    writeStateJson();                 // recovery path: must succeed again
+    {
+        std::string sj9 = itReadFile(st+"/state.json");
+        SP(!sj9.empty() && sj9.front()=='{',
+           "F9 EACCES write tolerated (crash-only), daemon not wedged: post-recovery state.json valid",
+           "len=%zu", sj9.size());
+    }
 
     // F10. control command >256 chars rejected.
     {
         std::string longc = "set_mode=" + std::string(300,'x');
+        std::string cmBefore10 = readOnDisk(st+"/control_mode");
         itWriteFile(run+"/control", longc);
         processControlCommands();
-        SP(true, "F10 >256 char command rejected without crash", "");
+        std::string cmAfter10 = readOnDisk(st+"/control_mode");
+        // The 309-byte line exceeds the 256-byte control-pipe gate and must be dropped
+        // BEFORE dispatch: control_mode must be unchanged, and the staging
+        // /control.processing must be unlinked after the drain (no half-processed file).
+        SP(cmBefore10==cmAfter10, "F10 >256 char command rejected at length gate, control_mode unchanged",
+           "before=%s after=%s", cmBefore10.c_str(), cmAfter10.c_str());
+        struct stat sb10; bool resid10 = (::stat((run+"/control.processing").c_str(),&sb10)==0);
+        SP(!resid10, "F10 staging .processing unlinked after drain", "residue=%d", (int)resid10);
     }
 
     printf("  [fault] checks=%d fails=%d\n", g_checks, g_fail);

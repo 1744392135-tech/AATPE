@@ -125,6 +125,21 @@ int main(){
         CHECK(g_thermalSkin.load()==-1, "noskin: g_thermalSkin atomic stays -1 (state-machine contract)");
         CHECK(sf != "-1", "noskin: thermal_skin state file must NOT leak the -1 sentinel");
         CHECK(sf.empty(), "noskin: thermal_skin state file EMPTY -> WebUI renders '--' (not -1C)");
+    } else if (sc=="nobatt") {
+        // M1: no battery temp node exists (no power_supply/*/temp). The old code
+        // clamped the unknown sentinel -1 to 0 and wrote a fake "0" (read as a
+        // truthful 0C battery) into thermal_battery and system.json. Fix: the state
+        // file must be EMPTY (WebUI renders "--", system.json emits JSON null) and
+        // g_thermalBattery stays -1 for the in-memory state machine. The scheduling
+        // gate `batteryTemp > 0` treats -1 and 0 identically as inert.
+        printf("=== Thermal scenario: nobatt (no battery temp node) ===\n");
+        readThermal();
+        std::string bf = readStateStr("thermal_battery");
+        printf("  [INFO] atomic batt=%d state-file thermal_battery='%s'\n",
+               g_thermalBattery.load(), bf.c_str());
+        CHECK(g_thermalBattery.load()==-1, "nobatt: g_thermalBattery atomic stays -1 (state-machine contract)");
+        CHECK(bf != "0", "nobatt: thermal_battery state file must NOT leak a fabricated 0C");
+        CHECK(bf.empty(), "nobatt: thermal_battery state file EMPTY -> WebUI renders '--' (not 0C)");
     }
     else if (sc=="hermetic") {
         // ROUND-009e: pure-hermetic load-correlation test via setTestRoot.

@@ -288,6 +288,13 @@ install: $(TARGETS)
 	@# DESTDIR is the default _install/, also mirror into ./system/bin so the
 	# release-consistency script (which inspects ./system/bin) sees the stripped
 	# bytes used by the module package.
+	@# LAYOUT-GATE FIX: -MMD -MP emits one root-level *.d dependency sidecar per
+	@# linked target (aatped.d / aatpe-cli.d / aatpe-watchdog.d / aatpe-probe.d).
+	@# These are build byproducts, NOT release content, but check-manifest-layout.sh's
+	@# stray-artifact gate treats ANY *.d as stray -> a clean rebuild false-FAILs
+	@# "[FAIL] stray build artifacts" even though all 4 stripped binaries shipped.
+	@# We rm the root-level build .d sidecars inside the gate block (right before
+	@# check-manifest-layout.sh); `make` regenerates them on the next build.
 	@if [ "$(DESTDIR)" = "$(CURDIR)/_install" ]; then \
 	  mkdir -p system/bin system/etc/aatpe/webui system/etc/aatpe/profiles system/etc/aatpe/rules system/etc/aatpe/ebpf; \
 	  cp -f _install/system/bin/* system/bin/; \
@@ -300,6 +307,7 @@ install: $(TARGETS)
 	  cp -f rules/*.conf system/etc/aatpe/rules/; \
 	  cp -f ebpf/sched_events.bpf.c ebpf/sched_events.bpf.o ebpf/sched_events_embedded.h ebpf/gen_embedded_header.py system/etc/aatpe/ebpf/; \
 	  $(MAKE) --no-print-directory release-manifest; \
+	  rm -f ./aatped.d ./aatpe-cli.d ./aatpe-watchdog.d ./aatpe-probe.d; \
 	  bash ./check-manifest-layout.sh; \
 	  bash ./check-release-consistency.sh; \
 	  bash ./check-html-sync.sh; \

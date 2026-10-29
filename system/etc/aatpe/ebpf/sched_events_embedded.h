@@ -460,7 +460,7 @@ static const EmbeddedProgInfo kEmbeddedPrograms[] = {
       "tracepoint/sched/sched_wakeup_new", "tracepoint/sched/sched_wakeup_new",
       5, 0 },
 };
-static const int kEmbeddedProgramCount = 6;
+static const int kEmbeddedProgramCount = (int)(sizeof(kEmbeddedPrograms) / sizeof(kEmbeddedPrograms[0]));
 
 } // namespace aatpe_ebpf
 #endif // AATPE_EBPF_EMBEDDED_H

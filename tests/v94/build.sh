@@ -163,7 +163,7 @@ run_thermal_namespaced() {
   # v4.1.1 hotfix acceptance scenarios (boot0/mcjitter/clampregress/fallbackonly/
   # secondary/throttle0) build their OWN fake sys tree via thermalSetTestRoot, so
   # the bind-mock seeding below is inert for them; they run as fresh processes.
-  for sc in normal emergency bootgrace battclamp freshness degrdecouple hwmontempn pmicnotcpu thread zonestick constclamp constclamp_throttled constclamp_cooling boot0 mcjitter clampregress fallbackonly secondary throttle0 noskin; do
+  for sc in normal emergency bootgrace battclamp freshness degrdecouple hwmontempn pmicnotcpu thread zonestick constclamp constclamp_throttled constclamp_cooling boot0 mcjitter clampregress fallbackonly secondary throttle0 noskin nobatt; do
     # thermal.cpp identifies the cpu/skin/battery zones by their `type` file.
     echo "mtktscpu" > "$mock/thermal/thermal_zone0/type"
     echo "skin"     > "$mock/thermal/thermal_zone1/type"
@@ -192,6 +192,11 @@ run_thermal_namespaced() {
               # foundSkinZone=false -> thermal_skin state file must be EMPTY (WebUI
               # shows "--"), NOT the raw -1 sentinel that rendered "-1C".
         echo "ap_therm" > "$mock/thermal/thermal_zone1/type" ;;
+      nobatt) # M1: no /sys/class/power_supply/*/temp node at all. The old code
+              # clamped the unknown sentinel -1 to 0 and wrote a fake "0C" to
+              # thermal_battery. Now the state file must be EMPTY (WebUI shows "--",
+              # system.json emits null) and g_thermalBattery stays -1.
+        rm -f "$mock/power_supply/battery/temp" ;;
     esac
     echo "  --- scenario: $sc ---"
     # tmpfs over /sys/class so we control thermal + power_supply entirely
@@ -369,8 +374,10 @@ run_one() {
     coldinstance)     build_test coldinstance     ""                   "" "-DAATPE_HOST_TEST" ;;
     # F3 #16: gpu_boost devfreq off-path write validation + readback + retry.
     gpu_devfreq_recovery) build_test gpu_devfreq_recovery "gpu_boost"    "gpu_deps log_stub" "-DAATPE_GPU_BOOST_TEST" ;;
-    # F3 #24: parseCpuOnlineMask (self-contained parser copy in the test TU).
-    ebpf_cpu_mask)     build_test ebpf_cpu_mask    ""                   "" ;;
+    # F3 #24: parseCpuOnlineMask. final-review fix: the test TU no longer ships
+    # a self-copied duplicate; link the REAL aatpe_ebpf.o (identical prod/stub
+    # closure as d3hotplug) so the cases run against the production parser.
+    ebpf_cpu_mask)     build_test ebpf_cpu_mask    "aatpe_ebpf aatpe_subsystem aatped_utils integrity" "ebpf_deps log_stub hybrid_deps utils_deps sprop_stub" ;;
     # F3 #12: poolFeatureForTier normalization (header-only inline in aatpe_ml_hybrid.h).
     ml_pool_feature)   build_test ml_pool_feature  ""                   "" ;;
     # ---- v4.1.2 hotfix backflow: 4 isolation tests wired (pure wiring, no
@@ -462,6 +469,10 @@ run_one() {
     ebpf_failsafe) build_test ebpf_failsafe "aatpe_ebpf aatpe_subsystem" "log_stub ebpf_deps hybrid_deps" "-DAATPE_HOST_TEST" ;;
     ebpf_elf_robust_v449) build_test ebpf_elf_robust_v449 "aatpe_ebpf aatpe_subsystem" "log_stub ebpf_deps hybrid_deps" "-DAATPE_HOST_TEST" ;;
     ebpf_p3_fixes) build_test ebpf_p3_fixes "aatpe_ebpf aatpe_subsystem" "ebpf_deps log_stub" "-DAATPE_HOST_TEST" ;;
+    # P1 eBPF fixes regression (EBPF-03/04/05; EBPF-01/02 kprobe path is
+    # device-only, honestly marked). The TU mocks aatpe::integrity itself, so
+    # do NOT link integrity.o (multiple definition). Same closure as ebpf_p3_fixes.
+    ebpf_p1_fix)   build_test ebpf_p1_fix "aatpe_ebpf aatpe_subsystem" "ebpf_deps log_stub" "-DAATPE_HOST_TEST" ;;
     ebpf_h01h02) build_test ebpf_h01h02 "aatpe_ebpf aatpe_subsystem" "ebpf_deps log_stub" "-DAATPE_HOST_TEST" ;;
     crypto_v449)          build_test crypto_v449          "" "" ;;
     session_v449)         build_test session_v449         "aatpe_session_token" "log_stub" ;;
@@ -727,7 +738,7 @@ fed_main fed_aggregate hmac topology config state control active_lock \
 thread_scan threadutil frame webui_http ebpf main v343_ml f_v434_ml f_v434_hybrid v343_placement v342_round4 profile_arb profile_stress recovery cmdq v342_round5 \
 integrity adrc frame_binder config_schema caps diag mech_uclamp coldstart coldinstance thermal_hal thermal_ff_intg gpu_boost gpu_boost_thermal ebpf_classify watchdog_hotfix rt_restore exec_timeout thermal_clusters coldstart_release gpu_devfreq_recovery ebpf_cpu_mask ml_pool_feature \
 numpools_d1100 thermal_gate degraded_gate diag_gpu \
-a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 c4_freezer_mounts c4_freezer_autogame tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery emergency_timing vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_empty_pool ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active rel15_freeze webui_percpu"
+a1_sf a2_boost a3_autocal a1_placement d1recovery d2exec d3hotplug game_layer f01_fps apklabel apklabel_multi per_app_frame_r5r6 spillover_deadlock pid_identity_exe framestats_d06 aatpe_iso p0_v441 webui_cors psi_fallback thermzone thermzone_fixtures state_ttl_d d_arithmetic preboost thermheadroom scene_infer scene_wiring c4_freezer c4_freezer_glue c4_freezer_v1 c4_freezer_mounts c4_freezer_autogame tidy_hardening pkglist_parsing priority_thermal_derate bigpool_race a2_atomics log_orphan subsystem thread_scan_hydrate ebpf_event_parse caps_pure command_dispatcher c2_envelope ebpf_failsafe uclamp_restart_v449 thermal_hardwall_v449 emergency_recovery emergency_timing vmguest_race_v449 freezer_scene_v449 preboost_scene_v449 loadforecast_scene_v449 uevent_scene_v449 scoring_pure ebpf_elf_robust_v449 ebpf_p3_fixes ebpf_p1_fix crypto_v449 session_v449 fx3_frame_v449 webui_http_v449 cmdq_v449 cmdq_replaysafe interfaces_v449 logging_v449 ml_empty_pool ml_shadow_v450 wakeup_reaper_v450 ml_shadow_passive_v600 cpu_metrics_race_v600 backup_model_race_v600 gputop_p2_fixes webui_p3_http scoring_active rel15_freeze webui_percpu"
 if [ "$#" -eq 0 ]; then set -- $ALL; fi
 pass=0; fail=0; skipped=0
 declare -a FAILURES=()

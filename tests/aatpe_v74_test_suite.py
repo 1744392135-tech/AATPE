@@ -96,25 +96,45 @@ MODULE_PROP = os.path.join(SRC_DIR, 'module.prop')
 #   TEST_ENVIRONMENT   - 主机 vs 设备(缺二进制/无 sysfs/无 ring buffer)
 #   AMBIGUOUS          - 需人工复核
 # 详见 tests/README.md "测试失败分类指南"。
+#
+# final-review tightening (false-negative audit): the old keyword list put
+# 'map' / 'offset' / 'refcount' into stale_kw BEFORE prod_kw, so a real
+# map-count regression ("expected 4 maps, got 3 maps") and an offset drift
+# ("expected 24, got 28") were swallowed as TEST_STALE_GOLD, and an
+# assert_true with empty detail landed in AMBIGUOUS — all of them exited 0.
+# Rules now:
+#   1) environment signals (host lacks binary/sysfs) -> TEST_ENVIRONMENT.
+#   2) TEST_STALE_GOLD only when an EXPLICIT gold-update marker is present:
+#      the declared legacy-gold categories (1.eBPF_bytecode,
+#      3.perf_ring_buffer source-grep zone) or a hard gold artifact
+#      (md5/sha/gold/legacy/hardcoded/pinned/refpattern). Bare numeric
+#      mismatches ("expected X, got Y") are NOT stale by default.
+#   3) value-mismatch / truth-table signatures      -> PRODUCTION_BUG.
+#   4) assert_true with empty detail (bare behavior assertion that failed)
+#                                                    -> PRODUCTION_BUG.
+#   5) anything left                                 -> AMBIGUOUS (and the
+#      exit gate below counts AMBIGUOUS as non-zero too, so it can no longer
+#      pass CI silently).
 def classify_failure(category, name, detail):
     blob = f'{category} {name} {detail}'.lower()
     env_kw = ('binary_exists', 'ebpf_o_exists', 'binary_', 'exists_')
-    stale_kw = ('ebpf_bytecode', 'perf_ring', 'refpattern', 'refcount',
-                'offset', 'map', 'md5', 'sha', 'version', 'legacy_',
-                'removed', 'embeddedprog', 'mmap_')
-    # C06: a genuine functional value-mismatch (the assert_eq/assert_ne/assert_in/
-    # assert_gt/lt/ge helpers below emit exactly these signatures) that is NOT
-    # environment- or stale-gold-related is a PRODUCTION_BUG and MUST fail CI.
-    # Previously this function only had env/stale/AMBIGUOUS branches, so a real
-    # behavior regression always landed in AMBIGUOUS, real_regressions stayed 0,
-    # and the process always exited 0.
-    prod_kw = ('expected', 'not in', 'not >', 'not <', 'not >=', 'not <=',
-               'mismatch', 'incorrect', 'assertion failed')
     if any(k in blob for k in env_kw):
         return 'TEST_ENVIRONMENT'
-    if any(k in blob for k in stale_kw):
+    # Explicit legacy-gold markers ONLY. Deliberately does NOT include bare
+    # 'map'/'offset'/'size'/'count': a numeric mismatch on them is a
+    # regression unless it is tied to a declared gold context.
+    stale_markers = ('md5', 'sha1', 'sha256', 'gold', 'legacy', 'hardcoded',
+                     'pinned', 'refpattern',
+                     '1.ebpf_bytecode', '3.perf_ring_buffer', 'perf_ring_buffer')
+    prod_kw = ('expected', 'not in', 'not >', 'not <', 'not >=', 'not <=',
+               'mismatch', 'incorrect', 'assertion failed')
+    if any(k in blob for k in stale_markers):
         return 'TEST_STALE_GOLD'
     if any(k in blob for k in prod_kw):
+        return 'PRODUCTION_BUG'
+    # Bare assert_true(...) failure with no detail at all: it asserts a real
+    # behavior and it failed — that is a regression signal, not "environment".
+    if not detail.strip():
         return 'PRODUCTION_BUG'
     return 'AMBIGUOUS'
 
@@ -1680,10 +1700,14 @@ print(f'Passed: {R.passed}')
 print(f'Failed: {R.failed}')
 
 # ROUND-001: This v74 suite is archaeological (see Makefile / tests/README.md).
-# Its failures are documented as TEST_STALE_GOLD / TEST_ENVIRONMENT / AMBIGUOUS
-# (eBPF gold drift, host-vs-device), NOT production regressions. Exit non-zero
-# ONLY when a failure is actually classified PRODUCTION_BUG; all other classes
-# are still printed in the report for the record but do not block `make test-legacy`.
+# Its failures are documented as TEST_STALE_GOLD / TEST_ENVIRONMENT
+# (eBPF gold drift, host-vs-device). Exit non-zero when a failure is actually
+# classified PRODUCTION_BUG; final-review tightening also counts AMBIGUOUS as
+# non-zero — "needs human review" must not pass CI silently either. Stale-gold
+# / environment failures are still printed in the report for the record but do
+# not block `make test-legacy`.
 real_regressions = R.by_class.get('PRODUCTION_BUG', 0)
+ambig_left = R.by_class.get('AMBIGUOUS', 0)
 print(f'Production-bug-class failures: {real_regressions} (stale-gold/env reported above)')
-sys.exit(0 if real_regressions == 0 else 1)
+print(f'Unreviewed-ambiguous failures: {ambig_left}')
+sys.exit(0 if (real_regressions == 0 and ambig_left == 0) else 1)

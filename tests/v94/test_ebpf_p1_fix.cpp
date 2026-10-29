@@ -122,24 +122,24 @@ int main() {
         s.g4TestStopPollThread();
     }
 
-    // ---- EBPF-01/02: kprobe path uses setupPerCpuRingBuffers (not direct mmap)
-    // This is a source-level fix verified by code inspection; on host we can't
-    // reach the bpftool kprobe path (no pinned .o). We assert the test build
-    // compiles with the fix and that the function setupPerCpuRingBuffers exists
-    // and is called from the kprobe path (verified by the bpftool path now
-    // routing through it instead of inline mmapPerfRingForCpu).
-    printf("--- EBPF-01/02: kprobe ring path source check ---\n");
-    {
-        // We can't reach the bpftool kprobe path on host, but we verify the
-        // build artifact links and the EbpfScheduler class exposes the expected
-        // interface. The source fix is that the kprobe branch now calls
-        // setupPerCpuRingBuffers(0, perfFd, cpu, ncpus, p) instead of the
-        // inline `for (ocpu) mmapPerfRingForCpu(ocpu, perfFd, ...)` loop.
-        // If setupPerCpuRingBuffers returns 0 rings, the kprobe attachFd is
-        // rolled back (popped + closed) and falls through to tracepoint fallback.
-        EbpfScheduler s;
-        CHECK(true, "EBPF-01/02 fix compiled in (source-level: kprobe path calls setupPerCpuRingBuffers)");
-    }
+    // ---- EBPF-01/02: kprobe ring path — DEVICE-ONLY coverage ---------------
+    // HONEST-GATE FIX (final review): this block previously ended with
+    //   CHECK(true, "...source-level: kprobe path calls setupPerCpuRingBuffers");
+    // a CHECK(true) is a fake assertion — reverting the fix kept the test green.
+    // The kprobe attach branch requires a live kernel (tracefs + a kprobe event
+    // + perf_event_open), which a host CI cannot provide; no host seam reaches
+    // it (the AATPE_HOST_TEST injection fakes prog/map load but attach still
+    // fails, so tryLoadEmbeddedSyscall() returns false before ring setup).
+    // We therefore assert NOTHING here and honestly mark the path as
+    // device-only, instead of faking a host pass. The fix itself is:
+    //   * kprobe / raw-tp / tracepoint attach branches now ALL route per-CPU
+    //     ring setup through setupPerCpuRingBuffers() (PERF_TYPE_SOFTWARE /
+    //     BPF_OUTPUT events, per online CPU via parseCpuOnlineMask) and no
+    //     longer inline `for (cpu) mmapPerfRingForCpu(cpu, attachFd, ...)`;
+    //   * runtime coverage of this branch is provided by the on-device test
+    //     run (cloud CI has no KVM/kernel headers — marked DEGRADED there).
+    printf("--- EBPF-01/02: kprobe ring path -> setupPerCpuRingBuffers(); "
+           "RUNTIME COVERAGE IS DEVICE-ONLY (no host CHECK kept)\n");
 
     printf("\n========================================\n"
            "EBPF P1 fix results: %d passed, %d failed\n"

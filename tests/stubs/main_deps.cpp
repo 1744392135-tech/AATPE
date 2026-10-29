@@ -221,6 +221,10 @@ bool detectAudioPlayback(void) { return false; }
 GameScene detectGameScene(float, float, float) { return GameScene::UNKNOWN; }
 float getAveragePredictionMAE() { return 0.0f; }
 float getPredictionConfidence(int) { return 0.5f; }
+// S2 host stub: recordPredictionError() above is a no-op in this harness, so no
+// prediction samples ever exist -> mirror production: report "no samples", which
+// makes aatped_main write an EMPTY prediction_mae state file (frontend shows "--").
+bool hasAnyPredictionErrorSamples() { return false; }
 __attribute__((weak)) void readBatteryHealth() {}
 __attribute__((weak)) void readBatteryPower() {}
 void readGpuUtilization() {}
