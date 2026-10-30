@@ -1,7 +1,3 @@
-// test_interfaces.cpp - Direct unit tests for aatpe_interfaces.cpp
-// Covers: Mock* contract objects, initInterfaces/cleanupInterfaces globals,
-//         PollingEventSource, OnlineLearningModel<->LearningModel wrapper,
-//         DefaultCpuMonitor defaults on missing sysfs.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -12,9 +8,6 @@ static int g_pass=0,g_fail=0;
 #define CHECK(c,m) do{ if(c){g_pass++;printf("  [PASS] %s\n",m);} else {g_fail++;printf("  [FAIL] %s\n",m);} }while(0)
 int main(){
     printf("=== Interfaces: Mock contract objects ===\n");
-    // RC6 (C4): do NOT bind a reference to null (was
-    // *reinterpret_cast<const ThreadInfo*>(0)) - UBSan flags "reference binding to
-    // null". Use a valid, unrelated ThreadInfo; MockScorer ignores its argument.
     ThreadInfo dummyTi{};
     MockScorer ms; CHECK(ms.computeScore(0, dummyTi)==50, "MockScorer returns 50");
     CHECK(ms.name()==std::string("mock_scorer"), "MockScorer name");
@@ -28,7 +21,7 @@ int main(){
     CHECK(me.name()==std::string("mock_event"), "MockEventSource name");
     MockMlModel mm; CHECK(mm.predict(0,{1,2,3})==0.0f, "MockMlModel predict 0");
     CHECK(mm.getPoolCount()==3, "MockMlModel poolCount 3");
-    mm.update(0,{1,2,3},0.5f); mm.setWeights(0,{1.0f,2.0f}); // no-op, must not crash
+    mm.update(0,{1,2,3},0.5f); mm.setWeights(0,{1.0f,2.0f});
     CHECK(mm.getWeights(0).empty(), "MockMlModel getWeights empty");
     MockCpuMonitor mc; CHECK(mc.getCpuCount()==8 && mc.getTemperature()==40, "MockCpuMonitor defaults");
     CHECK(mc.getCpuUtilization(0)==50.0f && mc.getCpuFrequency(0)==2000000, "MockCpuMonitor util/freq defaults");

@@ -1,4 +1,3 @@
-// AATPE - Utility functions sub-header
 #ifndef AATPED_UTILS_H
 #define AATPED_UTILS_H
 
@@ -8,18 +7,11 @@
 #include <cstdint>
 #include <sched.h>
 
-// NOTE: this header is intended to be included after aatped_types.h (which
-// provides ThreadInfo / Decision). The umbrella header aatped.h already orders
-// them correctly; do NOT #include "aatped_types.h" here (it pulls in
-// aatpe_ml::ThreadFeatures which needs aatpe_ml.h first).
-
-// Android version detection
 int aatpeAndroidSdkInt();
 const char* aatpeAndroidVersionName();
 bool aatpeIsCgroupV2Cpuset();
 std::string aatpeCpusetMountRoot();
 
-// File utilities
 void mkdirIfNotExist(const char* path, mode_t mode);
 std::string readFile(const char* path);
 bool writeFile(const char* path, const std::string& content);
@@ -28,13 +20,11 @@ bool writeFile(const char* path, float value);
 bool writeFile(const char* path, long long value);
 bool writeFileAtomic(const char* path, const std::string& content);
 
-// v4.4.9 A2: host-only fault-injection seams for writeFileAtomic. release builds
-// compile these out entirely. Each is reset to 0 before every scenario.
 #ifdef AATPE_HOST_TEST
-extern int g_fi_write_short_after;  // >0: Nth write() returns a 1-byte short write
-extern int g_fi_write_fail_after;   // >0: Nth write() returns -1/errno=EIO
-extern int g_fi_fsync_fail;         // 1: fsync() returns -1/errno=EIO
-void aatpeTestFiReset();            // reset all three to 0
+extern int g_fi_write_short_after;
+extern int g_fi_write_fail_after;
+extern int g_fi_fsync_fail;
+void aatpeTestFiReset();
 #endif
 bool atomicWriteFile(const char* path, const std::string& content);
 bool atomicWriteFile(const char* path, int val);
@@ -46,42 +36,18 @@ long long readInt64(const char* path, long long def);
 void trim(std::string& s);
 std::string readFirstLine(const char* path);
 
-// in-memory state-file cache.
-// The daemon is the sole producer of files under STATE_DIR and ALL of its writes
-// go through writeFile()/writeFileAtomic() (verified: no direct open()/ofstream
-// writes to STATE_DIR). Each write mirrors into an in-memory map. The SSE
-// aggregate JSON (buildAggregateStateJson) is then built from that map instead of
-// opendir() + N open()/read() every 500ms. Seeded once from the filesystem on
-// first read so any pre-existing file is captured; afterwards the map stays
-// byte-for-byte identical to the on-disk content (same trailing trim).
 bool stateCacheIsSeeded();
 void stateCacheSeedFromDir(const char* dir);
 std::vector<std::pair<std::string,std::string>> stateCacheSnapshot();
-// cache invalidation for deletions. Mirrors stateCacheNoteWrite's
-// path validation and drops the flat STATE_DIR entry from the in-memory cache so
-// an unlink() on disk is not still served as stale data on the next SSE push.
 void stateCacheNoteRemove(const char* path);
 
-// #20: state-generation counter. Bumps every time a state file's content actually
-// changes (added/removed/value differs). SSE compares this single number instead
-// of diffing every state file each tick; the aggregate JSON embeds it as
-// "state_generation".
 uint64_t stateCacheGeneration();
 
-// Thread classification
 extern std::vector<ThreadRule> g_rules;
 void loadThreadRules();
 bool matchPattern(const std::string& text, const std::string& pattern);
-// P2-8: cachedStarttime lets callers that already have ThreadInfo.starttime
-// (from a prior populate or a TID-reuse check) skip the /proc/<pid>/task/<tid>/stat
-// open()/read() on every classifyThread() call. When 0, classifyThread falls back
-// to reading starttime from /proc (preserves the eBPF onExec path which has no
-// cached starttime).
 ThreadRole classifyThread(int pid, int tid, const std::string& tname, const std::string& pname, int& outPriority, std::string& outSubtype, int* outConfidence = nullptr, unsigned long long cachedStarttime = 0);
 
-// P0-opt2: g_threads is std::unordered_map (O(1) lookup) instead of std::map (O(log n)).
-// No iteration-order dependency exists in production code; persistThreadDb just writes
-// a snapshot file whose ordering is not consumed by any reader.
 extern std::unordered_map<int, ThreadInfo> g_threads;
 extern std::mutex g_threadsMutex;
 bool isKernelThread(const std::string& tname, int tid);
@@ -90,58 +56,27 @@ int findPidByPackage(const std::string& pkgName);
 void scanThreads();
 void persistThreadDb(const std::unordered_map<int, ThreadInfo>& threads);
 
-// Thread role cache
-// C-007: g_threadRoleCacheMutex protects all access to g_threadRoleCache.
 extern std::unordered_map<std::string, int> g_threadRoleCache;
 extern std::mutex g_threadRoleCacheMutex;
 int getCachedThreadRole(const std::string& threadName);
 void setCachedThreadRole(const std::string& threadName, int role);
 void invalidateThreadRoleCache(const std::string& threadName);
 
-// cpuset
 cpu_set_t parseCpusetCpuList(const std::string& listStr);
 std::string readThreadCpuset(int tid);
 cpu_set_t readCpusetCpus(const std::string& cpusetPath);
 cpu_set_t getThreadAllowedCpus(int tid);
 bool isCpuAllowed(int cpu, const cpu_set_t& allowed);
 
-// Exec helper
-// MON-08: aatpeExec runs `sh -c <cmd>` — a shell. If any caller ever concatenates
-// external input into `cmd`, that is command injection. The hardened aatpeExecArgv
-// below does NOT invoke a shell. New code MUST use aatpeExecArgv. This symbol is
-// retained only for existing callers (audio dumpsys, ml getprop/dumpsys gfxinfo,
-// cli pm list) whose cmd strings are fixed or whitelist-validated.
 [[deprecated("use aatpeExecArgv (no shell) — sh -c injection risk")]]
 std::string aatpeExec(const std::string& cmd, const char* debugTag);
-// #8/#9 fix: argv-based hardened exec, NO shell. The canonical, shared home lives in
-// aatped_utils.cpp (moved here from frame.cpp so cold_start_rules / thermal can reuse
-// it without pulling frame.cpp). Same hard timeout (3000ms wall clock) + setpgid +
-// killpg + bounded WNOHANG reap + dumpsys cooldown as aatpeExec. Use this whenever the
-// command is a fixed argv (e.g. {"dumpsys","activity","activities"}) — grep/head
-// filtering must be done in C++, never through `sh -c`.
-//
-// D2 (v4.2): two optional extensions for the bpftool loader:
-//   *outExitStatus  : if non-null, receives the raw waitpid(2) status of the child
-//                     on a clean reaping (use WIFEXITED/WEXITSTATUS), or -1 on
-//                     timeout / launch failure / not-reaped. Lets callers branch on
-//                     the real exit code (bpftool loadall tries several variants).
-//   bypassCooldown  : true to SKIP the dumpsys cooldown gate. The gate exists to
-//                     avoid hammering a hung SurfaceFlinger after a dumpsys timeout;
-//                     bpftool (and other non-dumpsys fixed-argv tools) must NOT be
-//                     suppressed by an unrelated dumpsys stall. Defaults to false so
-//                     existing dumpsys callers keep their cooldown behavior.
 std::string aatpeExecArgv(const std::vector<std::string>& argv, const char* debugTag,
                           int* outExitStatus = nullptr, bool bypassCooldown = false);
 
-// Helper APK detection
-// C-011: changed to atomic<bool> for thread-safe cross-thread access.
 extern std::atomic<bool> g_helperApkInstalled;
-// runtime auto-profile suppression by installed Helper APK.
-// effectiveAutoProfile = g_cfg.autoProfile && !g_helperAutoSuppressed.
 #include <atomic>
 extern std::atomic<bool> g_helperAutoSuppressed;
 
-// fix95 misc
 void lazyCleanupDecisionsDir(void);
 void watchdogTakeoverScheduling(void);
 int computeAdaptiveInterval(float systemLoad, bool jankDetected, bool hasForeground, int configInterval);
@@ -152,127 +87,38 @@ int lightweightMigrateCriticalThreads();
 void aatpeProbeEnvironment();
 int detectBatteryState();
 
-// Frame / refresh
 bool dumpsysAvailable();
 void triggerDumpsysCooldown();
 std::string aatpeDetectForegroundApp(bool forceRefresh = false);
 bool detectGameProcess();
 
-// ============================================================================
-// Event-driven scoring cache (方案3 事件驱动架构重构)
-//
-// Instead of re-scoring ~200 threads every decision cycle (200ms, or 50ms on
-// jank), each thread caches its last Decision + timestamp. A thread is re-scored
-// only when:
-//   (a) an eBPF sched_switch event touched it (dirty bit set by onSwitch), OR
-//   (b) its cached score expired (kScoreTtlMs), AND it is still "active"
-//       (had a sched_switch within kInactiveMs — sleeping threads are skipped).
-// A low-frequency global rebalance (kRebalanceIntervalMs, or on a temperature /
-// load step) force-invalidates all caches as a correctness backstop.
-//
-// Single-threaded: onSwitch() runs on the daemon main loop (via
-// dispatchQueuedEvents()), and the decision loop also runs on the main loop —
-// same access discipline as g_threads (no extra lock needed).
-// ============================================================================
 struct ThreadScoreEntry {
-    Decision   lastDecision;       // cached decision from last rescore
-    long long  cachedAtMs = 0;     // steady_clock ms when last scored (0 = never)
-    long long  lastSwitchMs = 0;   // steady_clock ms of last sched_switch (activity)
-    bool       dirty = false;      // needs immediate rescore (event-triggered)
-    // rel15 大小核颠倒 fix: one-shot bypass of the active gate. Set by the main
-    // loop when a key control transition happens (notably EMERGENCY->NORMAL), so
-    // every affected thread is re-scored ONCE even though the active gate would
-    // otherwise skip it (e.g. a low-switch-rate worker whose schedstat view was
-    // frozen by skipSchedstat and whose eBPF mark aged past kInactiveMs). This
-    // is NOT a per-second rescore: it is consumed (cleared) by the next
-    // shouldRescoreThread() call, so it fires exactly once per transition.
+    Decision   lastDecision;
+    long long  cachedAtMs = 0;
+    long long  lastSwitchMs = 0;
+    bool       dirty = false;
     bool       forceRescore = false;
-    // rel15 大小核颠倒 fix: eBPF observed a real sched_switch for this thread
-    // (onSwitch -> markThreadScoreDirty). Set there; consumed by thread_scan's
-    // refreshTrackedThread() to immediately break the skipSchedstat freeze
-    // (reset idleRefreshes/longIdleRescan) instead of waiting up to
-    // kLongIdleRescanPeriod calibration cycles for the forced rescan. The score
-    // loop also treats it as an unconditional rescore trigger (a real switch just
-    // happened -> the thread is provably active, gating on active is wrong).
     bool       wakeHint = false;
 };
 
 extern std::unordered_map<int, ThreadScoreEntry> g_scoreCache;
 extern std::mutex g_scoreCacheMutex;
-extern const long long kScoreTtlMs;       // cache validity before a fresh rescore
-extern const long long kInactiveMs;       // no sched_switch this long -> "inactive"
-extern const long long kRebalanceMs;     // global full-sweep interval backstop
+extern const long long kScoreTtlMs;
+extern const long long kInactiveMs;
+extern const long long kRebalanceMs;
 
-// Called by onSwitch() (eBPF sched_switch consumer): mark the thread dirty and
-// record activity. Safe no-op if the tid has no cache entry yet.
 void markThreadScoreDirty(int tid, long long nowMs);
 
-// Force-invalidate every cached score (global rebalance backstop).
 void invalidateAllScores();
 
-// rel15 大小核颠倒 fix: one-shot bypass of the active gate on every cached
-// score. Called on a key control transition (e.g. EMERGENCY->NORMAL) so threads
-// affected by the transition are re-scored once regardless of the active signal.
 void forceRescoreAllScores();
 
-// ---------------------------------------------------------------------------
-// v600-fix2: scoring-loop active/rescore decision, extracted for host testing.
-//
-// A thread's cached decision is refreshed THIS cycle iff:
-//   (a) neverScored  -- brand-new, must be placed once, OR
-//   (b) (dirty || expired) AND active -- an event/TTL touched it AND it is
-//       actually running.
-//
-// "active" is the UNION of two independent signals:
-//   * eBPF signal: lastSwitchMs recency. ONLY valid when eBPF event-driven is
-//     live. When eBPF is unavailable/polling, onSwitch never runs, so
-//     lastSwitchMs stays 0 until the first score stamps it, then freezes --
-//     it CANNOT be trusted on its own.
-//   * /proc schedstat signal: thread_scan.cpp has observed nrSwitches growing
-//     recently (switchesPerSec > 0) OR the thread has not yet accumulated a
-//     long run of idle refreshes. This is the reliable fallback when eBPF is
-//     off.
-//
-// The dirty bit is consumed (cleared) regardless of the decision, matching
-// the original loop behavior.
-//
-// Root cause this fixes: the global rebalance backstop invalidateAllScores()
-// runs every kRebalanceMs=1s and set dirty=true on EVERY cached entry. The old
-// predicate `dirty || neverScored || (expired && active)` did not gate dirty on
-// active, so sleeping/background threads were rescored every second -- daemon CPU
-// 43-47%, ~475 decisions/s on a 136s uptime. Now dirty/expired only trigger a
-// rescore when the thread is actually active; neverScored always passes.
-// ---------------------------------------------------------------------------
-
-// After this many consecutive refresh cycles with NO nrSwitches growth, a
-// thread is considered sleeping for scoring purposes. Mirrors
-// thread_scan.cpp kIdleSkipThreshold (kept in lockstep deliberately).
 constexpr int kSchedstatIdleRefreshesActive = 6;
 
-// True if thread_scan has evidence the thread is currently running.
 inline bool threadIsActiveBySchedstat(const ThreadInfo& ti) {
-    // switchesPerSec > 0: thread_scan measured recent sched switches -> running.
-    // idleRefreshes < threshold: thread has not been continuously idle for the
-    //   whole skip window -> either recently active or brand-new.
     return ti.switchesPerSec > 0.0 || ti.idleRefreshes < kSchedstatIdleRefreshesActive;
 }
 
-// Decide whether to rescore this thread. Mutates entry.dirty (consumes it).
-//   ttlMs:       kScoreTtlMs cache validity window
-//   inactiveMs:  kInactiveMs silence window for eBPF recency
-//   ebpfLive:    g_ebpfActive.load() -- whether eBPF event-driven is producing
-//                sched_switch events (false in polling/degraded mode).
-//
-// rel15 大小核颠倒 fix: two ONE-SHOT bypasses of the active gate:
-//   * forceRescore: set by the main loop on a key control transition
-//     (EMERGENCY->NORMAL etc.). Rescore even when active==false. Consumed here.
-//   * wakeHint: set by onSwitch (a real sched_switch was observed). The thread is
-//     provably active, so gating on the (possibly stale) active signal is wrong.
-//     Consumed here; thread_scan separately consumes it to break the schedstat
-//     freeze (see refreshTrackedThread).
-// Neither makes this a per-second full rescore: both are edge-triggered and
-// consumed immediately, and the normal (dirty||expired)&&active path is unchanged
-// so sleeping threads are still skipped to keep daemon CPU low.
 inline bool shouldRescoreThread(ThreadScoreEntry& entry,
                                const ThreadInfo& ti,
                                long long nowMs,
@@ -282,32 +128,22 @@ inline bool shouldRescoreThread(ThreadScoreEntry& entry,
     bool neverScored = (entry.cachedAtMs == 0);
     bool expired     = (entry.cachedAtMs != 0) && ((nowMs - entry.cachedAtMs) >= ttlMs);
 
-    // eBPF sched_switch recency. Only trustworthy when eBPF is live.
     bool activeByEBPF = false;
     if (ebpfLive) {
         activeByEBPF = (entry.lastSwitchMs == 0) ||
                        ((nowMs - entry.lastSwitchMs) < inactiveMs);
     }
-    // /proc schedstat fallback (always valid; thread_scan maintains it).
     bool activeBySchedstat = threadIsActiveBySchedstat(ti);
 
     bool active = activeByEBPF || activeBySchedstat;
 
-    // Edge-triggered bypasses take priority over the active gate.
     bool bypass = entry.forceRescore || entry.wakeHint;
 
     bool needsRescore = neverScored || bypass || ((entry.dirty || expired) && active);
-    entry.dirty = false;       // consume dirty bit regardless of decision
-    entry.forceRescore = false; // consume one-shot transition bypass
-    // rel15 P1-1: consume wakeHint on the very next call too. onSwitch() ->
-    // markThreadScoreDirty() sets it on every real sched_switch; if we left it
-    // set, a thread that switches once then goes quiet would be re-scored on every
-    // 200ms main-loop turn for the rest of its life (300/300 red-team repro),
-    // pushing daemon CPU back toward rel14 levels. Consuming it here makes a wake
-    // event trigger exactly one rescore. thread_scan's freeze-break no longer
-    // depends on this flag -- it keys off lastSwitchMs freshness instead.
+    entry.dirty = false;
+    entry.forceRescore = false;
     entry.wakeHint = false;
     return needsRescore;
 }
 
-#endif // AATPED_UTILS_H
+#endif

@@ -3,30 +3,18 @@
 #include <math.h>
 #include <string.h>
 
-/* v4.3.9: 0xDE400001 -> 0xDE400002. The struct gains topology_fingerprint; old
- * flash files (v1 magic) are rejected by the magic check -> fail-safe defaults. */
 #define DEV_PROFILE_MAGIC 0xDE400002u
 #define DEV_EWMA_ALPHA_THERMAL   0.05f
 #define DEV_EWMA_ALPHA_BOOST     0.2f
 #define DEV_CALIBRATION_MIN_OBS  50u
-/* audit5 N5: sane die-temperature window (°C). Samples outside it are outliers
- * and must not touch the sticky max/min. */
 #define DEV_TEMP_LO_C            0.0f
 #define DEV_TEMP_HI_C            150.0f
-/* Slow "forget" pull of the sticky extremes toward the current reading (per
- * observation). A one-off sensor spike then relaxes instead of sticking for life. */
 #define DEV_EXTREME_FORGET       0.001f
-/* audit5 N5: trip point learned via EWMA (not a direct overwrite). */
+
 #define DEV_TRIP_EWMA_ALPHA      0.2f
-/* audit5 N9: after confidence saturates at 1.0, decay it slightly every N
- * observations so a slowly drifting usage pattern re-opens the learning window. */
 #define DEV_CONF_DECAY_EVERY     1000u
 #define DEV_CONF_DECAY           0.95f
 
-/* FNV-1a 64-bit over the cluster descriptors that define the hardware:
- * num_clusters + per-cluster (cpu_mask, min_freq_khz, max_freq_khz). The exact
- * field order matters -- changing it invalidates every stored profile (intended:
- * a hardware change must invalidate the learned calibration). */
 static uint64_t fnv_rotate(uint64_t h, uint64_t v)
 {
     h ^= v & 0xFFu;  h *= 0x100000001B3ull;
@@ -40,7 +28,7 @@ uint64_t device_profile_fingerprint(const DevCluster *clusters, uint32_t num_clu
 {
     if (!clusters || num_clusters == 0 || num_clusters > DEV_MAX_CLUSTERS)
         return 0ull;
-    uint64_t h = 0xCBF29CE484222325ull;  /* FNV offset basis */
+    uint64_t h = 0xCBF29CE484222325ull;
     h = fnv_rotate(h, (uint64_t)num_clusters);
     for (uint32_t i = 0; i < num_clusters; i++) {
         h = fnv_rotate(h, (uint64_t)clusters[i].cpu_mask);
@@ -56,7 +44,6 @@ static float sanf_c(float v)
     return v;
 }
 
-/* sanf_pct reserved for future per-field normalisation; kept as no-op cast. */
 __attribute__((unused))
 static float sanf_pct(float v)
 {
@@ -80,14 +67,12 @@ void device_profile_init(DeviceProfile *dp)
     dp->magic = DEV_PROFILE_MAGIC;
     strncpy(dp->name, "unknown", DEV_NAME_MAX_LEN - 1);
 
-    /* Conservative thermal defaults (Celsius).
-     * These are *fallbacks* only; real values come from observations. */
-    dp->thermal_trip_c          = 85.0f;   /* typical SoC throttle trip */
+    dp->thermal_trip_c          = 85.0f;
     dp->thermal_max_observed_c  = 0.0f;
     dp->thermal_min_observed_c   = 100.0f;
     dp->thermal_margin_norm     = 1.0f;
 
-    dp->boost_effectiveness     = 0.5f;    /* neutral prior */
+    dp->boost_effectiveness     = 0.5f;
     dp->boost_observation_count = 0;
     dp->calibration_confidence  = 0.0f;
     dp->total_observation_count = 0;
@@ -101,22 +86,21 @@ void device_profile_set_topology(DeviceProfile *dp,
         return;
 
     dp->num_clusters = num_clusters;
-    /* Bind this profile to the hardware it describes (v4.3.9 F10). */
+
     dp->topology_fingerprint = device_profile_fingerprint(clusters, num_clusters);
     uint32_t max_score = 0;
 
     for (uint32_t i = 0; i < num_clusters; i++) {
         dp->clusters[i] = clusters[i];
-        /* Capacity score = max_freq * num_cpus_in_mask. */
+
         uint32_t nr_cpus = 0;
         uint32_t mask = clusters[i].cpu_mask;
         while (mask) { nr_cpus += (mask & 1u); mask >>= 1; }
         uint32_t score = clusters[i].max_freq_khz * nr_cpus;
-        dp->clusters[i].capacity_ratio = 0.0f; /* will normalize below */
+        dp->clusters[i].capacity_ratio = 0.0f;
         if (score > max_score) max_score = score;
     }
 
-    /* Normalize capacity_ratio: largest cluster = 1.0, others relative. */
     if (max_score > 0) {
         for (uint32_t i = 0; i < num_clusters; i++) {
             uint32_t nr_cpus = 0;
@@ -135,31 +119,24 @@ void device_profile_observe(DeviceProfile *dp, const DevObservation *obs)
     dp->total_observation_count++;
 
     float temp = sanf_c(obs->temp_c);
-    /* audit5 N5: range-gate the temperature. Out-of-window readings are treated
-     * as sensor outliers and must NOT update the sticky extremes or the margin. */
     int temp_valid = (temp >= DEV_TEMP_LO_C && temp <= DEV_TEMP_HI_C) ? 1 : 0;
     if (temp_valid) {
         if (temp > dp->thermal_max_observed_c) dp->thermal_max_observed_c = temp;
         if (temp < dp->thermal_min_observed_c) dp->thermal_min_observed_c = temp;
-        /* Slow forget: pull the sticky extremes 0.1% toward the current reading
-         * each observation, so an old spike relaxes instead of sticking forever. */
         dp->thermal_max_observed_c += (temp - dp->thermal_max_observed_c) * DEV_EXTREME_FORGET;
         dp->thermal_min_observed_c += (temp - dp->thermal_min_observed_c) * DEV_EXTREME_FORGET;
     }
 
-    /* Learn thermal trip via EWMA (audit5 N5), not a direct overwrite. */
     float trip = sanf_c(obs->thermal_trip_c);
     if (trip > 0.0f && trip < 150.0f) {
         dp->thermal_trip_c += DEV_TRIP_EWMA_ALPHA * (trip - dp->thermal_trip_c);
     }
 
-    /* Compute thermal margin: 1.0 = cool, 0.0 = at trip. Uses the gated temp. */
     if (dp->thermal_trip_c > 0.0f && temp_valid) {
         float margin = (dp->thermal_trip_c - temp) / dp->thermal_trip_c;
         dp->thermal_margin_norm = clampf(margin, 0.0f, 1.0f);
     }
 
-    /* Track observed refresh rates. */
     float rr = sanf_c(obs->refresh_rate_hz);
     if (rr > 1.0f && rr < 1000.0f) {
         int found = 0;
@@ -171,18 +148,12 @@ void device_profile_observe(DeviceProfile *dp, const DevObservation *obs)
         }
     }
 
-    /* Update calibration confidence: grows with observations. */
     float target = clampf((float)dp->total_observation_count /
                            (float)DEV_CALIBRATION_MIN_OBS, 0.0f, 1.0f);
-    /* EWMA toward target. */
+
     dp->calibration_confidence += DEV_EWMA_ALPHA_THERMAL *
                                  (target - dp->calibration_confidence);
 
-    /* audit5 N9: once confidence has saturated, gently decay it every N
-     * observations so a slowly drifting usage pattern (e.g. games -> video on
-     * the SAME hardware) re-opens the learning window. Bounded below so we never
-     * erase a good calibration; the EWMA above re-raises it if observations
-     * keep flowing. */
     if (dp->total_observation_count % DEV_CONF_DECAY_EVERY == 0) {
         dp->calibration_confidence *= DEV_CONF_DECAY;
         if (dp->calibration_confidence < 0.3f) dp->calibration_confidence = 0.3f;
@@ -199,8 +170,6 @@ void device_profile_record_boost(DeviceProfile *dp,
 
     if (before <= 0.0f || after < 0.0f) return;
 
-    /* Effectiveness = (before - after) / before.
-     * 1.0 = halved frame time, 0.0 = no change, negative = boost made worse. */
     float eff = (before - after) / before;
     eff = clampf(eff, 0.0f, 1.0f);
 
@@ -213,7 +182,6 @@ void device_profile_calibrate(const DeviceProfile *dp, CalibratedThresholds *out
 {
     if (!dp || !out) return;
 
-    /* Start with conservative defaults. */
     out->cpu_high_load_pct       = 60.0f;
     out->gpu_high_load_pct       = 55.0f;
     out->thermal_warning_margin_c = 10.0f;
@@ -223,35 +191,28 @@ void device_profile_calibrate(const DeviceProfile *dp, CalibratedThresholds *out
 
     float conf = clampf(dp->calibration_confidence, 0.0f, 1.0f);
 
-    /* If calibration is insufficient, return defaults. */
     if (conf < 0.3f) return;
 
-    /* Adjust CPU high-load threshold based on largest cluster capacity.
-     * Bigger / faster cluster => can handle higher util before "high load". */
     if (dp->num_clusters > 0) {
         float max_cap = 0.0f;
         for (uint32_t i = 0; i < dp->num_clusters; i++) {
             if (dp->clusters[i].capacity_ratio > max_cap)
                 max_cap = dp->clusters[i].capacity_ratio;
         }
-        /* max_cap is 0..1. Higher capacity => raise threshold by up to 15%. */
+
         out->cpu_high_load_pct += max_cap * 15.0f * conf;
     }
 
-    /* Thermal warning margin: if we've observed near-trip temps, tighten margin. */
     if (dp->thermal_max_observed_c > 0.0f && dp->thermal_trip_c > 0.0f) {
         float headroom = dp->thermal_trip_c - dp->thermal_max_observed_c;
-        /* If we've gotten close to trip, use smaller margin. */
+
         out->thermal_warning_margin_c = clampf(headroom * 0.5f, 5.0f, 15.0f);
     }
 
-    /* Boost level: scale by measured effectiveness.
-     * If boost works well, use higher default. If it doesn't, lower it. */
     float eff = clampf(dp->boost_effectiveness, 0.0f, 1.0f);
     out->default_boost_level = 30.0f + eff * 40.0f * conf;
     out->ingame_boost_level  = 60.0f + eff * 30.0f * conf;
 
-    /* Cutscene frame cap: use the lowest observed refresh rate that's >= 30Hz. */
     float lowest_usable = 0.0f;
     for (uint32_t i = 0; i < dp->num_refresh_rates; i++) {
         float rr = dp->refresh_rates[i];

@@ -1,4 +1,3 @@
-// aatpe_interfaces.h - 接口抽象层 (fix103/3104 P3接口接入)
 #ifndef AATPE_INTERFACES_H
 #define AATPE_INTERFACES_H
 
@@ -9,8 +8,6 @@
 struct ThreadInfo;
 struct Decision;
 struct Config;
-
-// ==================== 接口定义 ====================
 
 class IScorer {
 public:
@@ -38,9 +35,6 @@ public:
 class IMlModel {
 public:
     virtual ~IMlModel() = default;
-    // P1-4: Per-pool ML interface. poolIdx selects the compute pool
-    // (0=LITTLE, 1=MID, 2=BIG) so callers can train/predict per-pool instead
-    // of being locked to pool 0.
     virtual float predict(int poolIdx, const std::vector<float>& features) = 0;
     virtual void update(int poolIdx, const std::vector<float>& features, float target) = 0;
     virtual std::vector<float> getWeights(int poolIdx) const = 0;
@@ -58,8 +52,6 @@ public:
     virtual int getTemperature() = 0;
     virtual std::string name() const = 0;
 };
-
-// ==================== 生产实现类 (fix104 P3) ====================
 
 class DefaultScorer : public IScorer {
 public:
@@ -100,7 +92,6 @@ public:
     std::string name() const override { return "online_learning"; }
 };
 
-// ==================== Mock实现 (测试用) ====================
 class MockScorer : public IScorer {
 public:
     int computeScore(int, const ThreadInfo&) override { return 50; }
@@ -149,4 +140,4 @@ extern IMlModel* g_mlModelInterface;
 void initInterfaces();
 void cleanupInterfaces();
 
-#endif // AATPE_INTERFACES_H
+#endif

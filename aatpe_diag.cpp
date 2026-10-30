@@ -1,9 +1,6 @@
-// AATPE ROUND-009: Holistic system-pressure diagnostics collector.
 #include "aatpe_diag.h"
 #include "aatped_logging.h"
 
-// ROUND-010: forward-declare atomicWriteFile to avoid pulling in the heavy
-// aatped_utils.h header (which drags in ThreadRule/ThreadRole deps).
 extern bool atomicWriteFile(const char* path, const std::string& content);
 
 #include <cstdio>
@@ -20,17 +17,13 @@ extern bool atomicWriteFile(const char* path, const std::string& content);
 namespace aatpe {
 namespace diag {
 
-// ---- internal state ----
 static std::mutex g_diagMutex;
 static SystemPressure g_snapshot;
-static std::string g_testRoot;   // empty = production paths
+static std::string g_testRoot;
 
-// Track which nodes have been warned about (to avoid log flooding).
 static bool g_warnedNoPsi = false;
 static bool g_warnedNoGpu = false;
 
-// Root/SELinux environment for writability probing (see probeNodeAccess).
-// Reset by setTestRoot() so host tests can re-evaluate.
 static bool g_envChecked = false;
 static bool g_runningAsRoot = false;
 static bool g_selinuxEnforcing = false;
@@ -44,11 +37,10 @@ void setTestRoot(const std::string& root) {
     g_testRoot = root;
     g_warnedNoPsi = false;
     g_warnedNoGpu = false;
-    g_envChecked = false;  // re-evaluate root/SELinux under the test root
+    g_envChecked = false;
 }
 #endif
 
-// Read a file as a string. Empty on error.
 static std::string readFileStr(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) return std::string();
@@ -57,21 +49,14 @@ static std::string readFileStr(const std::string& path) {
     return ss.str();
 }
 
-// Forward declaration: defined below, used by the probe env/access helpers.
 static std::string readTrim(const std::string& path);
 
-// ---- PSI ----
-// /proc/pressure/cpu format: "some avg10=0.00 avg60=0.00 avg300=0.00 total=12345"
-// H1: hardened parse — use strtod with end-pointer so garbage like "-5x" or
-// "NaN" doesn't silently become -5.0 / NaN in the struct. Each avg value must
-// be finite and in [0,100]; bad values default to 0 (missing bucket) without
-// polluting the other buckets or flipping psiAvailable to false.
 static float parsePsiAvgField(const std::string& content, size_t pos, size_t keyLen) {
     const char* p = content.c_str() + pos + keyLen;
     char* end = nullptr;
     double v = strtod(p, &end);
-    if (end == p) return 0.0f;           // no digits at all
-    if (!std::isfinite(v)) return 0.0f;  // NaN / Inf
+    if (end == p) return 0.0f;
+    if (!std::isfinite(v)) return 0.0f;
     if (v < 0.0 || v > 100.0) return 0.0f;
     return (float)v;
 }
@@ -95,8 +80,8 @@ static uint64_t parsePsiTotal(const std::string& content) {
     const char* p = content.c_str() + pos + 6;
     char* end = nullptr;
     unsigned long long v = strtoull(p, &end, 10);
-    if (end == p) return 0;   // no digits
-    if (v > 0xFFFFFFFFFFFFFull) return 0;  // absurd, treat as missing
+    if (end == p) return 0;
+    if (v > 0xFFFFFFFFFFFFFull) return 0;
     return (uint64_t)v;
 }
 
@@ -124,11 +109,6 @@ static void collectPsi(SystemPressure& s) {
         parsePsiSomeAll(memContent, s.psiMemSomePct, s.psiMemSome60Pct, s.psiMemSome300Pct);
 }
 
-// ---- GPU devfreq ----
-// ROUND-009d: expanded GPU discovery. On MTK 4.14 vendor kernels the GPU
-// devfreq node has a non-standard name (e.g. fde00000.gpu) and may not match
-// "gpu"/"mali" in the path segment alone. We enumerate ALL devfreq entries
-// and pick the best GPU candidate by name hints + frequency range + governor.
 static std::string findGpuDevfreqNode() {
     std::string devfreqRoot = std::string(rootSys()) + "/class/devfreq";
     DIR* d = opendir(devfreqRoot.c_str());
@@ -143,33 +123,23 @@ static std::string findGpuDevfreqNode() {
             name.find("mali") != std::string::npos ||
             name.find("pvrsrv") != std::string::npos ||
             name.find("ged") != std::string::npos;
-        // Also accept hex-address-style nodes like "fde00000.gpu" — they
-        // contain ".gpu" suffix which the nameHint already catches.
         if (nameHint) {
             best = name;
-            break;  // first name-hit is good enough
+            break;
         }
     }
     closedir(d);
     return best;
 }
 
-// Parse a vendor-specific GPU utilization string.
-// Examples:
-//   Mali: "utilisation: 12345, 67"  → 67 (second field = percent)
-//   GED:  "gpu_utilization: 45"       → 45
-// Returns -1 if unparseable.
 static int parseVendorGpuUtil(const std::string& raw) {
     if (raw.empty()) return -1;
-    // Try to find a colon-separated value.
     auto colon = raw.find(':');
     std::string valPart = (colon != std::string::npos) ? raw.substr(colon + 1) : raw;
-    // Trim.
     size_t a = valPart.find_first_not_of(" \t\n\r");
     size_t b = valPart.find_last_not_of(" \t\n\r,");
     if (a == std::string::npos) return -1;
     valPart = valPart.substr(a, b - a + 1);
-    // If there's a comma, take the second number (Mali "util: x, y").
     auto comma = valPart.find(',');
     if (comma != std::string::npos) {
         std::string second = valPart.substr(comma + 1);
@@ -182,31 +152,11 @@ static int parseVendorGpuUtil(const std::string& raw) {
     return v;
 }
 
-// ---- v4.1.1 final-round GPU probe helpers (all read-only) ----
-// v4.1.2 hotfix: access(W_OK) is NOT a writability probe under root. On this
-// device (Redmi chopin, KSU, uid=0, SELinux enforcing) every sysfs node reports
-// W_OK==0 because root bypasses DAC permission bits (CAP_DAC_OVERRIDE) — while the
-// real gate is SELinux MAC, which access(2) does NOT consult. That made 17 read-only
-// GED/platform nodes all classify as W (the screenshot's bogus "R0 / W17 / N0") and,
-// worse, flipped gpu ctrl=1 on nodes we can never actually write.
-//
-// We therefore classify a node WITHOUT ever opening it for writing:
-//   * R (readable)  — we actually read a NON-EMPTY trimmed value (not R_OK, which
-//                     is true even when SELinux makes the read return empty).
-//   * W (writable)  — only claimed when access(W_OK) is meaningful, i.e. we are
-//                     NOT root. Under root we conservatively NEVER claim W (the
-//                     screenshot machine must end up ctrl=0 / W=0).
-//   * N (unknown)   — absent, or exists but yielded no value and we cannot confirm
-//                     writability. We never write to a node to confirm it.
 static void probeEnvOnce() {
     if (g_envChecked) return;
     g_runningAsRoot = (geteuid() == 0);
     std::string en = readTrim(std::string(rootSys()) + "/fs/selinux/enforce");
     g_selinuxEnforcing = (en == "1");
-    // Test seam: under setTestRoot(), a test may force the root-env verdict by
-    // writing <testRoot>/.aatpe_env_root = "1"|"0". Production leaves g_testRoot
-    // empty so this override is inert. Lets the host suite reproduce the on-device
-    // root+SELinux-enforcing condition without actually being root.
     if (!g_testRoot.empty()) {
         std::string forceRoot = readTrim(g_testRoot + "/.aatpe_env_root");
         if (forceRoot == "1") g_runningAsRoot = true;
@@ -214,37 +164,26 @@ static void probeEnvOnce() {
     }
     g_envChecked = true;
 }
-// True only when access(W_OK) reflects a real writability gate. Under root the DAC
-// mode bits are bypassed, so W_OK succeeds on read-only nodes and must not be trusted.
 static bool trustWritableProbe() {
     probeEnvOnce();
     return !g_runningAsRoot;
 }
 
-// Access classification. outTrim (optional) receives the trimmed content we read.
-//   0 = N absent / no readable value / writability unconfirmed
-//   1 = R readable (we read a non-empty value)
-//   2 = W writable control node (only when access(W_OK) is trusted; we never write)
 static int probeNodeAccess(const std::string& path, std::string* outTrim = nullptr) {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) {
         if (outTrim) outTrim->clear();
         return 0;
     }
-    // Readability source of truth: a successful non-empty read (SELinux may let a
-    // node stat() but return empty content — that is NOT a readable telemetry node).
     std::string val = readTrim(path);
     if (outTrim) *outTrim = val;
     bool haveValue = !val.empty();
-    // Writability: only when W_OK is meaningful (non-root). We never perform a real
-    // write to confirm.
     bool writable = (trustWritableProbe() && access(path.c_str(), W_OK) == 0);
     if (writable) return 2;
     if (haveValue) return 1;
     return 0;
 }
 
-// Read a file and trim surrounding whitespace/newlines. Empty on error.
 static std::string readTrim(const std::string& path) {
     std::string c = readFileStr(path);
     size_t a = c.find_first_not_of(" \t\n\r");
@@ -253,30 +192,16 @@ static std::string readTrim(const std::string& path) {
     return c.substr(a, b - a + 1);
 }
 
-// GED current-frequency unit classifier. MTK GED has shipped three mutually
-// incompatible encodings across vendor kernels and the node carries no unit, so
-// we infer it from the magnitude. Reference: Mali-G77 (Dimensity 1100) OPP
-// clocks span ~200-950 MHz; an OPP table has at most ~16 steps.
-//   raw <= kGedFreqLevelMax (<=64) -> an OPP/step INDEX, not a clock. We refuse to
-//        fabricate MHz: *isLevel=true and we return 0 (panel shows "OPP level N").
-//   raw >= kGedFreqMinKhz (>=20000) -> already in kHz (e.g. 400000 = 400 MHz).
-//   64 < raw < 20000 -> in MHz (e.g. 700); convert to kHz = raw*1000.
-// Rationale: a real GPU clock never sits in (64, 20000) under a consistent unit
-// (MHz clocks are 100-1000; kHz clocks are >=100000), so the two gaps separate
-// index / MHz / kHz cleanly. Anything <=64 is treated as a level rather than a
-// tiny mis-labelled frequency.
 static const int kGedFreqLevelMax = 64;
 static const int kGedFreqMinKhz   = 20000;
 static int classifyGedFreq(int raw, bool* isLevel) {
     *isLevel = false;
     if (raw <= 0) return 0;
     if (raw <= kGedFreqLevelMax) { *isLevel = true; return 0; }
-    if (raw >= kGedFreqMinKhz) return raw;   // already kHz
-    return raw * 1000;                        // MHz -> kHz
+    if (raw >= kGedFreqMinKhz) return raw;
+    return raw * 1000;
 }
 
-// Append one "<tag>=<status>" or "<tag>=<status>:<value>" entry to the probe
-// line. statusChar is 'R'/'W'/'N'. Value is truncated to keep the line bounded.
 static void probeAppend(std::string& out, const char* tag, int accessLvl,
                         const std::string& value, bool withValue) {
     if (!out.empty()) out += ";";
@@ -295,10 +220,8 @@ static void probeAppend(std::string& out, const char* tag, int accessLvl,
 static void collectGpu(SystemPressure& s) {
     std::string gpuNode = findGpuDevfreqNode();
     std::string gpuSource;
-    // v4.1.1 final-round: control capability = an actual WRITABLE node. A merely
-    // readable frequency earns gpuFreqAvail (monitoring), NOT gpuCtrl.
     bool hasFreqCtrl = false;
-    std::string probe;   // gpu_probe line, built up across this function
+    std::string probe;
 
     if (!gpuNode.empty()) {
         s.gpuDevName = gpuNode;
@@ -308,11 +231,9 @@ static void collectGpu(SystemPressure& s) {
         std::string curFreq = readFileStr(base + "/cur_freq");
         if (!curFreq.empty()) {
             s.gpuFreqKhz = atoi(curFreq.c_str());
-            s.gpuFreqAvail = true;     // readable current frequency (monitoring)
+            s.gpuFreqAvail = true;
             s.gpuFreqRaw = s.gpuFreqKhz;
         }
-        // Control knobs on a standard devfreq device: governor / max_freq /
-        // min_freq are the writable tuning nodes. Probe W_OK only (no write).
         probeAppend(probe, "devfreq", s.gpuFreqAvail ? 1 : 0, "", false);
         if (probeNodeAccess(base + "/governor") == 2 ||
             probeNodeAccess(base + "/max_freq") == 2 ||
@@ -324,8 +245,6 @@ static void collectGpu(SystemPressure& s) {
         if (!avail.empty()) {
             std::istringstream iss(avail);
             int f;
-            // P1 round7: take the MAX value regardless of list order (real
-            // available_frequencies may be ascending or descending).
             long mx = 0;
             while (iss >> f) if (f > mx) mx = f;
             s.gpuMaxKhz = (float)mx;
@@ -341,7 +260,6 @@ static void collectGpu(SystemPressure& s) {
             s.gpuGovernor = gov;
         }
 
-        // GPU utilization from devfreq load node.
         std::string loadStr = readFileStr(base + "/load");
         if (!loadStr.empty()) {
             int v = atoi(loadStr.c_str());
@@ -350,9 +268,6 @@ static void collectGpu(SystemPressure& s) {
         }
     }
 
-    // ---- v4.1.1 final-round: MTK GED /sys/kernel/ged/hal full read-only enum.
-    // Real-device (Redmi chopin, D1100/Mali-G77, self-built 4.14.186) node list.
-    // NOTE the vendor spelling: current_freqency / previous_freqency (sic).
     struct GedNode { const char* tag; const char* name; bool key; };
     static const GedNode kGedNodes[] = {
         {"util",       "gpu_utilization",            true },
@@ -381,9 +296,6 @@ static void collectGpu(SystemPressure& s) {
             int v = parseVendorGpuUtil(val);
             if (v >= 0) { s.gpuUtilPct = v; if (gpuSource.empty()) gpuSource = baseTag; }
         }
-        // Current frequency: prefer the real vendor node current_freqency. When we
-        // actually get a frequency, make it the reported source (more informative
-        // than the util-only node).
         if (strcmp(gn.name, "current_freqency") == 0 && acc >= 1 && s.gpuFreqKhz == 0) {
             int raw = atoi(val.c_str());
             if (raw > 0) {
@@ -395,22 +307,18 @@ static void collectGpu(SystemPressure& s) {
                 gpuSource = baseTag;
             }
         }
-        // gpuMax only from a reliably-units-bound upbound. total_gpu_freq_level_count
-        // is a COUNT of levels (not a clock) -> deliberately NOT used to fabricate max.
         if (strcmp(gn.name, "custom_upbound_gpu_freq") == 0 && acc >= 1 && s.gpuMaxKhz == 0) {
             int raw = atoi(val.c_str());
             bool isLevel = false;
             int khz = classifyGedFreq(raw, &isLevel);
             if (!isLevel && khz > 0) s.gpuMaxKhz = khz;
         }
-        // Writable GED control nodes set ctrl=1.
         if (strcmp(gn.name, "custom_boost_gpu_freq") == 0 ||
             strcmp(gn.name, "custom_upbound_gpu_freq") == 0 ||
             strcmp(gn.name, "gpu_boost_level") == 0) {
             if (acc == 2) hasFreqCtrl = true;
         }
     }
-    // Legacy fallback node name on older MTK kernels (ged/hal/gpu_freq).
     if (s.gpuFreqKhz == 0) {
         std::string gpuFreq = readTrim(gedHal + "/gpu_freq");
         if (!gpuFreq.empty()) {
@@ -428,7 +336,6 @@ static void collectGpu(SystemPressure& s) {
         if (!cap.empty()) s.gpuMaxKhz = atoi(cap.c_str());
     }
 
-    // Mali misc node.
     if (s.gpuUtilPct < 0) {
         std::string maliUtil = readFileStr(std::string(rootSys()) + "/class/misc/mali0/device/utilization");
         if (!maliUtil.empty()) {
@@ -439,7 +346,6 @@ static void collectGpu(SystemPressure& s) {
             }
         }
     }
-    // Mali kbase parameters.
     if (s.gpuUtilPct < 0) {
         std::string kbase = readFileStr(std::string(rootSys()) + "/module/mali_kbase/parameters/gpu_utilization");
         if (!kbase.empty()) {
@@ -448,9 +354,6 @@ static void collectGpu(SystemPressure& s) {
         }
     }
 
-    // ---- v4.1.1 final-round: platform device review (root context may see more
-    // than the MT shell). Enumerate regular files under each platform GPU node and
-    // report which are readable / writable. Read-only.
     static const char* kPlatDirs[] = {
         "gpufreq",
         "13000000.mali",
@@ -479,25 +382,19 @@ static void collectGpu(SystemPressure& s) {
             }
             closedir(d);
         }
-        // gpufreq writable files are a control knob.
         if (writable > 0 && strcmp(pd, "gpufreq") == 0) hasFreqCtrl = true;
         int lvl = (writable > 0) ? 2 : (readable > 0) ? 1 : 0;
         std::string tag = std::string("plat_") + pd;
         probeAppend(probe, tag.c_str(), lvl, firstReadable, true);
     }
 
-    // GPU throttle: current freq < max * 0.95 (only when both are real clocks,
-    // i.e. not an OPP index we refused to convert).
     if (s.gpuMaxKhz > 0 && s.gpuFreqKhz > 0 && !s.gpuFreqIsLevel) {
         s.gpuThrottled = (s.gpuFreqKhz < s.gpuMaxKhz * 95 / 100);
     }
 
-    // v4.1.1 final-round: publish control capability (writable node only) and the
-    // read-only probe line. available (below) still means "any GPU telemetry".
     s.gpuCtrl = hasFreqCtrl;
     s.gpuProbe = probe;
 
-    // Store source path for diagnostics.
     if (gpuSource.empty()) {
         s.gpuDevName = "none";
         if (!g_warnedNoGpu) {
@@ -509,38 +406,28 @@ static void collectGpu(SystemPressure& s) {
     }
 }
 
-// ---- CPU thermal throttle ----
-// WD-07: enumerate the ACTUAL online CPU set instead of hardcoding cpu<16.
-// Preferred source: /sys/devices/system/cpu/online (e.g. "0-3,7-11").
-// Fallback: scan /sys/devices/system/cpu/cpu[0-9]+ directories.
-// Bound the result to kMaxCpus enumerated so a buggy sysfs can never turn
-// this into a million-iteration loop.
 static constexpr int kMaxCpusEnumerated = 256;
 
 static std::vector<int> enumerateOnlineCpus() {
     std::vector<int> cpus;
     std::string onlinePath = rootSys() + "/devices/system/cpu/online";
     std::string online = readFileStr(onlinePath);
-    // trim
     while (!online.empty() && (online.back()=='\n'||online.back()=='\r'||
                                online.back()==' '||online.back()=='\t'))
         online.pop_back();
     if (!online.empty()) {
-        // Format: comma-separated ranges, e.g. "0-3,7,10-11".
         size_t i = 0;
         while (i < online.size() && cpus.size() < (size_t)kMaxCpusEnumerated) {
-            // skip commas/space
             while (i < online.size() && (online[i]==','||online[i]==' ')) i++;
             if (i >= online.size()) break;
-            // parse a number
-            if (online[i] < '0' || online[i] > '9') break;  // garbage -> fall through
+            if (online[i] < '0' || online[i] > '9') break;
             int lo = 0;
             while (i < online.size() && online[i] >= '0' && online[i] <= '9') {
                 lo = lo*10 + (online[i]-'0'); i++;
             }
             int hi = lo;
             if (i < online.size() && online[i] == '-') {
-                i++;  // skip '-'
+                i++;
                 hi = 0;
                 while (i < online.size() && online[i] >= '0' && online[i] <= '9') {
                     hi = hi*10 + (online[i]-'0'); i++;
@@ -554,7 +441,6 @@ static std::vector<int> enumerateOnlineCpus() {
     }
     if (!cpus.empty()) return cpus;
 
-    // Fallback: enumerate cpuN directories.
     std::string base = rootSys() + "/devices/system/cpu/";
     DIR* d = ::opendir(base.c_str());
     if (d) {
@@ -577,16 +463,11 @@ static void collectCpuThrottle(SystemPressure& s) {
     int curCap = 0;
     bool throttled = false;
 
-    // WD-07: iterate the ENUMERATED online CPU set (online sysfs or cpuN dirs).
-    // Previously hardcoded `cpu<16` undercounted >16-core devices.
     std::vector<int> cpus = enumerateOnlineCpus();
     for (int cpu : cpus) {
         std::string cpudir = std::string(rootSys()) + "/devices/system/cpu/cpu" +
                              std::to_string(cpu) + "/cpufreq";
         struct stat st;
-        // WD-03: a missing/offline cpufreq dir must be SKIPPED, not `break`. A single
-        // absent cpuN (hotplug offline, vendor layout quirk) previously terminated the
-        // loop, undercounting every higher core and mis-reporting throttle state.
         if (stat(cpudir.c_str(), &st) != 0) continue;
 
         std::string hwMaxStr = readFileStr(cpudir + "/cpuinfo_max_freq");
@@ -600,7 +481,6 @@ static void collectCpuThrottle(SystemPressure& s) {
         if (hw > hwMax) hwMax = hw;
         if (curCap == 0 || cur < curCap) curCap = cur;
 
-        // Throttled if current max is >5% below hw max.
         if (cur < hw * 95 / 100) throttled = true;
     }
     s.cpuHwMaxKhz = hwMax;
@@ -608,7 +488,6 @@ static void collectCpuThrottle(SystemPressure& s) {
     s.cpuThrottled = throttled;
 }
 
-// ---- schedstat accessors ----
 int64_t getThreadRqWaitNs(int tid) {
     std::string path = std::string(rootProc()) + "/" + std::to_string(tid) + "/schedstat";
     std::ifstream f(path);
@@ -629,20 +508,14 @@ int64_t getThreadRunNs(int tid) {
     return run;
 }
 
-// ---- main collect ----
 void collect() {
     SystemPressure s;
-    // P0 fail-soft: each sub-collector is wrapped so a crash/exception in one
-    // subsystem doesn't take down the whole diag loop. Partial results are OK.
     try { collectPsi(s); } catch (...) { LOG_WARN("diag: collectPsi threw, skipped"); }
     try { collectGpu(s); } catch (...) { LOG_WARN("diag: collectGpu threw, skipped"); }
     try { collectCpuThrottle(s); } catch (...) { LOG_WARN("diag: collectCpuThrottle threw, skipped"); }
     s.sampleUptimeSec = (int64_t)time(nullptr);
 
     std::lock_guard<std::mutex> lk(g_diagMutex);
-    // WD-04: rqWaitTop is caller-populated (via setRqWaitTop), not derived by any
-    // sensor collector. Carrying the prior value forward means a collect() cycle does
-    // not wipe it out before writeStateFiles() reads g_snapshot.
     s.rqWaitTop = g_snapshot.rqWaitTop;
     g_snapshot = s;
 }
@@ -652,15 +525,11 @@ SystemPressure getSystemPressureSnapshot() {
     return g_snapshot;
 }
 
-// WD-04: publish the caller's top-N runnable-wait threads so writeStateFiles() can
-// actually emit a non-empty rq_wait_top.
 void setRqWaitTop(const std::vector<SystemPressure::RqWaitEntry>& top) {
     std::lock_guard<std::mutex> lk(g_diagMutex);
     g_snapshot.rqWaitTop = top;
 }
 
-// ---- state file writers ----
-// ROUND-010: use atomic writes to prevent torn state on crash.
 static void writeOneLine(const char* path, const std::string& content) {
     atomicWriteFile(path, content);
 }
@@ -669,9 +538,6 @@ void writeStateFiles(const char* stateDir) {
     SystemPressure s = getSystemPressureSnapshot();
     std::string dir = stateDir;
 
-    // pressure: cpu/io/mem "some" stall avg10/60/300 + total usec + available.
-    // v4.2.2 P3-1: was avg10-only; now all three tiers are persisted for offline
-    // inspection / debugging (WebUI reads the JSON snapshot, not this file).
     {
         std::string line =
             "cpu_some=" + std::to_string(s.psiCpuSomePct) +
@@ -688,12 +554,6 @@ void writeStateFiles(const char* stateDir) {
         writeOneLine((dir + "/pressure").c_str(), line);
     }
 
-    // gpu_load: gpu_util/gpu_freq/gpu_max/governor/ctrl/freq_avail/freq_raw/freq_unit/source/available
-    // v4.1.1 final-round: ctrl=1 means a WRITABLE control node exists; freq_avail=1
-    // means a current-frequency was read (monitoring) regardless of write. When the
-    // GED frequency was classified as an OPP index (unit ambiguous), gpu_freq=0 but
-    // freq_raw holds the index and freq_unit=level so the panel shows "OPP level N"
-    // instead of a fabricated MHz.
     {
         const char* freqUnit = s.gpuFreqIsLevel ? "level"
                              : (s.gpuFreqAvail  ? "khz" : "none");
@@ -710,13 +570,10 @@ void writeStateFiles(const char* stateDir) {
         writeOneLine((dir + "/gpu_load").c_str(), line);
     }
 
-    // gpu_probe: read-only node enumeration (name=R/W/N[:value]), one line. Written
-    // even when empty so the panel can show "no nodes". Never writes to any node.
     {
         writeOneLine((dir + "/gpu_probe").c_str(), s.gpuProbe);
     }
 
-    // throttle_state: cpu_throttled/cpu_cap_khz/cpu_hw_max_khz/gpu_throttled
     {
         std::string line = "cpu_throttled=" + std::string(s.cpuThrottled ? "1" : "0") +
                           ";cpu_cap_khz=" + std::to_string(s.cpuCapKhz) +
@@ -725,9 +582,6 @@ void writeStateFiles(const char* stateDir) {
         writeOneLine((dir + "/throttle_state").c_str(), line);
     }
 
-    // rq_wait_top: top5 tid:wait_ms, comma-separated. Populated by caller
-    // (who knows which threads are "key"); collector just exposes the accessor.
-    // We leave the file with a placeholder if no entries were recorded.
     if (s.rqWaitTop.empty()) {
         writeOneLine((dir + "/rq_wait_top").c_str(), "");
     } else {
@@ -741,5 +595,5 @@ void writeStateFiles(const char* stateDir) {
     }
 }
 
-} // namespace diag
-} // namespace aatpe
+}
+}

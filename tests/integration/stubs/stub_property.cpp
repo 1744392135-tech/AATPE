@@ -8,9 +8,6 @@ extern "C" int __system_property_get(const char* name, char* value) {
     value[0] = '\0'; return 0;
 }
 
-// ROUND-014 P3: stub for deleted aatpe_federated_exchange.cpp exportModel.
-// G7 removed the exchange TU; integration S9 needs the serializer for the
-// signed-peer import test. Minimal serializes the model vector + metadata.
 namespace aatpe_federated {
 std::string exportModel(const std::vector<float>& w, float alpha, int samples) {
     std::string out;

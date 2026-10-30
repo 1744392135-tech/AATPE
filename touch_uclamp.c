@@ -44,8 +44,6 @@ void touch_state_init(TouchState *st)
     st->ever_touched = 0;
 }
 
-/* Release window scales with refresh rate: shorter at higher Hz.
- * Blueprint anchors: 60Hz->80ms, 120Hz->50ms, 144Hz->40ms. */
 static uint32_t release_window_ms(const TouchConfig *cfg, float refresh_hz)
 {
     uint32_t base = cfg->base_release_ms;
@@ -75,7 +73,6 @@ void touch_decide(TouchState *st, const TouchConfig *cfg,
     }
     if (!st || !cfg || !out) return;
 
-    /* 1) sweep expired boosts -> RELEASE */
     for (uint32_t i = 0; i < st->n_boosted;) {
         if (now_ms >= st->expiry_ms[i]) {
             BoostAction a;
@@ -84,7 +81,7 @@ void touch_decide(TouchState *st, const TouchConfig *cfg,
             a.uclamp_min_pct = 0.0f;
             a.duration_ms = 0u;
             add_action(out, a);
-            /* swap-remove */
+
             st->tid[i] = st->tid[st->n_boosted - 1u];
             st->expiry_ms[i] = st->expiry_ms[st->n_boosted - 1u];
             st->n_boosted--;
@@ -93,7 +90,6 @@ void touch_decide(TouchState *st, const TouchConfig *cfg,
         }
     }
 
-    /* 2) on touch, select and (re-arm) boosts */
     if (touch_active && touch_active != 0) {
         st->last_touch_ms = now_ms;
         st->ever_touched = 1;
@@ -122,12 +118,11 @@ void touch_decide(TouchState *st, const TouchConfig *cfg,
                          t->frame_contribution >= cfg->high_contrib_threshold)
                     lvl = cfg->uclamp_highcontrib_pct;
                 else
-                    continue; /* BG / low-contribution / unknown -> skip */
+                    continue;
 
                 if (overrun) lvl += cfg->uclamp_on_overrun_bonus;
                 lvl = clampf(lvl, 0.0f, 100.0f);
 
-                /* record / re-arm */
                 int idx = boosted_index(st, t->tid);
                 if (idx < 0) {
                     if (st->n_boosted >= TOUCH_FF_MAX_THREADS) continue;
@@ -148,7 +143,6 @@ void touch_decide(TouchState *st, const TouchConfig *cfg,
         }
     }
 
-    /* 3) global floor: low while idle, slightly higher during active touch */
     int live = (st->n_boosted > 0u) || (touch_active && touch_active != 0);
     out->touch_boost_active = live ? 1 : 0;
     out->global_schedtune_boost_pct =

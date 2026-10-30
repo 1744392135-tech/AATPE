@@ -1,9 +1,4 @@
 #!/bin/bash
-# run_storm_san.sh — Run S25/S26 storm scenarios under ASan and TSan.
-# Uses the exact same production/stub recipe as tests/integration/build.sh.
-# C09: pipefail required so a failing/crashing sanitizer run (the first
-# component of the `... | tail -30` pipeline) propagates its exit instead of
-# tail's success.
 set -eo pipefail
 SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 IT="$SRC/tests/integration"
@@ -64,9 +59,6 @@ run_san() {
     echo ""
     echo "=== Running S25+S26 under $san ==="
     local rc=0
-    # C09: `| tail -30` alone yields tail's (zero) exit even when the storm run
-    # crashes; with pipefail the pipeline goes non-zero, but we still capture the
-    # FIRST component's code explicitly so we can report it and exit non-zero.
     AATPE_ONLY="S25_ThreadStorm,S26_FgSwitchStorm" unshare --map-root-user --mount "$bin" 2>&1 | tail -30 || rc=${PIPESTATUS[0]}
     if [ "$rc" -ne 0 ]; then
         echo "  [FAIL] $san storm run FAILED exit=$rc"

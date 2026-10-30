@@ -2,8 +2,6 @@
 
 #include <math.h>
 
-/* THM-13: fallback horizon seconds used only when cfg is NULL (never in
-   production). Kept as a named constant instead of a magic literal. */
 #define THERM_FF_FALLBACK_HORIZON_S 120.0f
 
 static FfGear wall_to_gear(ThermHardWall w)
@@ -52,8 +50,6 @@ void therm_ff_state_init(ThermFfState *st)
     st->last_ms = 0.0;
 }
 
-/* Ordinary least-squares slope (deg C/s) over the window. Returns 0 when the
- * sample count is too small or the time spread is degenerate (all equal). */
 static float ols_slope(const ThermFfState *st)
 {
     if (st->n < 2u) return 0.0f;
@@ -73,7 +69,7 @@ static float ols_slope(const ThermFfState *st)
         num += dt * dy;
         den += dt * dt;
     }
-    if (den <= 1e-9) return 0.0f; /* all samples at the same time */
+    if (den <= 1e-9) return 0.0f;
     double slope = num / den;
     if (!isfinite(slope)) return 0.0f;
     return (float)slope;
@@ -83,7 +79,7 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
                      double now_ms, float temp_c, ThermHardWall hard_wall,
                      ThermFfOut *out)
 {
-    /* default out (bounded) */
+
     if (out) {
         out->slope_cps = 0.0f;
         out->eta_warning_s = cfg ? cfg->max_horizon_s : THERM_FF_FALLBACK_HORIZON_S;
@@ -99,22 +95,17 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
     if (win < 2u) win = 2u;
     if (win > THERM_FF_MAX_WINDOW) win = THERM_FF_MAX_WINDOW;
 
-    /* THM-07: if the configured window shrinks at runtime below the number of
-       samples already in the ring, reset the ring so stale samples at indices
-       >= win are not fed to the OLS slope. Production sets window once; this
-       is a defensive reset. */
     if (st->n > win) { st->n = 0; st->head = 0; }
 
     int good = 1;
 
-    /* sample validity: NaN/inf or physically absurd range */
     if (!isfinite(temp_c) || temp_c < -40.0f || temp_c > 200.0f) good = 0;
-    /* monotonic time */
+
     if (!isfinite(now_ms) || now_ms <= st->last_ms) good = 0;
 
     if (good && st->have_ewma &&
         fabsf(temp_c - st->ewma) > cfg->outlier_delta_c) {
-        /* reject a wild jump as a sensor spike, not a real trend change */
+
         good = 0;
     }
 
@@ -122,7 +113,7 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
         st->consec_bad++;
         if (st->consec_bad >= cfg->max_consec_bad) {
             st->sensor_ok = 0;
-            st->gear = FF_GEAR_NONE; /* fail safe */
+            st->gear = FF_GEAR_NONE;
         }
     } else {
         st->consec_bad = 0;
@@ -142,13 +133,11 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
         st->last_ms = now_ms;
     }
 
-    /* --- slope --- */
     float slope = ols_slope(st);
     if (slope > cfg->max_slope_abs) slope = cfg->max_slope_abs;
     if (slope < -cfg->max_slope_abs) slope = -cfg->max_slope_abs;
     st->slope_cps = slope;
 
-    /* --- ETA to threshold (bounded; cooling/stable/fault => horizon) --- */
     float horizon = cfg->max_horizon_s;
     float eta_w = horizon;
     float eta_e = horizon;
@@ -167,7 +156,6 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
         }
     }
 
-    /* --- feedforward gear with escalate-now / relax-later hysteresis --- */
     FfGear desired = FF_GEAR_NONE;
     if (st->sensor_ok) {
         if (eta_w <= cfg->eta_severe_s) desired = FF_GEAR_SEVERE;
@@ -179,10 +167,8 @@ void therm_ff_update(ThermFfState *st, const ThermFfConfig *cfg,
     if (!st->sensor_ok) {
         st->gear = FF_GEAR_NONE;
     } else if (desired > st->gear) {
-        st->gear = desired; /* escalate immediately */
+        st->gear = desired;
     } else if (desired < st->gear) {
-        /* relax only once ETA has grown comfortably past the current gear's
-         * entry threshold + exit band -> prevents threshold flapping. */
         float relax_at;
         switch (st->gear) {
         case FF_GEAR_LIGHT: relax_at = cfg->eta_light_s + cfg->gear_exit_band_s; break;

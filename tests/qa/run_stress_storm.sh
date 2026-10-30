@@ -1,11 +1,4 @@
 #!/bin/bash
-# run_stress_storm.sh — Run all three long-running stress tests with proper production TU linkage.
-#
-# 1. Config hot-reload storm (2000 iterations) — links aatped_config.cpp
-# 2. Foreground switch storm (5000 iterations) — runs S26 from integration binary
-# 3. Thread create/destroy storm (2000 iterations) — runs S25 from integration binary
-#
-# Reuses the verified PROD/stub recipe from run_storm_san.sh for thread/fg storms.
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QA_DIR="$SRC/tests/qa"
@@ -21,7 +14,6 @@ echo "=============================================="
 echo "AATPE Long-Running Stress Storm Suite"
 echo "=============================================="
 
-# 1. Config hot-reload storm — build with production config TU
 echo ""
 echo "=== [1/3] Config Hot-Reload Storm (2000 iterations) ==="
 PROD_CONFIG="aatped_config aatpe_config_schema aatpe_ml aatpe_ml_hybrid_main aatpe_ml_hybrid_predict aatpe_ml_hybrid_train aatpe_ml_hybrid_persist aatpe_ml_hy_alpha aatped_hmac"
@@ -44,7 +36,6 @@ done
 for s in $STUB_CONFIG; do
     obj="$BUILD/stub_$s.o"
     if [ ! -f "$obj" ] || [ "$IT/stubs/$s.cpp" -nt "$obj" ]; then
-        # config stubs live in tests/stubs, not integration/stubs
         stubpath="$SRC/tests/stubs/$s.cpp"
         if [ ! -f "$stubpath" ]; then stubpath="$IT/stubs/$s.cpp"; fi
         echo "    CC stub_$s"
@@ -66,21 +57,15 @@ echo "  Running 2000 iterations..."
 "$BUILD/stress_reload_storm" 2000 2>&1 | tee "$ART/stress_reload_storm.log"
 RC1=${PIPESTATUS[0]}
 
-# 2. Foreground switch storm + 3. Thread storm — reuse integration binary from run_storm_san.sh
 echo ""
 echo "=== [2/3] Foreground Switch Storm (S26, 5000 iterations) ==="
 echo "=== [3/3] Thread Storm (S25, 2000 iterations) ==="
 echo "  (Reusing integration binary from run_storm_san.sh recipe)"
 
-# Build the integration binary with ASan (same as run_storm_san.sh)
 SAN="address"
 SANBUILD="$IT/build_san"
 mkdir -p "$SANBUILD"
 
-# v4.4.8: PROD list mirrors tests/integration/build.sh (and the `main` san
-# recipe) exactly. New v4.4.x TUs (psi/arb/preboost/scenewire glue/c4-freezer/
-# thermal_ff/thermal_headroom/apklabel/placement_heal) were missing, which
-# caused [3/3] thread-storm link to fail with undefined symbols.
 PROD="aatped_main aatped_utils aatped_logging aatped_config aatped_topology \
       aatped_state aatped_control aatped_hmac aatped_gamescene aatped_battery \
       aatped_gpu aatped_audio aatped_applaunch aatped_uevent aatped_abtest \
@@ -96,8 +81,6 @@ PROD="aatped_main aatped_utils aatped_logging aatped_config aatped_topology \
       aatped_arbitrator mech/src/game_scene mech/src/device_profile mech/src/load_forecast mech/src/context \
       thermal_headroom scene_infer c2_envelope placement_heal_decision pre_boost_predict"
 
-# AATPED_ARBITRATOR_DAEMON compiles arb::init/tick daemon wiring (same as
-# integration/build.sh PRODFLAGS).
 PRODFLAGS2="$BASEFLAGS -fsanitize=$SAN -fno-omit-frame-pointer -g -Dmain=aatped_shim_main -DAATPE_HOST_TEST -DAATPE_GPU_BOOST_TEST -DAATPED_ARBITRATOR_DAEMON"
 
 echo "  Building integration binary ($SAN)..."
@@ -122,10 +105,6 @@ echo "    CC stub_property"
 $CXX $BASEFLAGS -fsanitize=$SAN -fno-omit-frame-pointer -g -c "$IT/stubs/stub_property.cpp" -o "$SANBUILD/stub_property.$SAN.o" 2> "$SANBUILD/stub.$SAN.err" || {
     echo "FAILED: stub_property"; head -20 "$SANBUILD/stub.$SAN.err"; exit 1; }
 
-# v4.4.5: host no-op stubs for scenewire glue + c4-freezer snapshot (same as
-# tests/integration/build.sh). Without these, aatped_main.o references
-# auxTickSlot3/loadingActiveSuppressesPreboost/chooseRoute/c4FreezerTick/
-# c4FreezerStateJson which compile out under AATPE_HOST_TEST.
 echo "    CC stub_scenewire"
 $CXX $BASEFLAGS -fsanitize=$SAN -fno-omit-frame-pointer -g -I$SRC -c "$SRC/tests/stubs/scenewire.cpp" -o "$SANBUILD/stub_scenewire.$SAN.o" 2> "$SANBUILD/stub_sw.$SAN.err" || {
     echo "FAILED: stub_scenewire"; head -20 "$SANBUILD/stub_sw.$SAN.err"; exit 1; }
@@ -146,7 +125,6 @@ echo "  Running S25+S26 (ASan)..."
 AATPE_ONLY="S25_ThreadStorm,S26_FgSwitchStorm" unshare --map-root-user --mount "$SANBUILD/it_$SAN" 2>&1 | tail -15
 RC2=${PIPESTATUS[0]}
 
-# TSan version
 echo ""
 echo "=== TSan versions (race detection for thread/fg storms) ==="
 SAN="thread"
@@ -194,7 +172,6 @@ echo "  Running S25+S26 (TSan)..."
 AATPE_ONLY="S25_ThreadStorm,S26_FgSwitchStorm" unshare --map-root-user --mount "$SANBUILD/it_$SAN" 2>&1 | tail -15
 RC_TSAN=${PIPESTATUS[0]}
 
-# Summary
 echo ""
 echo "=============================================="
 echo "STRESS STORM SUMMARY"

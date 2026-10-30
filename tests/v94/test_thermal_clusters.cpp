@@ -1,19 +1,14 @@
-// HOTFIX isolated test — #19: thermal throttle evidence scans ALL clusters, not cpu0.
-// Pure test body; all stubs come from tests/stubs/thermal_deps.cpp + log_stub.cpp +
-// aatpe_ml.o (same surface as the v94 `thermal` target). Build links thermal.o.
 #include <cstdio>
 #include <string>
 #include <vector>
 #include <cstdlib>
 
-// thermalSetTestRoot is a global (file-scope) function in thermal.cpp; the accessors
-// I exposed are in namespace aatpe.
 void thermalSetTestRoot(const std::string& r);
 namespace aatpe {
 bool thermalAnyCpuScalingMaxThrottledForTest();
 bool thermalAnyCpufreqCoolingActiveForTest();
 }
-extern std::vector<int> g_allCpus;   // defined in thermal_deps.cpp
+extern std::vector<int> g_allCpus;
 
 static int g_pass = 0, g_fail = 0;
 #define CHECK(c, m) do { if (c) { g_pass++; printf("  [PASS] %s\n", m); } \
@@ -29,14 +24,13 @@ int main() {
     std::string root = "/tmp/hotfix_thermal_root";
     system(("rm -rf " + root + " && mkdir -p " + root).c_str());
 
-    // --- Case A: two clusters, only BIG (cpu4) throttled. ---
     std::string cl = root + "/sys/devices/system/cpu";
     Mk(cl + "/cpu0/cpufreq"); Mk(cl + "/cpu4/cpufreq");
     W(cl + "/cpu0/online", "1");
-    W(cl + "/cpu0/cpufreq/scaling_max_freq", "1800000");   // == hw max: NOT throttled
+    W(cl + "/cpu0/cpufreq/scaling_max_freq", "1800000");
     W(cl + "/cpu0/cpufreq/cpuinfo_max_freq", "1800000");
     W(cl + "/cpu4/online", "1");
-    W(cl + "/cpu4/cpufreq/scaling_max_freq", "600000");    // < hw max: THROTTLED
+    W(cl + "/cpu4/cpufreq/scaling_max_freq", "600000");
     W(cl + "/cpu4/cpufreq/cpuinfo_max_freq", "2800000");
 
     g_allCpus = {0, 4};
@@ -48,7 +42,6 @@ int main() {
     thr = aatpe::thermalAnyCpuScalingMaxThrottledForTest();
     CHECK(thr == false, "both clusters at hw max -> no throttle evidence");
 
-    // --- Case B: cooling_device0 idle (gpu), cooling_device3 (cpufreq) active. ---
     std::string th = root + "/sys/class/thermal";
     Mk(th + "/cooling_device0"); Mk(th + "/cooling_device3");
     W(th + "/cooling_device0/cur_state", "0");

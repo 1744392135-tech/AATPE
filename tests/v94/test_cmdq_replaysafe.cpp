@@ -1,10 +1,3 @@
-// test_cmdq_replaysafe.cpp — MON-11: crash-replay classification.
-//
-// After an unclean shutdown, leftover cmd-NNNNNN files in commands/ are re-drained
-// on the next start. State-setting commands (set_*, migrate=, game_add=) are
-// idempotent and safe to replay; one-shot triggers (restart, clear_log,
-// manual_unlock_watchdog, shadow_dump=1, restored_after_crash_window) must NOT
-// be replayed. This test exercises commandLineIsReplaySafe() directly.
 #include <cstdio>
 #include <string>
 #include "aatpe_command_queue.h"
@@ -31,8 +24,6 @@ int main() {
 
     printf("=== cmdq_replaysafe: one-shot triggers are NOT replay-safe ===\n");
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("restart"),               "'restart' NOT replay-safe");
-    // P3-3: "stop" sets g_shouldExit; a crash-leftover "stop" would kill the
-    // freshly-started daemon on next drain. Must be quarantined at startup.
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("stop"),                 "'stop' NOT replay-safe (P3-3)");
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("clear_log"),            "'clear_log' NOT replay-safe");
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("manual_unlock_watchdog"),
@@ -43,14 +34,10 @@ int main() {
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("shadow_dump"),           "bare shadow_dump NOT replay-safe");
 
     printf("=== cmdq_replaysafe: boundary conditions ===\n");
-    // P3-3 boundary: exact match only. "stop_foo" / "stopped" / "stop=now"
-    // must NOT be misclassified as the one-shot "stop" command.
     CHECK( aatpe_cmdq::commandLineIsReplaySafe("stop_foo=1"),          "'stop_foo=1' does NOT collide with 'stop'");
     CHECK( aatpe_cmdq::commandLineIsReplaySafe("stopped"),              "'stopped' does NOT collide with 'stop'");
-    // Trailing whitespace/newline should be trimmed before classification.
     CHECK(!aatpe_cmdq::commandLineIsReplaySafe("restart\n"),             "'restart\\n' trims then blocks");
     CHECK( aatpe_cmdq::commandLineIsReplaySafe("set_mode=passive  "),   "trailing spaces trimmed, replay-safe");
-    // Prefix false-positive: "shadow_dump_other" must NOT match shadow_dump.
     CHECK( aatpe_cmdq::commandLineIsReplaySafe("shadow_dump_other=1"),
            "shadow_dump_other=1 does NOT collide with shadow_dump");
 

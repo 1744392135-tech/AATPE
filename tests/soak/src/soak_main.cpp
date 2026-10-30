@@ -1,26 +1,9 @@
-// AATPE W1 REAL soak harness.
-// Drives the REAL production per-tick work (collection + state machine + dump +
-// control) inside an unprivileged user+mount namespace with a fake /sys,/proc.
-//
-// Two soak modes:
-//   (1) fast  : tight loop, N ticks (default 260000 ~= 72h at 1 tick/s cadence),
-//               no sleeping. Used to amplify any per-tick fd/handle/container leak.
-//   (2) wall  : real wall-clock run, one real 1s tick, AATPE_WALL_SECONDS (default
-//               1800 = 30 min). Timestamped samples prove real elapsed time.
-//
-// Links the real production objects (compiled -DAATPE_HOST_TEST, main renamed)
-// plus it_common helpers. Does NOT modify product source.
 #include "it_common.h"
 #include "aatped_control.h"
 #include "aatped_topology.h"
 #include "aatped_utils.h"
 #include "aatpe_placement_mech.h"
 
-// v4.3.2: production frame path (frame.cpp). Calling it once starts the detached
-// low-nice label-warmup background thread (idempotent start via call_once) so the
-// 4h soak exercises that thread's long-lived lifecycle / constant thread count /
-// clean exit on g_shouldExit. Harmless on host: listInstalledPackages() returns
-// empty under the test harness, so the warmup thread just idles.
 extern void readSurfaceFlinger();
 
 #include <dirent.h>
@@ -34,11 +17,6 @@ extern void readSurfaceFlinger();
 #include <fstream>
 #include <atomic>
 
-// ---------------------------------------------------------------------------
-// Resource sampler
-// ---------------------------------------------------------------------------
-// Resource sampler. The daemon-facing /proc is a fake bind-mount, so fd/RSS are
-// read from a side-mounted REAL procfs (AATPE_REAL_PROC) when provided.
 static const char* realProc() {
     static const char* rp = ::getenv("AATPE_REAL_PROC");
     return rp ? rp : "/proc";
@@ -69,8 +47,6 @@ static long readRssKb() {
 
 struct ContSizes { long threads, history, cpuMetrics, stateHistory, unmigratable; };
 
-// Latest credential-sample values, refreshed by the wall loop and read by the
-// CSV emitter. Zero until the first credential round runs.
 struct CredOut { long sseSlots; long activeSessions; long nonceCache; long halfopenReclaimMs; };
 static CredOut g_cred{0,0,0,-1};
 static ContSizes readContainers() {
@@ -91,7 +67,6 @@ static std::string isoNow() {
     return b;
 }
 
-// Global CSV file handle (opened once, line-buffered).
 static FILE* g_csv = nullptr;
 static std::chrono::steady_clock::time_point g_boot;
 
@@ -114,9 +89,6 @@ static void emitSample(const char* phase, long tick, long elapsedSec) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fake /proc/stat busy% setter (mirrors integration scenario helper).
-// ---------------------------------------------------------------------------
 static void setProcStatBusy(int busyPercent) {
     static unsigned long long base = 100000;
     base += 1000;
@@ -142,15 +114,13 @@ static void seedThreads() {
     itAddProcThread(3000, "com.test.app",    3003, "GC",               1000,    100, 0, 402);
 }
 
-// Run one production work tick. Returns nothing; drives real code paths.
 static void doOneTick(long tick) {
-    // cpu load pattern: triangle 20..95..20 to drive NORMAL<->DEGRADED naturally.
     int busy = 20 + (int)((tick % 400) * 75 / 400);
     if ((tick / 400) % 2 == 1) busy = 95 - (int)((tick % 400) * 75 / 400);
     setProcStatBusy(busy);
     readCpuMetrics();
-    checkSystemLoad();                 // auto NORMAL<->DEGRADED feedback
-    if (tick % 50 == 0) scanThreads(); // periodic thread re-scan (lifecycle)
+    checkSystemLoad();
+    if (tick % 50 == 0) scanThreads();
     {
         std::lock_guard<std::mutex> lk(g_threadsMutex);
         for (auto& kv : g_threads) {
@@ -163,13 +133,10 @@ static void doOneTick(long tick) {
         }
     }
     for (int c = 0; c < g_cpuCount; c++) recordCpuLoadSample(c, busy);
-    readThermal();                     // cached per-tick thermal read
-    if (tick % 25 == 0) writeStateJson();  // dump/serialize path
+    readThermal();
+    if (tick % 25 == 0) writeStateJson();
 }
 
-// ---------------------------------------------------------------------------
-// Phases (declared; defined in soak_phases.cpp)
-// ---------------------------------------------------------------------------
 extern int phaseStateMatrix();
 extern int phaseFaultInjection();
 extern int phaseSignalSafety();
@@ -178,7 +145,6 @@ extern int phaseCredentialBootstrap();
 extern CredOut credRound(int roundNo);
 extern void phaseHttpTeardown();
 
-// ===========================================================================
 int main(int argc, char** argv) {
     g_boot = std::chrono::steady_clock::now();
     const char* logdir = getenv("AATPE_SOAK_LOGDIR");
@@ -199,7 +165,6 @@ int main(int argc, char** argv) {
            fastTicks, sampleEvery, wallSeconds, logdir);
     ::printf("%s boot %s\n", isoNow().c_str(), argv[0] ? argv[0] : "");
 
-    // ---- bring up (mirror integration itBringUp) ----
     itRedirectPaths();
     logInit();
     itBootstrapConfig(
@@ -209,18 +174,12 @@ int main(int argc, char** argv) {
     loadConfig();
     loadThreadRules();
     detectCpuTopology();
-    aatpe_state_setDwellMsForTest(0);   // no 5s dwell in fast soak
+    aatpe_state_setDwellMsForTest(0);
     transitionToState(SystemState::NORMAL, "soak-boot");
     seedThreads();
     scanThreads();
-    // v4.3.2: start the detached label-warmup background thread via the production
-    // frame path (idempotent). Called once at boot; the thread self-runs and exits
-    // on g_shouldExit. This is the minimal harness hook to exercise the new thread.
     readSurfaceFlinger();
 
-    // =======================================================================
-    // PHASE 1: fast simulated soak (tight loop, N ticks)
-    // =======================================================================
     printf("\n--- PHASE1 fast simulated soak: %ld ticks ---\n", fastTicks);
     emitSample("fast", 0, 0);
     for (long tick = 1; tick <= fastTicks; tick++) {
@@ -240,15 +199,6 @@ int main(int argc, char** argv) {
         printf("  [%s] FAST DONE ticks=%ld wall=%lds\n", isoNow().c_str(), fastTicks, el);
     }
 
-    // =======================================================================
-    // PHASE 2: real wall-clock soak, 1 real tick / 1s, with periodic credential
-    // rounds. The wall loop must NEVER block for minute-long stretches: it only
-    // pumps doOneTick(1/s) + credRound(per credInterval) + half-open batch +
-    // 15s sampling. The heavy matrix/fault phases run ONCE AFTER the wall loop
-    // (W1 proven context), never replayed inside the wall (that deadlocked:
-    // background SSE/cred threads race the matrix recovery transitions, and
-    // pumping stops while the matrix runs -> CSV frozen 18+min).
-    // =======================================================================
     printf("\n--- PHASE2 real wall-clock soak: %ld s ---\n", wallSeconds);
     int cbFail = phaseCredentialBootstrap();
     long credInterval = 90;   if (const char* e=getenv("AATPE_CRED_INTERVAL")) credInterval=::atol(e);
@@ -274,26 +224,17 @@ int main(int argc, char** argv) {
         printf("  [%s] WALL DONE requested=%lds actual=%lds credRounds=%ld\n", isoNow().c_str(), wallSeconds, el, rounds);
     }
 
-    // W1 heavy phases, once, after wall pumping ends (controlled context).
     totalMatrixFail = phaseStateMatrix();
     totalFaultFail  = phaseFaultInjection();
 
-    // =======================================================================
-    // PHASE 6: uninstall coverage enumeration
-    // =======================================================================
     long resid = phaseUninstallCoverage();
 
     phaseHttpTeardown();
-    totalSignalFail = phaseSignalSafety();   // after HTTP threads joined
+    totalSignalFail = phaseSignalSafety();
     ::fclose(g_csv);
     printf("\n=== SOAK SUMMARY ===\n");
     printf("fastTicks=%ld wallSeconds=%ld matrixFail=%d faultFail=%d signalFail=%d credBootFail=%d residualPaths=%ld credRounds=%ld\n",
            fastTicks, wallSeconds, totalMatrixFail, totalFaultFail, totalSignalFail, cbFail, resid, rounds);
-    // C08: any phase reporting a non-zero fail count MUST fail the process.
-    // Previously main() assigned the per-phase fail counts to locals but then
-    // unconditionally `return 0;`, so matrix/fault/signal/credBoot regressions
-    // never failed the harness. `resid` (runtime-materialized file count) is a
-    // coverage enumeration that is expected to be >0, so it does NOT gate.
     int totalFails = cbFail + totalMatrixFail + totalFaultFail + totalSignalFail;
     if (totalFails != 0) {
         printf("  [FAIL] soak: %d total phase failure(s) -> exit 1\n", totalFails);

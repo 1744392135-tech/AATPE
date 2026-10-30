@@ -1,11 +1,10 @@
-// test_probe.cpp - Direct unit tests for aatpe-probe.cpp helpers.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #define main probe_main_unused
 #include "aatpe-probe.cpp"
 #undef main
-extern int g_pass, g_fail; // reuse probe.cpp counters
+extern int g_pass, g_fail;
 #define CHECK(c,m) do{ if(c){g_pass++;printf("  [PASS] %s\n",m);} else {g_fail++;printf("  [FAIL] %s\n",m);} }while(0)
 int main(){
     printf("=== Probe: color ===\n");
@@ -29,8 +28,6 @@ int main(){
     CHECK(g_warn==w0+1, "probeItem 'WARN' increments g_warn");
     probeItem("TEST","item","FAIL","r","a","d");
     CHECK(g_fail==f0+1, "probeItem 'FAIL' increments g_fail");
-    // Restore the counter so this deliberate classification probe does not
-    // pollute the process exit code (aatpe-probe.cpp returns g_fail>0 -> 1).
     g_fail = f0;
 
     printf("=== Probe: G9-005 exit code matches verdict bands ===\n");

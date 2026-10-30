@@ -1,13 +1,3 @@
-// stress_test.cpp — host stress / load test for AATPE concurrency primitives.
-//
-// Targets (all host-buildable, no ARM64 needed):
-//   1. SpscBoundedQueue (lock-free ring, aatpe_ebpf.h): 2M-event producer/consumer
-//      throughput, ring-full drop-newest correctness, in-order delivery.
-//   2. High-thread contention: 8 producer threads + 2 consumer threads hammering
-//      multiple queues and a shared atomic counter (queue-full / burst load).
-//   3. popBatch budget semantics under a fast producer (large candidate batches).
-//
-// Build: tests/qa/run_stress.sh. Run: ./build/stress/stress_test [iterations]
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -27,7 +17,6 @@ static int g_fail = 0;
 
 struct Ev { uint64_t seq; uint32_t cpu; uint64_t ts; };
 
-// --- 1. SPSC throughput + in-order delivery under a small ring ---------------
 static void test_spsc_ordered(uint64_t total) {
     printf("=== SPSC ordered delivery (%llu events, ring=64) ===\n",
            (unsigned long long)total);
@@ -39,7 +28,7 @@ static void test_spsc_ordered(uint64_t total) {
     std::thread prod([&] {
         for (uint64_t i = 0; i < total; ++i) {
             while (!q.push(Ev{i, (uint32_t)(i % 8), 1000 + i})) {
-                std::this_thread::yield();   // ring full -> back off
+                std::this_thread::yield();
             }
         }
         prod_done.store(true);
@@ -63,13 +52,11 @@ static void test_spsc_ordered(uint64_t total) {
            (unsigned long long)q.droppedCount());
 }
 
-// --- 2. Ring-full drop-newest under a fast producer / slow consumer ---------
 static void test_ring_full() {
     printf("=== ring-full drop-newest (ring=16, producer faster than consumer) ===\n");
     SpscBoundedQueue<Ev> q(16);
     const uint64_t total = 200000;
     std::atomic<bool> prod_done{false};
-    // Producer floods; consumer reads slowly in bursts.
     std::thread prod([&] {
         for (uint64_t i = 0; i < total; ++i) q.push(Ev{i, 0, 0});
         prod_done.store(true);
@@ -94,7 +81,6 @@ static void test_ring_full() {
     CHECK(dropped > 0, "ring overflow actually exercised (drop-newest path hit)");
 }
 
-// --- 3. Many threads, many single-producer queues, burst drain -------------
 static void test_thread_storm() {
     printf("=== thread storm (8 producers, each own SPSC queue, 2 drainers) ===\n");
     constexpr int NP = 8;
@@ -113,7 +99,6 @@ static void test_thread_storm() {
             }
         });
     }
-    // drainers keep all queues non-full while producers run.
     std::vector<std::thread> drainers;
     std::vector<uint64_t> drained(NP, 0);
     for (int c = 0; c < 2; ++c) {
@@ -129,7 +114,6 @@ static void test_thread_storm() {
         });
     }
     for (auto& p : producers) p.join();
-    // final drain
     std::vector<Ev> out;
     uint64_t got = 0;
     for (int i = 0; i < NP; ++i) { out.clear(); got += qs[i]->popBatch(out, 0); }

@@ -1,11 +1,4 @@
 #!/bin/bash
-# repeat.sh — run a sanitizer test binary N times, count clean vs error runs,
-# save each run's sanitizer report. Usage:
-#   MODE=au BIN=<path> N=<iters> [ARGS...] repeat.sh
-# Env:
-#   MODE=au|tsan   selects sanitizer env options
-#   N              iterations (default 100)
-#   TAG            label for log naming (default basename of bin)
 set -u
 BIN="${BIN:?BIN= binary path required}"
 N="${N:-100}"

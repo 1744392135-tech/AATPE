@@ -1,6 +1,3 @@
-// test_event_monitor.cpp - Direct unit tests for event_monitor.cpp
-// Covers: triggerEvent priority routing (high/medium/low), counters,
-//         consume-once semantics, per-type cooldown dedup, getActiveLayer.
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -32,14 +29,8 @@ int main() {
     long long f0 = em.getEventCount(EventType::FREQ_CHANGE);
     em.triggerEvent(EventType::FREQ_CHANGE, "freq");
     CHECK(em.getEventCount(EventType::FREQ_CHANGE) == f0 + 1, "FREQ counted");
-    // bugfix: FREQ_CHANGE is now LOW priority — it must NOT wake the main
-    // loop for a full decision (DVFS flips several times/sec under thermal
-    // throttling and that was the root cause of the 125% CPU busy-spin).
     CHECK(em.consumeMediumPriorityEvent() == false, "FREQ does NOT raise medium-priority");
     CHECK(em.consumeHighPriorityEvent() == false, "FREQ does NOT raise high-priority");
-    // Must exceed kMediumEventCooldownMs (1000ms, raised from 500 in
-    // 核心问题4) so the subsequent HOTPLUG is not dedup'd against the FREQ
-    // medium event. Sleep 1060ms for a 60ms margin under scheduling jitter.
     sleep_for(milliseconds(1060));
     long long h0 = em.getEventCount(EventType::HOTPLUG);
     em.triggerEvent(EventType::HOTPLUG, "plug");

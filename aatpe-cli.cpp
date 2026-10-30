@@ -1,4 +1,3 @@
-// AATPE CLI - Adaptive Android Task Placement Engine
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,20 +24,6 @@
 #include "aatpe-constants.h"
 #include "aatpe_pid_identity.h"
 
-// aatpeExec() popen stub is NOT dead code — aatpe_ml.cpp
-// (GfxInfoFrameTimeProvider / SurfaceFlingerLatencyProvider) calls it at lines 876/1032.
-// The aatpe-cli link target does not include aatped.cpp (which has the real fork+poll
-// implementation), so this popen stub is required for CLI-side ML frame-time providers.
-// Real implementation with 3s timeout protection lives in aatped.cpp for the daemon.
-// aatpeExec() — P2-#16: popen() with a 3s hard timeout. The old popen() could block
-// forever if the spawned command hung (e.g. a hung `getprop` or service call).
-// We fork/exec a shell running the command, poll the read end with a wall-clock
-// deadline, and SIGKILL the child if it exceeds the budget.
-// G9-015: cmd is the fixed prefix the daemon's ML frame-time providers use
-// ("getprop ...", "dumpsys gfxinfo <pkg>"). The only variable part is <pkg>, which
-// the caller (aatpe_ml.cpp) validates against a [A-Za-z0-9._] whitelist BEFORE
-// concatenation, so there is no shell-injection surface today. If that call is ever
-// changed, prefer direct exec of argv[] (no shell) to keep it that way.
 std::string aatpeExec(const std::string& cmd, const char* debugTag) {
     (void)debugTag;
     int pipefd[2];
@@ -57,10 +42,6 @@ std::string aatpeExec(const std::string& cmd, const char* debugTag) {
     close(pipefd[1]);
     std::string result;
     char buf[256];
-    // G9-009: drive the 3s budget off a wall-clock deadline, not only off poll
-    // timeouts. The previous `elapsedMs` only advanced when poll() timed out, so a
-    // child that trickled >=1 byte every <200ms never hit the budget and could block
-    // the CLI indefinitely.
     auto startMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     while (true) {
@@ -81,26 +62,17 @@ std::string aatpeExec(const std::string& cmd, const char* debugTag) {
             if (errno == EINTR) continue;
             break;
         }
-        // pr==0 = poll timeout; loop re-evaluates the wall-clock deadline.
     }
     kill(pid, SIGKILL);
     int status;
-    // waitpid may return ECHILD if the child already exited on its own.
     if (waitpid(pid, &status, 0) < 0 && errno != ECHILD) {
-        // unexpected; nothing to do
     }
     close(pipefd[0]);
     return result;
 }
 
-// aatpe_ml.cpp references logMsg() via LOG_WARN() macros. The CLI link target
-// does not include aatped_logging.cpp, so provide a no-op stub.
-extern "C" void logMsg(int /*level*/, const char* /*fmt*/, ...) {}
+extern "C" void logMsg(int , const char* , ...) {}
 
-// G9-003: explicit-stop request flag shared with the watchdog. `daemon stop`
-// writes it; `daemon start`/`restart` and service.sh clear it. While it exists
-// the watchdog must NOT auto-restart the daemon (otherwise a 3s poll revives a
-// deliberate stop). Root-only 0600 in the state dir.
 static std::string cliStopRequestPath() {
     return std::string(aatpe::paths::kStateDir) + "/stop_request";
 }
@@ -112,8 +84,6 @@ static void cliClearStopRequest() {
     ::unlink(cliStopRequestPath().c_str());
 }
 
-// signal handling — SIGPIPE ignored to avoid crash on broken
-// pipe, and a global interrupt flag set by SIGINT/SIGTERM for long loops.
 static std::atomic<bool> g_cliInterrupted{false};
 static void cliSignalHandler(int sig) {
     (void)sig;
@@ -161,10 +131,6 @@ static float cliSoftmaxFuseScores(float modelScore, float heuristicScore, float 
 static const char* cliModulePath() {
     static std::string p;
     if (p.empty()) {
-        // mirror getModuleDir() candidate order (Magisk / KernelSU /
-        // APatch / Magisk pending update). The CLI is a standalone binary that
-        // does not link aatped_utils.cpp, so it keeps its own copy of the SAME
-        // canonical list instead of a Magisk-only hardcode.
         static const char* kDirs[] = {
             "/data/adb/modules/aatpe",
             "/data/adb/ksu/modules/aatpe",
@@ -187,17 +153,8 @@ int readInt(const char* path,int def){std::string s=readFile(path);if(s.empty())
 std::string readState(const char* key,const char* def){std::string path=std::string(aatpe::paths::kStateDir)+"/"+key;std::string s=readFile(path.c_str());return s.empty()?def:s;}
 void trim(std::string& s){size_t st=s.find_first_not_of(" \t\r\n");if(st==std::string::npos){s.clear();return;}size_t en=s.find_last_not_of(" \t\r\n");s=s.substr(st,en-st+1);}
 static int safeStoi(const std::string& s,int def=0){try{return std::stoi(s);}catch(...){return def;}}
-// P3 build-fix: safeStoull is currently unreferenced (kept for future CLI u64
-// parsing). [[maybe_unused]] silences -Wunused-function under -Werror without
-// deleting the helper.
 [[maybe_unused]] static unsigned long long safeStoull(const std::string& s,unsigned long long def=0){try{return std::stoull(s);}catch(...){return def;}}
 static long long safeStoll(const std::string& s,long long def=0){try{return std::stoll(s);}catch(...){return def;}}
-// RFC 8259 string escaper. Escapes " \ newline CR tab AND every other byte <0x20
-// as \u00XX. The old hand-rolled loops in `ui-snapshot` only handled " \ \n \r
-// and left the remaining control bytes (0x01-0x08, 0x0B, 0x0C, 0x0E-0x1F) raw
-// inside a JSON string — V8 JSON.parse() rejects raw control chars, so the whole
-// `aatpe-cli ui-snapshot` payload was illegal JSON and the WebUI silently fell
-// back to N per-file exec cats.
 static std::string jsonEscapeStr(const std::string& v){
     static const char* H="0123456789abcdef";
     std::string o; o.reserve(v.size()+8);
@@ -213,26 +170,12 @@ static std::string jsonEscapeStr(const std::string& v){
     return o;
 }
 
-// P1-2 (hardened): PID-reuse-safe identity check. Delegates to the unified
-// aatpe::pid_identity::verifyAatpedPid() which enforces triple identity:
-//   1. kill(pid, 0) confirms the process exists.
-//   2. /proc/<pid>/exe realpath EXACTLY equals "/system/bin/aatped"
-//      (NOT a substring/find("aatped") match — rejects aatped_fake etc.).
-//   3. /proc/<pid>/stat starttime matches the starttime the daemon published
-//      to /dev/aatpe/state/daemon_starttime at its own startup.
-// Without this, kill(dpid,0)==0 on an unrelated process that reused the PID would
-// make the CLI believe the daemon is alive (and potentially signal the wrong
-// process with SIGTERM/SIGUSR1).
 static bool isAatpedPid(int pid) {
     return aatpe::pid_identity::verifyAatpedPid((pid_t)pid);
 }
 
-// P2-9+18: thread_db is now a single atomic JSON file (thread_db.json) instead
-// of a directory of per-tid key=value files. Parse it with a minimal extractor
-// (the daemon controls the exact format, so we don't need a full JSON parser).
 struct ThreadRecord{int pid,tid,priority;bool protect;unsigned long long nrSwitches,runTime;std::string pname,tname,role,subtype;};
 
-// Pull the string value for "key":"..." out of a JSON object substring.
 static std::string jsonStrField(const std::string& obj, const std::string& key){
     std::string pat="\""+key+"\":\"";
     size_t p=obj.find(pat); if(p==std::string::npos) return "";
@@ -258,16 +201,11 @@ static std::vector<ThreadRecord> loadThreadDb(){
     std::string path=std::string(aatpe::paths::kRunDir)+"/thread_db/thread_db.json";
     std::ifstream f(path); if(!f) return records;
     std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    // Walk objects inside "threads":[ ... ].
     size_t arr=content.find("\"threads\":[");
     if(arr==std::string::npos) return records;
-    size_t pos=arr+11; // strlen("\"threads\":")
+    size_t pos=arr+11;
     while(pos<content.size()){
         size_t o=content.find('{',pos); if(o==std::string::npos) break;
-        // R8-013 (LED-120): find the MATCHING closing brace by depth, not the first
-        // '}'. A thread object whose pname/tname string value contains a '}' (or any
-        // nested object) previously truncated the record early and dropped fields.
-        // Braces inside string literals are ignored.
         size_t c = std::string::npos;
         {
             int depth = 0;
@@ -330,10 +268,6 @@ void cmdStatus(){
     printf("Skin Press:  %s\n",readState("thermal_skin_pressure","0").c_str());
     printf("Bat Press:   %s\n",readState("thermal_battery_pressure","0").c_str());
     printf("\n=== FRAME (V3) ===\n");
-    // v4.1.2 hotfix: when SF latency is not actually measured (timestats disabled /
-    // no game layer) the daemon still writes a theoretical-period fallback to
-    // sf_latency_avg but flags sf_latency_valid=0. Do not present that as a measured
-    // latency (the webui monitor applies the same gate).
     {std::string sfv=readState("sf_latency_valid","0");bool sfOk=(sfv=="1");
      printf("SF Latency:  %s\n",sfOk?readState("sf_latency_avg","N/A").c_str():"-- (未实测)");
      printf("SF Max:      %s\n",sfOk?readState("sf_latency_max","N/A").c_str():"-- (未实测)");}
@@ -368,7 +302,6 @@ void cmdStatus(){
     printf("\n=== BATTERY ===\n");
     int batLevel=readInt("/sys/class/power_supply/battery/capacity",-1);
     std::string batStatus=readFile("/sys/class/power_supply/battery/status");
-    // P3-3: named string variable before .c_str()
     std::string batLevelStr=batLevel>=0?(std::to_string(batLevel)+"%"):"N/A";
     printf("Level:       %s\n",batLevelStr.c_str());
     printf("Status:      %s\n",batStatus.empty()?"N/A":batStatus.c_str());
@@ -393,7 +326,6 @@ void cmdStatus(){
     printf("Proactive:   %s\n",readState("prediction_proactive_migrations","0").c_str());
 }
 
-// P2-9+18: buildTidToNameMap now derived from the JSON thread_db (no directory walk).
 static std::map<int,std::string> buildTidToNameMap(){
     std::map<int,std::string> m;
     for (const auto& r : loadThreadDb()) {
@@ -427,8 +359,7 @@ struct CpuMetricLite{int capacity=topology::kDefaultCapacity,util=0,temp=0;};
 static std::map<int,CpuMetricLite> g_cliCpuMetrics;
 static std::vector<int> g_cliLittlePool,g_cliMidPool,g_cliBigPool;
 static std::string g_cliProfile="balanced";
-// P1-6/P1-7: extracted static parsePoolStr for reuse by cmdPredict/cmdTopology
-static std::vector<int> parsePoolStr(const std::string& s){std::vector<int> v;std::stringstream ss(s);std::string token;while(std::getline(ss,token,',')){trim(token);if(!token.empty()){try{v.push_back(std::stoi(token));}catch(const std::exception&){/* malformed token: skip */}}}return v;}
+static std::vector<int> parsePoolStr(const std::string& s){std::vector<int> v;std::stringstream ss(s);std::string token;while(std::getline(ss,token,',')){trim(token);if(!token.empty()){try{v.push_back(std::stoi(token));}catch(const std::exception&){ }}}return v;}
 static void cliLoadCpuMetrics(){int cpuCount=readInt((std::string(aatpe::paths::kStateDir)+"/cpu_count").c_str(),0);for(int c=0;c<cpuCount;c++){CpuMetricLite m;m.capacity=readInt((std::string(aatpe::paths::kStateDir)+"/cpu"+std::to_string(c)+"/capacity").c_str(),topology::kDefaultCapacity);m.util=readInt((std::string(aatpe::paths::kStateDir)+"/cpu"+std::to_string(c)+"/util").c_str(),0);m.temp=readInt((std::string(aatpe::paths::kStateDir)+"/cpu"+std::to_string(c)+"/temp").c_str(),0);g_cliCpuMetrics[c]=m;}g_cliLittlePool=parsePoolStr(readState("little_pool",""));g_cliMidPool=parsePoolStr(readState("mid_pool",""));g_cliBigPool=parsePoolStr(readState("big_pool",""));g_cliProfile=readState("current_profile","balanced");}
 static int cliCapacityScore(int cpuId,int role){auto it=g_cliCpuMetrics.find(cpuId);if(it==g_cliCpuMetrics.end())return 0;int cap=it->second.capacity;if(role==0)return 0;if(role==5)return capacity::kBackgroundInverseRef-cap;return cap;}
 static int cliLatencyScore(int role){switch(role){case 1:return latency::kScoreUi;case 2:return latency::kScoreRender;case 3:return latency::kScoreGame;case 4:return latency::kScoreThroughput;default:return 0;}}
@@ -444,47 +375,35 @@ void cmdProfile(const char* profile){if(!profile||strlen(profile)==0){printf("Av
 
 void cmdBenchmark(){printf("=== AATPE BENCHMARK ===\n");auto records=loadThreadDb();int threadCount=(int)records.size(),cpuCount=readInt((std::string(aatpe::paths::kStateDir)+"/cpu_count").c_str(),0);printf("Tracked threads: %d\nCPU count: %d\n\n",threadCount,cpuCount);if(threadCount==0){printf("No thread data available. Start daemon first.\n");return;}if(cpuCount==0){printf("CPU count unknown. Run 'aatped --init-topology' first.\n");return;}cliLoadCpuMetrics();printf("Benchmark: computing real scores for all threads on all CPUs...\n");struct timespec start,end;clock_gettime(CLOCK_MONOTONIC,&start);long long totalOps=0,totalScore=0;for(int i=0;i<threadCount&&i<cli_display::kBenchmarkMaxThreads;i++){for(int c=0;c<cpuCount;c++){int s=cliComputeScore(c,records[i]);totalScore+=s;totalOps++;}}clock_gettime(CLOCK_MONOTONIC,&end);long long durationMs=(end.tv_sec-start.tv_sec)*1000+(end.tv_nsec-start.tv_nsec)/1000000;printf("Scored %lld CPU-thread pairs in %lldms (total score=%lld)\n",totalOps,durationMs,totalScore);if(durationMs>0)printf("Rate: %lld ops/sec\n",totalOps*1000/durationMs);}
 
-void cmdLog(int lines){FILE* f=fopen(aatpe::paths::kLogFile,"r");if(!f){printf("Log file not found: %s\n",aatpe::paths::kLogFile);return;}fseek(f,0,SEEK_END);long long fileSize=ftell(f),pos=fileSize;int chunkSize=cli_display::kLogChunkSize;std::vector<std::string> allLines;std::string leftover;// stop chunked read early on SIGINT/SIGTERM
+void cmdLog(int lines){FILE* f=fopen(aatpe::paths::kLogFile,"r");if(!f){printf("Log file not found: %s\n",aatpe::paths::kLogFile);return;}fseek(f,0,SEEK_END);long long fileSize=ftell(f),pos=fileSize;int chunkSize=cli_display::kLogChunkSize;std::vector<std::string> allLines;std::string leftover;
 while(pos>0&&(int)allLines.size()<lines+10&&!g_cliInterrupted.load(std::memory_order_relaxed)){long long readSize=(pos<chunkSize)?pos:chunkSize;pos-=readSize;fseek(f,pos,SEEK_SET);char* buf=new char[readSize+1];size_t got=fread(buf,1,readSize,f);buf[got]='\0';std::string chunk(buf,got);delete[] buf;chunk+=leftover;size_t lastNewline=chunk.rfind('\n');if(lastNewline!=std::string::npos){leftover=chunk.substr(0,lastNewline);std::string rest=chunk.substr(lastNewline+1);std::stringstream ss(rest);std::string line;std::vector<std::string> chunkLines;while(std::getline(ss,line))chunkLines.push_back(line);for(auto it=chunkLines.rbegin();it!=chunkLines.rend();++it)allLines.push_back(*it);}else leftover=chunk;}if(!leftover.empty())allLines.push_back(leftover);fclose(f);if(g_cliInterrupted.load())printf("\n(interrupted)\n");printf("=== LAST %d LOG LINES ===\n",lines);int count=0;for(auto it=allLines.rbegin();it!=allLines.rend()&&count<lines;++it,++count)printf("%s\n",it->c_str());}
 
-// P2-#17: wait for pid to disappear after SIGTERM, up to 5s.
 static void waitForDaemonExit(int dpid) {
     if (dpid <= 0) return;
     for (int i = 0; i < 50; i++) {
-        if (kill(dpid, 0) != 0) return;  // process gone
+        if (kill(dpid, 0) != 0) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    // Still alive after 5s. R8-002 (LED-109): re-verify the PID is still OUR daemon
-    // before SIGKILL — in the 5s window the PID could have been recycled to an
-    // unrelated process. Killing a reused PID would murder an innocent process.
     if (!isAatpedPid(dpid)) {
         fprintf(stderr, "aatpe-cli: pid=%d no longer identified as aatped (PID reuse?), NOT sending SIGKILL\n", dpid);
         return;
     }
-    // Escalate to SIGKILL.
     fprintf(stderr, "aatpe-cli: pid=%d did not exit after 5s, sending SIGKILL\n", dpid);
     kill(dpid, SIGKILL);
-    // R8-023 (LED-130): reap with a bounded WNOHANG loop instead of a blocking
-    // waitpid(dpid,&st,0) which could hang the CLI forever if the child is not our
-    // direct child (we are usually not — the daemon daemonizes).
     for (int i = 0; i < 20; i++) {
         int st;
         pid_t w = waitpid(dpid, &st, WNOHANG);
-        if (w == dpid) break;                 // reaped
-        if (kill(dpid, 0) != 0) break;       // gone; ECHILD if we reap later
+        if (w == dpid) break;
+        if (kill(dpid, 0) != 0) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 }
 
-// G9-004: returns a process exit code (0 success, 1 operational failure,
-// 2 usage error) so the full-function test can distinguish PASS/FAIL by exit code.
 int cmdDaemon(const char* action) {
     if (!action) { printf("Usage: aatpe-cli daemon <start|stop|restart|status>\n"); return 2; }
     int dpid = readInt(aatpe::paths::kPidFile, 0);
     bool running = (dpid > 0) && (kill(dpid, 0) == 0) && isAatpedPid(dpid);
     if (strcmp(action, "start") == 0) {
-        // G9-003: starting clears any prior explicit-stop flag so the watchdog
-        // resumes watching the freshly launched daemon.
         cliClearStopRequest();
         if (running) { printf("Daemon already running (PID=%d)\n", dpid); return 0; }
         printf("Starting daemon...\n");
@@ -497,15 +416,12 @@ int cmdDaemon(const char* action) {
             execl("/system/bin/aatped", "aatped", "--daemon", nullptr);
             _exit(1);
         }
-        // Issue-20: bounded wait loop to reap the intermediate child (aatped --daemon
-        // double-forks; the first child exits after daemonizing). Previously only two
-        // WNOHANG polls were done, leaving a zombie if daemonization took >1s.
         {
             int status;
             for (int i = 0; i < 50; i++) {
                 pid_t w = waitpid(child, &status, WNOHANG);
                 if (w == child) break;
-                if (w < 0) break;  // ECHILD — already reaped
+                if (w < 0) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
@@ -517,12 +433,8 @@ int cmdDaemon(const char* action) {
     } else if (strcmp(action, "stop") == 0) {
         if (running) {
             if (isAatpedPid(dpid)) {
-                // G9-003: drop the explicit-stop flag BEFORE signalling so that even
-                // if the watchdog polls in the same window, it sees the request and
-                // does NOT revive the daemon we are about to kill.
                 cliSetStopRequest();
                 kill(dpid, SIGTERM);
-                // P2-#17: actually wait for the process to exit before returning.
                 waitForDaemonExit(dpid);
                 unlink(aatpe::paths::kPidFile);
                 unlink((std::string(aatpe::paths::kRunDir) + "/daemon.lock").c_str());
@@ -533,8 +445,6 @@ int cmdDaemon(const char* action) {
                 return 1;
             }
         }
-        // Already stopped: make the stop idempotent but still arm the flag so a
-        // half-started daemon (or watchdog race) does not immediately revive it.
         cliSetStopRequest();
         printf("Daemon not running\n");
         return 0;
@@ -554,10 +464,6 @@ int cmdDaemon(const char* action) {
 
 void cmdModelStatus(){printf("=== ML MODEL STATUS (Per-Pool) ===\n\n");LearningModel model;model.init(3);bool loaded=model.load(cliMlModelPath().c_str());if(!loaded){printf("Model file not found: %s\nStatus: COLD START (zero weights, alpha=0)\nPools: 3 (LITTLE/MID/BIG)\n",cliMlModelPath().c_str());return;}bool mature=model.isMature();printf("ML Maturity: %s (confidence gate: %s)\n",mature?"MATURE":"IMMATURE (cold/early warm start)",mature?"ENABLED":"DISABLED (migrations allowed freely)");printf("  - global alpha: %.4f (threshold >0.1)\n",(double)model.getAlpha());printf("  - total samples: %d (threshold >100)\n",model.getTotalSamples());for(int p=0;p<model.getPoolCount();p++){PoolModel pm=model.getPoolModel(p);printf("  - pool %d samples: %d (threshold >20)\n",p,pm.sample_count);}printf("\n");std::string status=model.getStatusString();printf("%s",status.c_str());}
 void cmdModelReset(){printf("Resetting ML model...\n");int ret=unlink(cliMlModelPath().c_str());if(ret==0){printf("Model file deleted: %s\nDaemon will cold start (zero weights) on next restart.\n",cliMlModelPath().c_str());}else{printf("Model file not found or cannot delete: %s (errno=%d)\nModel may already be in cold start state.\n",cliMlModelPath().c_str(),errno);}std::string ctrlPath=std::string(aatpe::paths::kRunDir)+"/control";std::ofstream cf(ctrlPath,std::ios::app);if(cf){cf<<"model_reset=1\n";cf.close();}}
-// G9-010: model.dat has a single writer (the daemon). Previously the CLI ALSO
-// opened and overwrote model.dat itself right after telling the daemon to save,
-// so two writers could race and produce a torn/half-written model. Now the CLI
-// only sends the control command; the daemon performs the atomic save.
 int cmdModelSave(){printf("Saving ML model...\n");std::string ctrlPath=std::string(aatpe::paths::kRunDir)+"/control";std::ofstream cf(ctrlPath,std::ios::app);if(cf){cf<<"model_save=1\n";cf.close();printf("Save request sent to daemon.\n");return 0;}printf("Cannot write to control file: %s\n",ctrlPath.c_str());return 1;}
 
 void cmdPredict(int targetTid){
@@ -575,7 +481,6 @@ void cmdPredict(int targetTid){
     unsigned long long avgRunUs=0;if(found->nrSwitches>0)avgRunUs=found->runTime/found->nrSwitches/1000;
     bool isGame=(safeStoi(found->role)==3);
     int cpuCount=readInt((std::string(aatpe::paths::kStateDir)+"/cpu_count").c_str(),8);
-    // P1-7: read pools from state, fallback only when empty
     std::vector<int> poolCpus[3];
     poolCpus[0]=parsePoolStr(readState("little_pool",""));
     poolCpus[1]=parsePoolStr(readState("mid_pool",""));
@@ -611,7 +516,6 @@ void cmdHelp(){showHeader();printf("\nUsage: aatpe-cli <command> [args]\n\n");pr
 #endif
 static void cmdVersion(){printf("AATPE %s (versionCode %d)\n",AATPE_VERSION,AATPE_VERSION_CODE);printf("Build: NDK %s, clang %s, aarch64-linux-android29, minSdk=29\n",NDK_VERSION_STR,__clang_version__);printf("C++ standard: C++17, optimization: -O3\n");}
 
-// P1-6 + P2-8: cmdTopology reads pools from state, capacity defaults -1
 static void cmdTopology(){
     printf("=== CPU TOPOLOGY ===\n\n");
     std::vector<int> littlePool=parsePoolStr(readState("little_pool","")),midPool=parsePoolStr(readState("mid_pool","")),bigPool=parsePoolStr(readState("big_pool",""));
@@ -632,11 +536,6 @@ static void cmdTopology(){
     }
     printf("\nOnline CPUs: ");
     for(int cpu=0;cpu<(int)g_cpuCount;cpu++){
-        // readInt() defaulted to 1 when the online file was
-        // missing, so phantom cores (no cpu directory at all) were printed as
-        // online. Gate on the cpu directory existing first. If the directory
-        // exists but has no 'online' file (cpu0 cannot be hot-removed), treat
-        // it as online; otherwise honor the file's value.
         std::string cpuDir="/sys/devices/system/cpu/cpu"+std::to_string(cpu);
         if(access(cpuDir.c_str(), F_OK)!=0) continue;
         std::string onlinePath=cpuDir+"/online";
@@ -649,10 +548,6 @@ static void cmdTopology(){
     printf("\n");
 }
 
-// v4.2.5: `apps --json` — root-bridge fallback for the SukiSU WebView, which
-// cannot reach http://127.0.0.1 even though root shell can. Emits the EXACT same
-// JSON shape as GET /api/apps (single source: same tiered enumeration as
-// frame.cpp listInstalledPackages + manual game_overrides.list).
 static std::string cliJsonEsc(const std::string& s) {
     std::string o; o.reserve(s.size()+2);
     for (char c : s) {
@@ -671,7 +566,6 @@ static std::vector<std::string> cliParsePm(const std::string& out) {
     return pkgs;
 }
 static std::vector<std::string> cliScanDataApp() {
-    // /data/app/*/*/base.apk -> infer pkg from the dir two levels up.
     std::vector<std::string> pkgs;
     DIR* d0 = opendir("/data/app");
     if (!d0) return pkgs;
@@ -684,7 +578,6 @@ static std::vector<std::string> cliScanDataApp() {
         struct dirent* e2;
         while ((e2=readdir(d1))) {
             if (e2->d_name[0]=='.') continue;
-            // entry like com.tencent.tmgp.sgame-xxxxxxxx
             std::string pkg = e2->d_name;
             size_t dash = pkg.find_last_of('-');
             if (dash != std::string::npos && dash>0) pkg.resize(dash);
@@ -714,7 +607,6 @@ static int cmdAppsJson() {
         if (lab.empty()) lab = pkgs[i];
         body += "{\"pkg\":\""+cliJsonEsc(pkgs[i])+"\",\"label\":\""+cliJsonEsc(lab)+"\"}"; }
     body += "],\"manual\":[";
-    // read manual override list directly (same file the daemon uses).
     std::ifstream mf("/data/adb/aatpe/game_overrides.list");
     std::string line; bool first=true;
     while (std::getline(mf,line)) {
@@ -734,9 +626,6 @@ static int cmdAppsJson() {
 }
 
 int main(int argc,char* argv[]){
-    // install signal handlers early.
-    // SIGPIPE ignored so writing to a closed pipe (e.g. `aatpe-cli log | head`)
-    // does not kill the CLI; SIGINT/SIGTERM set g_cliInterrupted for long loops.
     signal(SIGPIPE, SIG_IGN);
     {
         struct sigaction sa;
@@ -752,9 +641,6 @@ int main(int argc,char* argv[]){
     if(!isatty(STDOUT_FILENO))g_useColor=false;
     std::string cmd=(argc>1)?argv[1]:"status";
 
-    // root check. Most commands read/write /dev/aatpe which
-    // requires root; without it the CLI previously silently failed.
-    // version/help are safe to run as a normal user.
     bool needsRoot = !(cmd=="version"||cmd=="--version"||cmd=="-v"||
                        cmd=="help"||cmd=="--help"||cmd=="-h");
     if(needsRoot && getuid()!=0){
@@ -764,7 +650,7 @@ int main(int argc,char* argv[]){
     }
 
     if(cmd=="status"){cmdStatus();return 0;}
-    if(cmd=="apps"){return cmdAppsJson();}  // v4.2.5: --json apps for root bridge
+    if(cmd=="apps"){return cmdAppsJson();}
     if(cmd=="threads"){cmdThreads();return 0;}
     if(cmd=="top"){cmdTop();return 0;}
     if(cmd=="decisions"){int limit=20;if(argc>2){try{limit=std::stoi(argv[2]);}catch(...){limit=20;}}if(limit<1)limit=1;if(limit>10000)limit=10000;cmdDecisions(limit);return 0;}
@@ -777,12 +663,6 @@ int main(int argc,char* argv[]){
     if(cmd=="model-status"){cmdModelStatus();return 0;}
     if(cmd=="model-reset"){cmdModelReset();return 0;}
     if(cmd=="model-save"){return cmdModelSave();}
-    // v6.0.0: shadow-ring JSONL export. Writes `shadow_dump=1` to the root-0600
-    // control pipe (same auth channel as model_save=1 / set_profile=), waits for
-    // the daemon to drain+atomic-write STATE_DIR/diagnostic/shadow_samples.jsonl,
-    // then prints it. With -o <path> it copies the JSONL to that path instead.
-    // Default output NEVER touches /sdcard; the daemon-side file is the 0700
-    // private state/diagnostic dir.
     if(cmd=="shadow-dump"){
         std::string outPath;
         for(int i=2;i<argc;i++){
@@ -791,13 +671,6 @@ int main(int argc,char* argv[]){
             printf("Usage: aatpe-cli shadow-dump [-o <file>]\n");return 2;
         }
         std::string srcPath=std::string(aatpe::paths::kStateDir)+"/diagnostic/shadow_samples.jsonl";
-        // Record the mtime (or "absent") of any PRE-EXISTING dump file BEFORE we
-        // send the command. Without this, a slow daemon leaves an older dump on
-        // disk and the first poll would print STALE samples that belong to a
-        // previous drain — and an immediately-written empty file (ring empty now)
-        // could race with a real drain landing moments later. We only accept a
-        // file whose mtime is NEWER than this baseline (i.e. written by OUR
-        // shadow_dump command). We send the command EXACTLY once; no retry.
         struct stat beforeSt;
         bool beforeExists = (::stat(srcPath.c_str(), &beforeSt) == 0);
         double baselineSec = beforeExists ? (double)beforeSt.st_mtime
@@ -810,10 +683,6 @@ int main(int argc,char* argv[]){
             int dpid=readInt(aatpe::paths::kPidFile,0);
             if(dpid>0&&isAatpedPid(dpid)) kill(dpid,SIGUSR1);
         }
-        // Bounded poll: accept only a file with mtime strictly newer than the
-        // baseline. 40 x 50ms = 2.0s ceiling. An empty-but-fresh file means the
-        // daemon drained an empty ring this round (legitimately) — we accept it
-        // as "no samples" rather than falling through to stale data.
         std::string content;
         bool gotFresh = false;
         for(int i=0;i<40;i++){
@@ -821,7 +690,6 @@ int main(int argc,char* argv[]){
             struct stat st;
             if(::stat(srcPath.c_str(), &st) != 0) continue;
             double mt = (double)st.st_mtime;
-            // File is "ours" if it did not exist before, or its mtime advanced.
             if(!beforeExists || mt > baselineSec + 0.0) {
                 content = readFile(srcPath.c_str());
                 gotFresh = true;
@@ -846,8 +714,6 @@ int main(int argc,char* argv[]){
         }
         return 0;
     }
-    // v4.2.8: one-shot aggregated UI snapshot as JSON. Reads only STATE_DIR
-    // files (no fresh dumpsys) so a root-bridge tick costs exactly one exec.
     if(cmd=="ui-snapshot"){
         DIR* d=opendir(aatpe::paths::kStateDir);
         if(!d){printf("{}\n");return 1;}
@@ -858,16 +724,10 @@ int main(int argc,char* argv[]){
             std::string name=e->d_name;
             if(name=="."||name=="..") continue;
             if(name.size()>4 && name.compare(name.size()-4,4,".log")==0) continue;
-            // v4.2.8 security: STATE_DIR holds credential material (e.g.
-            // daemon_token). The UI snapshot is handed to the WebView renderer,
-            // so never serialize tokens/secrets/key material. State filenames
-            // are lowercase; substring-deny is sufficient here.
             if(strstr(name.c_str(),"token")||strstr(name.c_str(),"secret")||
                strstr(name.c_str(),"credential")||strstr(name.c_str(),"passwd")||
                strstr(name.c_str(),"private")||strstr(name.c_str(),"salt")||
                strstr(name.c_str(),"hmac_key")) continue;
-            // frame_apps.json is inlined below as a nested object; do not also
-            // emit an escaped-string copy under its raw filename.
             if(name=="frame_apps.json") continue;
             std::string path=std::string(aatpe::paths::kStateDir)+"/"+name;
             struct stat st;
@@ -880,30 +740,18 @@ int main(int argc,char* argv[]){
             printf("\"%s\":\"%s\"",name.c_str(),out.c_str());
         }
         closedir(d);
-        // Also inline frame_apps.json as a nested object (already JSON on disk).
         std::string faPath=std::string(aatpe::paths::kStateDir)+"/frame_apps.json";
         std::string fa=readFile(faPath.c_str());
         if(!fa.empty()){ if(!first) printf(","); printf("\"frame_apps_raw\":%s",fa.c_str()); first=false; }
-        // v4.2.8: inline WEBUI_DIR percpu.json/system.json (small, exempt from 64KB).
         auto inlineJson=[&](const char* key,const std::string& p){
             std::string v=readFile(p.c_str());
             if(v.empty()) return;
             if(!first) printf(",");
-            // G-002 fix: must set first=FALSE (matching the emit pattern used for
-            // STATE_DIR files and frame_apps_raw above). The old code set first=TRUE,
-            // so when BOTH percpu.json and system.json were non-empty the second
-            // inlineJson() saw first==true and skipped the separator comma, yielding
-            //   "percpu_raw":{...}"system_raw":{...}
-            // which is illegal JSON and made the whole `ui-snapshot` fail JSON.parse
-            // in the root bridge (then silently fall back to per-file cat).
             first=false;
             printf("\"%s\":%s",key,v.c_str());
         };
         inlineJson("percpu_raw", "/dev/aatpe/webui/percpu.json");
         inlineJson("system_raw", "/dev/aatpe/webui/system.json");
-        // threads array (reuse loadThreadDb, capped 100).
-        // v4.2.8 P2: JSON-escape thread comm (can contain '"'/'\\') so one odd
-        // name cannot corrupt the whole snapshot JSON.
         auto jsonEsc=[](const std::string& v){ return jsonEscapeStr(v); };
         auto recs=loadThreadDb();
         if(!first) printf(",");
@@ -920,11 +768,6 @@ int main(int argc,char* argv[]){
         printf("}\n");
         return 0;
     }
-    // v4.2.7: generic write-command dispatcher used by the WebUI root-bridge
-    // fallback. Writes one control line to RUN_DIR/control (append), wakes the
-    // daemon with SIGUSR1. Strictly validates against the same charset the
-    // daemon reader allows (aatped_control.cpp isValidControlChars) so a bad
-    // argument can never be turned into shell metacharacters.
     if(cmd=="send"){
         if(argc<3){printf("Usage: aatpe-cli send <cmd=value>\n");return 2;}
         std::string c=argv[2];

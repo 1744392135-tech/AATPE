@@ -1,7 +1,3 @@
-// test_crypto_v449.cpp - v4.4.9 R3-F05: constantTimeHexEqual must remain
-// functionally correct after the fixed-width (64) comparison rework. The fix
-// removed the min-length loop (which leaked the shorter-string length via
-// iteration count); behavior must be unchanged for equal/diff/length-mismatch.
 #include <cstdio>
 #include <string>
 #include "aatpe_crypto.h"

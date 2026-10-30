@@ -1,23 +1,3 @@
-// test_ml_shadow_passive_v600.cpp — v6.0.0 P1 RED->GREEN regression.
-//
-// Bug fixed: in passive (observe-only) mode decidePlacement() hits the PASSIVE
-// gate and returns KEEP early, so the only d.mlFeatures assignment in placement
-// was never reached. The passive sampler in aatped_main.cpp recorded
-// d.mlFeatures, which was the value-initialized all-zero ThreadFeatures — every
-// shadow sample in the ring had an all-zero feature vector, making the offline
-// effect-validation dataset useless.
-//
-// Fix under test (the CONTRACT the passive sampler now executes):
-//   1. call the PURE observation function extractMlFeatures(ti, ti.currentCpu)
-//      (read-only: g_cpuMetrics short lock + ti fields; NO boost/freeze/
-//      sched_setaffinity/sysfs write);
-//   2. run the SAME cold-start all-zero filter the formal path uses
-//      (LearningModel::isAllZeroFeatures) — if all-zero, do NOT bookkeep a
-//      shadow pending;
-//   3. otherwise route the extracted features into the shadow ring.
-//
-// This host test drives that contract end-to-end against the REAL extractor
-// (scoring.cpp) and the REAL LearningModel shadow ring (aatpe_ml.cpp).
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -28,7 +8,6 @@
 
 using namespace aatpe_ml;
 
-// scoring_deps.cpp provides these daemon globals (g_cpuMetrics + mutex).
 extern std::map<int, CpuMetrics> g_cpuMetrics;
 extern std::mutex g_cpuMetricsMutex;
 
@@ -65,9 +44,9 @@ static ThreadInfo makeGameThread(int cpu) {
     ti.pid = 1000; ti.tid = 2000;
     ti.pname = "com.test.game"; ti.tname = "RenderThread";
     ti.role = ROLE_S3_GAME;
-    ti.priority = 0;           // -> feature = 1.0
+    ti.priority = 0;
     ti.nice = 0;
-    ti.runTime = 2000000ULL;   // 2ms of runtime across 100 switches
+    ti.runTime = 2000000ULL;
     ti.nrSwitches = 100;
     ti.switchesPerSec = 5.0;
     ti.currentCpu = cpu;
@@ -79,10 +58,9 @@ static ThreadInfo makeGameThread(int cpu) {
 int main() {
     printf("=== v6.0.0 P1: passive shadow sample features must be NON-zero ===\n");
 
-    // 1. Seed metrics for CPU 0 and extract counterfactual "stay on CPU0".
-    seedCpuMetrics(/*cpu=*/0, /*util=*/40, /*temp=*/45, /*capacity=*/380);
+    seedCpuMetrics( 0, 40, 45, 380);
     {
-        ThreadInfo ti = makeGameThread(/*cpu=*/0);
+        ThreadInfo ti = makeGameThread( 0);
         ThreadFeatures f = extractMlFeatures(ti, ti.currentCpu);
 
         CHECK(!LearningModel::isAllZeroFeatures(f),
@@ -100,29 +78,23 @@ int main() {
         CHECK(f.nr_switches > 0.0f, "switch-rate feature is positive (5/s)");
     }
 
-    // 2. Prove the extractor READS LIVE metrics (not a constant). Bump util to
-    //    80 and re-extract; cpu_usage must move to 0.8. This is the exact
-    //    observation the passive sampler now relies on.
     {
-        seedCpuMetrics(/*cpu=*/0, /*util=*/80, /*temp=*/45, /*capacity=*/380);
-        ThreadInfo ti = makeGameThread(/*cpu=*/0);
+        seedCpuMetrics( 0, 80, 45, 380);
+        ThreadInfo ti = makeGameThread( 0);
         ThreadFeatures f = extractMlFeatures(ti, ti.currentCpu);
         CHECK(std::fabs(f.cpu_usage - 0.8f) < 1e-6f,
               "cpu_usage tracks live util=80 (extractor observes g_cpuMetrics, not zero)");
     }
 
-    // 3. Drive the passive contract end-to-end: non-all-zero extracted features
-    //    are routed into the shadow ring and ROUND-TRIP unchanged.
     {
-        seedCpuMetrics(/*cpu=*/0, /*util=*/40, /*temp=*/45, /*capacity=*/380);
+        seedCpuMetrics( 0, 40, 45, 380);
         LearningModel m;
         m.setEnabled(true);
         m.setShadowSamplingEnabled(true);
 
-        ThreadInfo ti = makeGameThread(/*cpu=*/0);
-        int shadowPool = 2;  // getPoolForCpu(0) on a 3-pool topology
+        ThreadInfo ti = makeGameThread( 0);
+        int shadowPool = 2;
 
-        // The exact guard the passive sampler now runs:
         ThreadFeatures feats = extractMlFeatures(ti, ti.currentCpu);
         bool record = !LearningModel::isAllZeroFeatures(feats);
         CHECK(record == true, "non-zero features -> passive record=true");
@@ -133,7 +105,7 @@ int main() {
         }
         CHECK(m.getShadowSamplesCollected() == colBefore + 1,
               "shadow outcome collected once");
-        auto ring = m.drainShadowSamples(16, /*clear=*/false);
+        auto ring = m.drainShadowSamples(16, false);
         CHECK(ring.size() == 1, "ring holds exactly the one passive sample");
         CHECK(ring[0].pool == shadowPool, "ring sample pool == shadowPool");
         CHECK(std::fabs(ring[0].outcome - 0.62f) < 1e-6f, "outcome round-trips");
@@ -141,14 +113,12 @@ int main() {
               "ring sample features == extracted features (NOT all-zero)");
     }
 
-    // 4. Cold-start all-zero filter: when the extracted vector is all-zero, the
-    //    passive path must SKIP booking a shadow pending (no pollution).
     {
         LearningModel m;
         m.setEnabled(true);
         m.setShadowSamplingEnabled(true);
 
-        ThreadFeatures zeroFeats{};  // cold start: metrics/ti not ready
+        ThreadFeatures zeroFeats{};
         CHECK(LearningModel::isAllZeroFeatures(zeroFeats),
               "precondition: default ThreadFeatures{} IS all-zero");
 
@@ -156,11 +126,10 @@ int main() {
         long long dropBefore = m.getShadowSamplesDropped();
         size_t ringBefore = m.getShadowRingSize();
 
-        // Passive guard (mirrors production):
         bool record = !LearningModel::isAllZeroFeatures(zeroFeats);
         CHECK(record == false, "all-zero features -> passive record=false");
         if (record) {
-            m.recordShadowOutcome(/*pool=*/2, zeroFeats, 0.6f);
+            m.recordShadowOutcome( 2, zeroFeats, 0.6f);
         }
         CHECK(m.getShadowSamplesCollected() == colBefore,
               "all-zero cold-start sample NOT collected (dataset not polluted)");

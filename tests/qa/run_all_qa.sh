@@ -1,25 +1,11 @@
 #!/bin/bash
-# =============================================================================
-# run_all_qa.sh — unified QA runner.
-# Runs every host-runnable QA stage in order and prints one master table of
-# PASS/FAIL with evidence paths. A stage failing does not abort the rest.
-#
-#   1. fuzz          run_fuzz.sh        (mutation sweep over parsers)
-#   2. sanitizers    run_sanitizers.sh  (ASan+UBSan+LSan)
-#   3. tsan          run_sanitizers.sh tsan
-#   4. coverage      run_coverage.sh
-#   5. stress        run_stress.sh
-#   6. restart       restart_loop.sh
-#
-# Usage: bash tests/qa/run_all_qa.sh
-# =============================================================================
 set -u
 QA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ART="$QA_DIR/artifacts"; mkdir -p "$ART"
 MASTER="$ART/master_table.txt"; : >"$MASTER"
 
 declare -a ROWS=()
-step() {  # $1=stage name  $2=human label  $3..=command
+step() {
   local name="$1" label="$2"; shift 2
   echo ""
   echo "############################################################"
@@ -56,7 +42,6 @@ for r in "${ROWS[@]}"; do
   case "$res" in FAIL*) n_fail=$((n_fail+1));; esac
 done
 echo "--------------------------------------------------------------"
-# Also surface the per-module coverage table.
 if [ -f "$ART/coverage.txt" ]; then
   echo "Per-module line coverage:" | tee -a "$MASTER"
   cat "$ART/coverage.txt" | tee -a "$MASTER"

@@ -1,18 +1,4 @@
 #!/bin/bash
-# =============================================================================
-# AATPE RELEASE-LEVEL consistency check (runs AFTER `make && make install`).
-#
-# Verifies the ARTIFACTS of a build, which do not exist on a clean source tree:
-#   - the 4 freshly built binaries in ./ embed the version + are ARM aarch64 PIE
-#   - the 4 packaged binaries under system/bin/ exist, embed the version, and are
-#     stripped release ELF
-#   - (optional, when BUILD_MANIFEST.txt exists) the system/bin/* SHA256 bytes
-#     match the manifest 1:1 — this is the P0-1 "manifest == packaged bytes" gate.
-#
-# Split from the old monolithic check_version_consistency.sh (P0-2): source-level
-# drift lives in check-source-consistency.sh and must pass on a clean tree; this
-# script is the post-build / post-install gate.
-# =============================================================================
 set -e
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -26,7 +12,7 @@ echo "=== AATPE release-level consistency (post-build/post-install) ==="
 echo "Source: $SRC_DIR/VERSION -> $EXPECTED_VERSION / $EXPECTED_CODE"
 echo ""
 
-check_bin_info() {  # $1 = path  $2 = label
+check_bin_info() {
     local b="$1" label="$2"
     if [ ! -f "$b" ]; then
         echo "[FAIL] $label: missing ($b)"; ERRORS=$((ERRORS+1)); return
@@ -48,21 +34,17 @@ check_bin_info() {  # $1 = path  $2 = label
     fi
 }
 
-# --- built binaries in ./ ----------------------------------------------------
 echo "--- built binaries (./) ---"
 for b in $BINS; do check_bin_info "$SRC_DIR/$b" "./$b"; done
 
-# --- packaged binaries under system/bin/ --------------------------------------
 echo ""
 echo "--- packaged binaries (system/bin/) ---"
 for b in $BINS; do check_bin_info "$SRC_DIR/system/bin/$b" "system/bin/$b"; done
 
-# --- optional: manifest == packaged bytes (P0-1 gate) -------------------------
 echo ""
 if [ -f "$SRC_DIR/BUILD_MANIFEST.txt" ]; then
     echo "--- BUILD_MANIFEST.txt vs system/bin/* bytes ---"
     for b in $BINS; do
-        # manifest lines look like: <64-hex-sha256>  <name>
         want="$(awk -v bin="$b" '$1 ~ /^[0-9a-f]{64}$/ && $2 == bin {print $1; exit}' \
                 "$SRC_DIR/BUILD_MANIFEST.txt" 2>/dev/null)"
         if [ -z "$want" ]; then

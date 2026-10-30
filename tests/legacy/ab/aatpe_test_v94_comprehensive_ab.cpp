@@ -1,21 +1,3 @@
-// ============================================================================
-// AATPE v94 - Comprehensive AB Test Suite (10 Dimensions)
-// ============================================================================
-// Compiled twice: once against v93 (baseline) and once against v94 (fix).
-// Each run outputs JSON-format metrics. The runner script compares both.
-//
-// Dimensions covered:
-//   D1: Scheduling decision quality
-//   D2: Scoring system
-//   D3: ML / Hybrid learning
-//   D4: Thermal management
-//   D5: Frame awareness
-//   D6: eBPF event handling (stub-based)
-//   D7: Security features
-//   D8: Performance metrics
-//   D9: Watchdog (constants/logic)
-//   D10: Config / script / version
-// ============================================================================
 
 #include <cstdio>
 #include <cstdlib>
@@ -61,9 +43,6 @@
 using namespace aatpe;
 using namespace aatpe_ml;
 
-// ============================================================================
-// PRODUCTION GLOBAL VARIABLE DEFINITIONS (mirrored from scheduling AB test)
-// ============================================================================
 const char* RUN_DIR      = "/tmp/aatpe_comp_ab";
 const char* STATE_DIR    = "/tmp/aatpe_comp_ab/state";
 const char* METRICS_DIR  = "/tmp/aatpe_comp_ab/metrics";
@@ -105,7 +84,6 @@ int g_thermalSkin = 35;
 int g_thermalBattery = 30;
 std::atomic<bool> g_thermalEmergency{false};
 std::atomic<int> g_thermalMigrationPressure{0};
-// v95-fix: independent safety-latency gate referenced by placement.cpp.
 std::atomic<bool> g_safetyLatencyActive{false};
 std::atomic<long long> g_keepSafetyLatency{0};
 std::atomic<long long> g_applySafetyLatency{0};
@@ -222,9 +200,6 @@ float g_systemLoad = 50.0f;
 std::atomic<bool> g_frameCritical{false};
 std::atomic<bool> g_profileLock{false};
 
-// ============================================================================
-// STUB IMPLEMENTATIONS (same as scheduling AB test)
-// ============================================================================
 void logInit() {}
 void logMsg(int level, const char* fmt, ...) { (void)level; (void)fmt; }
 std::string readFile(const char* path) { (void)path; return ""; }
@@ -432,9 +407,6 @@ SystemState getSystemState() { return SystemState::NORMAL; }
 
 bool MigrationBudget::tryAcquire(bool frameCritical) { (void)frameCritical; return true; }
 
-// ============================================================================
-// TEST FRAMEWORK
-// ============================================================================
 struct TestResult {
     std::string dimension;
     std::string testName;
@@ -476,9 +448,6 @@ static inline float rngFloat(float lo, float hi) {
     return lo + (hi - lo) * ((float)rngNext() / 4294967295.0f);
 }
 
-// ============================================================================
-// SETUP HELPERS
-// ============================================================================
 static void setupCpuMetrics() {
     g_cpuMetrics.clear();
     for (int i = 0; i <= 3; i++) {
@@ -546,9 +515,6 @@ static void setupMlModel() {
     g_mlModel.setCpuPoolAssignment(poolAssign);
 }
 
-// ============================================================================
-// D1: SCHEDULING DECISION QUALITY
-// ============================================================================
 static void testD1_SchedulingQuality() {
     printf("  [D1] Scheduling Decision Quality...\n");
     setupCpuMetrics();
@@ -559,7 +525,6 @@ static void testD1_SchedulingQuality() {
     aatpe_ml_hybrid::instance().init(3);
     aatpe_ml_hybrid::instance().setEnabled(true);
 
-    // Create test threads with known expected pools
     struct TestThread {
         ThreadInfo info;
         CpuPool expectedPool;
@@ -572,7 +537,6 @@ static void testD1_SchedulingQuality() {
         { {10000, 10004, 0, "com.test.game", "PhysicsWorker", ROLE_S4_THROUGHPUT, "physics", 40, false, 4200000, 600, 5}, CpuPool::MID, "physics" },
     };
 
-    // Run 50 cycles
     int totalMigrations = 0;
     int correctPlacements = 0;
     int totalDecisions = 0;
@@ -602,14 +566,12 @@ static void testD1_SchedulingQuality() {
                 t.info.currentCpu = d.targetCpu;
                 g_testTidCpu[t.info.tid] = d.targetCpu;
             }
-            // Check placement correctness
             CpuPool pool = getPoolForCpu(t.info.currentCpu);
             if (pool == t.expectedPool) correctPlacements++;
         }
         migrationCountsPerCycle.push_back(migThisCycle);
     }
 
-    // Metrics
     float roleCorrectPct = 100.0f * correctPlacements / totalDecisions;
     RECORD_TEST("D1", "placement_accuracy", "pct", roleCorrectPct,
                 roleCorrectPct > 50.0f,
@@ -619,14 +581,12 @@ static void testD1_SchedulingQuality() {
     RECORD_TEST("D1", "migration_count", "per_50cyc", totalMigrations,
                 totalMigrations >= 0, "Total migration count");
 
-    // Decision latency stats
     double latSum = 0;
     for (double l : decisionLatencies) latSum += l;
     double avgLat = latSum / decisionLatencies.size();
     RECORD_TEST("D1", "decision_latency", "us_avg", avgLat,
                 avgLat < 1000.0, "Average decision latency");
 
-    // CPU pool allocation correctness
     int littleCorrect = 0, midCorrect = 0, bigCorrect = 0;
     int littleTotal = 0, midTotal = 0, bigTotal = 0;
     for (auto& t : threads) {
@@ -646,16 +606,12 @@ static void testD1_SchedulingQuality() {
                 bigCorrect >= 0, "BIG pool correct");
 }
 
-// ============================================================================
-// D2: SCORING SYSTEM
-// ============================================================================
 static void testD2_ScoringSystem() {
     printf("  [D2] Scoring System...\n");
     setupCpuMetrics();
     setupDefaultConfig();
     initScoringArrays(g_cpuCount);
 
-    // Test capacity normalization (big.LITTLE 160/400/1024)
     int littleCap = g_cpuMetrics[0].capacity;
     int midCap = g_cpuMetrics[4].capacity;
     int bigCap = g_cpuMetrics[7].capacity;
@@ -666,7 +622,6 @@ static void testD2_ScoringSystem() {
     RECORD_TEST("D2", "capacity_big", "raw", bigCap,
                 bigCap > 900 && bigCap <= 1024, "BIG capacity range");
 
-    // Test 9-dim score computation for various thread roles
     ThreadInfo gameThread;
     gameThread.pid = 10000; gameThread.tid = 10001; gameThread.starttime = 0;
     gameThread.pname = "com.test.game"; gameThread.tname = "UnityMain";
@@ -677,13 +632,11 @@ static void testD2_ScoringSystem() {
     CPU_ZERO(&gameThread.originalAffinity);
     gameThread.affinityModified = false;
 
-    // Compute scores for all CPUs
     std::vector<float> scores(8, 0.0f);
     for (int cpu = 0; cpu < 8; cpu++) {
         scores[cpu] = (float)computeScore(cpu, gameThread);
     }
 
-    // BIG core should score highest for game thread
     float bestScore = scores[0];
     int bestCpu = 0;
     for (int i = 1; i < 8; i++) {
@@ -692,7 +645,6 @@ static void testD2_ScoringSystem() {
     RECORD_TEST("D2", "game_thread_best_cpu", "cpu", bestCpu,
                 bestCpu >= 4, "Game thread prefers big/mid core");
 
-    // Score should be in reasonable range
     bool allScoresReasonable = true;
     for (float s : scores) {
         if (s < 0 || s > 500) allScoresReasonable = false;
@@ -700,10 +652,8 @@ static void testD2_ScoringSystem() {
     RECORD_TEST("D2", "score_range_valid", "bool", allScoresReasonable ? 1 : 0,
                 allScoresReasonable, "All scores in [0,500] range");
 
-    // Test dynamic base score EMA update (P5/P95)
     precomputeCpuBaseScores();
     float baseScoreBefore = (float)computeScore(7, gameThread);
-    // Simulate many decisions to update EMA
     for (int i = 0; i < 100; i++) {
         ThreadInfo bgThread;
         bgThread.pid = 10000; bgThread.tid = 20000 + i; bgThread.starttime = 0;
@@ -721,7 +671,6 @@ static void testD2_ScoringSystem() {
     RECORD_TEST("D2", "base_score_updated", "bool", (baseScoreAfter > 0) ? 1 : 0,
                 baseScoreAfter > 0, "Base score EMA updates after decisions");
 
-    // Test sigmoid - use computeScore with different inputs to verify monotonic behavior
     float scoreLow = (float)computeScore(0, gameThread);
     ThreadInfo highLoad = gameThread;
     highLoad.runTime = 10000000; highLoad.nrSwitches = 5000;
@@ -730,7 +679,6 @@ static void testD2_ScoringSystem() {
     RECORD_TEST("D2", "sigmoid_varying", "bool", scoresVary ? 1 : 0,
                 scoresVary, "Sigmoid normalization produces varying scores");
 
-    // Test history decay
     g_history.clear();
     HistoryEntry he;
     he.preferredCpu = 7; he.score = 300; he.samples = 10;
@@ -743,9 +691,6 @@ static void testD2_ScoringSystem() {
                 historyExists, "History decay preserves recent entries");
 }
 
-// ============================================================================
-// D3: ML / HYBRID LEARNING
-// ============================================================================
 static void testD3_MLSystem() {
     printf("  [D3] ML / Hybrid Learning...\n");
     setupCpuMetrics();
@@ -753,10 +698,8 @@ static void testD3_MLSystem() {
     initScoringArrays(g_cpuCount);
     setupMlModel();
 
-    // Test 1: Prediction accuracy after training
     {
         std::lock_guard<std::mutex> mlLock(g_mlMutex);
-        // Train with known pattern: high runRatio on BIG = good outcome
         for (int i = 0; i < 500; i++) {
             ThreadFeatures feat;
             feat.avg_run_us = rngFloat(500.0f, 2000.0f);
@@ -766,17 +709,16 @@ static void testD3_MLSystem() {
             feat.nice = rngFloat(0.3f, 0.7f);
             feat.is_game = 1.0f;
             feat.thermal = rngFloat(0.2f, 0.5f);
-            feat.capacity = 1.0f;  // BIG
+            feat.capacity = 1.0f;
             feat.current_cpu_match = 1.0f;
             feat.migration_count = 0.0f;
             feat.cross_run_cap = 0.8f;
             feat.cross_run_usage = 0.7f;
             feat.cross_cap_thermal = 0.3f;
             feat.cross_run_thermal = 0.4f;
-            float outcome = 0.85f;  // Good placement on BIG
-            g_mlModel.update(2, feat, outcome);  // pool 2 = BIG
+            float outcome = 0.85f;
+            g_mlModel.update(2, feat, outcome);
         }
-        // Predict for BIG pool
         ThreadFeatures testFeat;
         testFeat.avg_run_us = 1000.0f;
         testFeat.nr_switches = 20.0f;
@@ -797,12 +739,10 @@ static void testD3_MLSystem() {
                     pred > 0.5f, "ML prediction after 500 training samples");
     }
 
-    // Test 2: Learning rate decay (via sample count and alpha)
     {
         std::lock_guard<std::mutex> mlLock(g_mlMutex);
         int samplesBefore = g_mlModel.getTotalSamples();
         float alphaBefore = g_mlModel.getAlpha();
-        // Do many updates to trigger decay
         ThreadFeatures feat = {};
         for (int i = 0; i < 1000; i++) {
             g_mlModel.update(0, feat, 0.5f);
@@ -814,31 +754,25 @@ static void testD3_MLSystem() {
                     "Learning rate decays over time (samples increase)");
     }
 
-    // Test 3: Cold-start protection (<2000 samples)
     {
         aatpe_ml_hybrid::HybridLearner freshLearner;
         freshLearner.init(3);
         freshLearner.setEnabled(true);
         float features[15] = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 1.0f, 0.5f, 1.0f, 1.0f, 0.0f, 0.5f, 0.5f, 0.3f, 0.4f};
         float adj = freshLearner.getFineTuneAdjustment(0, features);
-        // Cold start should return 0 (or very close to 0)
         RECORD_TEST("D3", "hybrid_coldstart_protected", "adj", adj,
                     fabs(adj) < 0.01f, "Hybrid cold-start returns ~0 adjustment");
     }
 
-    // Test 4: Weight clamping
     {
         std::lock_guard<std::mutex> mlLock(g_mlMutex);
-        // Check weights are within clamp range
         bool clamped = true;
-        // We can't directly inspect weights, but we can verify model still functions
         ThreadFeatures feat;
         float pred = g_mlModel.predict(1, feat);
         RECORD_TEST("D3", "weight_clamping_functional", "pred", pred,
             pred >= 0.0f && pred <= 1.0f, "ML prediction in [0,1] range after clamping");
     }
 
-    // Test 5: Hybrid learning - alpha progressive fusion
     {
         aatpe_ml_hybrid::HybridLearner learner;
         learner.init(3);
@@ -846,9 +780,8 @@ static void testD3_MLSystem() {
 #ifdef AATPE_V94
         float alpha0 = learner.getAlpha();
 #else
-        float alpha0 = 0.0f;  // v93 has no getAlpha
+        float alpha0 = 0.0f;
 #endif
-        // Run many ticks to ramp alpha
         for (int t = 0; t < 20; t++) {
             std::vector<aatpe_ml_hybrid::ThreadCpuSnapshot> snaps;
             std::vector<uint64_t> cpuRuntime(8, 1000);
@@ -873,7 +806,6 @@ static void testD3_MLSystem() {
 #endif
     }
 
-    // Test 6: Hybrid cold-start gate
     {
         aatpe_ml_hybrid::HybridLearner learner;
         learner.init(3);
@@ -889,13 +821,9 @@ static void testD3_MLSystem() {
     }
 }
 
-// ============================================================================
-// D4: THERMAL MANAGEMENT
-// ============================================================================
 static void testD4_ThermalManagement() {
     printf("  [D4] Thermal Management...\n");
 
-    // Test thermal constants exist and are reasonable
     RECORD_TEST("D4", "thermal_high_threshold", "C", (double)thermal::kHighTempThreshold,
                 thermal::kHighTempThreshold > 50 && thermal::kHighTempThreshold < 100,
                 "High temp threshold reasonable");
@@ -903,14 +831,11 @@ static void testD4_ThermalManagement() {
                 thermal::kEmergencyHysteresis > 0 && thermal::kEmergencyHysteresis < 30,
                 "Emergency hysteresis reasonable");
 
-    // Test state machine transitions (simulated)
-    // NORMAL -> DEGRADED -> THERMAL -> EMERGENCY -> recovery
     RECORD_TEST("D4", "state_normal_defined", "enum", (int)SystemState::NORMAL,
                 (int)SystemState::NORMAL == 0, "NORMAL state = 0");
     RECORD_TEST("D4", "state_emergency_defined", "enum", (int)SystemState::EMERGENCY,
                 (int)SystemState::EMERGENCY == 3, "EMERGENCY state = 3");
 
-    // Test thermal profile switching (simulated)
     bool thermalProfileWorks = true;
     g_currentProfile = "thermal";
     g_currentProfileEnum = ProfileType::THERMAL;
@@ -920,37 +845,29 @@ static void testD4_ThermalManagement() {
     RECORD_TEST("D4", "profile_switch_thermal", "bool", thermalProfileWorks ? 1 : 0,
                 thermalProfileWorks, "Thermal profile switchable");
 
-    // Test temperature threshold response
     RECORD_TEST("D4", "threshold_70c_degrade", "C", (double)thermal::kHighTempThreshold,
                 thermal::kHighTempThreshold >= 60, "Degrade threshold >= 60C");
     RECORD_TEST("D4", "threshold_emergency_recovery", "C", (double)thermal::kEmergencyHysteresis,
                 thermal::kEmergencyHysteresis >= 5, "Emergency recovery hysteresis >= 5C");
 }
 
-// ============================================================================
-// D5: FRAME AWARENESS
-// ============================================================================
 static void testD5_FrameAwareness() {
     printf("  [D5] Frame Awareness...\n");
 
-    // Test frame time threshold
     RECORD_TEST("D5", "frame_time_threshold", "us", g_cfg.targetFrameTime,
                 g_cfg.targetFrameTime >= 16000 && g_cfg.targetFrameTime <= 17000,
                 "Target frame time ~16667us (60Hz)");
 
-    // Test frame critical threshold
     RECORD_TEST("D5", "frame_critical_threshold", "us", g_cfg.frameCriticalThreshold,
                 g_cfg.frameCriticalThreshold >= 10000 && g_cfg.frameCriticalThreshold <= 14000,
                 "Frame critical threshold reasonable");
 
-    // Test refresh rate detection
     int refreshRate = 60;
     bool is60Hz = (refreshRate == 60);
     bool is120Hz = (refreshRate == 120);
     RECORD_TEST("D5", "refresh_rate_60hz", "bool", is60Hz ? 1 : 0,
                 is60Hz, "60Hz refresh rate detected");
 
-    // Test jank calculation (simulated)
     std::vector<float> frameTimes = {16600, 17000, 16500, 22000, 16700, 18000, 16600};
     int jankCount = 0;
     for (float ft : frameTimes) {
@@ -959,59 +876,44 @@ static void testD5_FrameAwareness() {
     RECORD_TEST("D5", "jank_count_detected", "count", jankCount,
                 jankCount >= 1, "Jank frames detected correctly");
 
-    // Test app switching forceRefresh (simulated)
     bool forceRefreshWorks = true;
     RECORD_TEST("D5", "app_switch_forcerefresh", "bool", forceRefreshWorks ? 1 : 0,
                 forceRefreshWorks, "App switching triggers frame refresh");
 
-    // Test frame time result feedback to ML (simulated)
     bool frameFeedbackWorks = true;
     RECORD_TEST("D5", "frame_time_ml_feedback", "bool", frameFeedbackWorks ? 1 : 0,
                 frameFeedbackWorks, "Frame time feedback to ML outcome");
 }
 
-// ============================================================================
-// D6: eBPF EVENT HANDLING
-// ============================================================================
 static void testD6_eBPFHandling() {
     printf("  [D6] eBPF Event Handling...\n");
 
-    // Test event type constants
     RECORD_TEST("D6", "ebpf_loader_status", "str", 0,
                 true, "eBPF loader status queryable");
     RECORD_TEST("D6", "ebpf_active_flag", "bool", g_ebpfActive ? 1 : 0,
                 true, "eBPF active flag readable");
 
-    // Test event rate calculation (simulated)
-    // Simulate 100 events in 1 second
     int eventCount = 100;
-    double eventRate = eventCount / 1.0;  // per second
+    double eventRate = eventCount / 1.0;
     RECORD_TEST("D6", "event_rate_calculation", "per_sec", eventRate,
                 eventRate > 0, "Event rate calculation works");
 
-    // Test ring buffer overflow handling (simulated)
     bool overflowHandled = true;
     RECORD_TEST("D6", "ringbuf_overflow_handling", "bool", overflowHandled ? 1 : 0,
                 overflowHandled, "Ring buffer overflow handled gracefully");
 
-    // Test degradation mechanism (eBPF fail -> polling)
     bool degradationWorks = true;
     RECORD_TEST("D6", "ebpf_degradation_to_polling", "bool", degradationWorks ? 1 : 0,
                 degradationWorks, "eBPF failure degrades to polling mode");
 
-    // Test event types: FORK/EXIT/SWITCH/EXEC
     bool eventTypesDefined = true;
     RECORD_TEST("D6", "event_types_defined", "bool", eventTypesDefined ? 1 : 0,
                 eventTypesDefined, "Event types FORK/EXIT/SWITCH/EXEC defined");
 }
 
-// ============================================================================
-// D7: SECURITY FEATURES
-// ============================================================================
 static void testD7_SecurityFeatures() {
     printf("  [D7] Security Features...\n");
 
-    // Test command whitelist (simulated)
     std::vector<std::string> allowedCmds = {"status", "threads", "explain", "help"};
     std::vector<std::string> blockedCmds = {"rm -rf /", "exec shell", "format", "reboot"};
 
@@ -1027,7 +929,6 @@ static void testD7_SecurityFeatures() {
                 blockedCorrect == (int)blockedCmds.size(),
                 "Blocked commands correctly rejected");
 
-    // Test XSS protection / escapeHtml
     auto escapeHtml = [](const std::string& input) -> std::string {
         std::string out;
         for (char c : input) {
@@ -1049,8 +950,6 @@ static void testD7_SecurityFeatures() {
     RECORD_TEST("D7", "xss_escape_html", "bool", xssEscaped ? 1 : 0,
                 xssEscaped, "XSS payload properly escaped");
 
-    // Test token entropy (simulated /dev/urandom vs rand_r)
-    // Generate 100 tokens and check diversity
     std::vector<std::string> tokens;
     srand(42);
     for (int i = 0; i < 100; i++) {
@@ -1066,19 +965,14 @@ static void testD7_SecurityFeatures() {
     RECORD_TEST("D7", "token_entropy_uniqueness", "pct", uniqueness,
                 uniqueness > 90.0f, "Token generation has high entropy");
 
-    // Test HMAC verification (simulated)
     bool hmacWorks = true;
     RECORD_TEST("D7", "hmac_verification", "bool", hmacWorks ? 1 : 0,
                 hmacWorks, "HMAC verification functional");
 }
 
-// ============================================================================
-// D8: PERFORMANCE METRICS
-// ============================================================================
 static void testD8_PerformanceMetrics() {
     printf("  [D8] Performance Metrics...\n");
 
-    // Test decision loop CPU usage (measure 1000 decisions)
     setupCpuMetrics();
     setupDefaultConfig();
     initScoringArrays(g_cpuCount);
@@ -1106,7 +1000,6 @@ static void testD8_PerformanceMetrics() {
     RECORD_TEST("D8", "decision_loop_cpu", "us_per_decision", avgUsPerDecision,
                 avgUsPerDecision < 5000.0, "Average decision time < 5ms");
 
-    // Memory usage (estimated via process RSS)
     struct stat statBuf;
     long rssPages = 0;
     if (stat("/proc/self/statm", &statBuf) == 0) {
@@ -1118,11 +1011,10 @@ static void testD8_PerformanceMetrics() {
             rssPages = (long)rss;
         }
     }
-    long rssKb = rssPages * 4;  // 4KB pages
+    long rssKb = rssPages * 4;
     RECORD_TEST("D8", "memory_rss", "kb", rssKb,
                 rssKb < 100000, "Process RSS < 100MB");
 
-    // Startup time (measure init)
     auto s0 = std::chrono::high_resolution_clock::now();
     initScoringArrays(g_cpuCount);
     auto s1 = std::chrono::high_resolution_clock::now();
@@ -1131,13 +1023,9 @@ static void testD8_PerformanceMetrics() {
                 initUs < 10000.0, "Scoring array init < 10ms");
 }
 
-// ============================================================================
-// D9: WATCHDOG
-// ============================================================================
 static void testD9_Watchdog() {
     printf("  [D9] Watchdog...\n");
 
-    // Test watchdog constants
 #ifdef AATPE_V94
     RECORD_TEST("D9", "heartbeat_timeout", "sec", (double)watchdog::kHeartbeatTimeoutSec,
                 watchdog::kHeartbeatTimeoutSec > 0 && watchdog::kHeartbeatTimeoutSec <= 60,
@@ -1162,39 +1050,30 @@ static void testD9_Watchdog() {
                 "v93: temp passive duration default");
 #endif
 
-    // Test heartbeat detection logic (simulated)
     bool heartbeatDetectWorks = true;
     RECORD_TEST("D9", "heartbeat_detection", "bool", heartbeatDetectWorks ? 1 : 0,
                 heartbeatDetectWorks, "Heartbeat detection functional");
 
-    // Test passive cooling recovery (300s)
     bool passiveRecoveryWorks = true;
     RECORD_TEST("D9", "passive_cooling_recovery", "bool", passiveRecoveryWorks ? 1 : 0,
                 passiveRecoveryWorks, "Passive cooling auto-recovery after cooldown");
 
-    // Test emergency migration (thread-level vs process-level)
     bool emergencyMigrationWorks = true;
     RECORD_TEST("D9", "emergency_migration_level", "bool", emergencyMigrationWorks ? 1 : 0,
                 emergencyMigrationWorks, "Emergency migration at thread/process level");
 
-    // Test health inspection tiered response
     bool tieredResponseWorks = true;
     RECORD_TEST("D9", "health_tiered_response", "bool", tieredResponseWorks ? 1 : 0,
                 tieredResponseWorks, "Health inspection tiered response");
 }
 
-// ============================================================================
-// D10: CONFIG / SCRIPT / VERSION
-// ============================================================================
 static void testD10_ConfigVersion() {
     printf("  [D10] Config / Script / Version...\n");
 
-    // Test version consistency
     RECORD_TEST("D10", "version_string", "str", 0, true, AATPE_VERSION);
     RECORD_TEST("D10", "version_code", "int", AATPE_VERSION_CODE,
                 AATPE_VERSION_CODE > 0, "Version code > 0");
 
-    // Test config parsing (62 config items - verify key ones exist)
     RECORD_TEST("D10", "cfg_control_mode", "str", 0, true, g_cfg.controlMode.c_str());
     RECORD_TEST("D10", "cfg_target_frame_time", "us", g_cfg.targetFrameTime,
                 g_cfg.targetFrameTime > 0, "Target frame time configured");
@@ -1210,7 +1089,6 @@ static void testD10_ConfigVersion() {
                 g_cfg.decisionInterval > 0 && g_cfg.decisionInterval < 1000,
                 "Decision interval reasonable");
 
-    // Test profile switching (4 profiles)
     std::vector<std::string> profiles = {"balanced", "gaming", "battery", "thermal"};
     int profilesFound = 0;
     for (auto& p : profiles) {
@@ -1220,22 +1098,16 @@ static void testD10_ConfigVersion() {
     RECORD_TEST("D10", "profile_count", "count", profilesFound,
                 profilesFound == 4, "All 4 profiles parseable");
 
-    // Test kworker priority (v94 fix: 99 -> 30)
     RECORD_TEST("D10", "kworker_priority_fixed", "bool", 1,
                 true, "kworker priority reduced from 99 to 30");
 
-    // Test binder rule split (v94 fix)
     RECORD_TEST("D10", "binder_rule_split", "bool", 1,
                 true, "binder fuzzy match split into Binder_ and binder:");
 
-    // Test thread role rules (v94 fix: removed 4 duplicate rules)
     RECORD_TEST("D10", "thread_role_dedup", "bool", 1,
                 true, "Duplicate thread role rules removed");
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
 int main() {
     printf("╔══════════════════════════════════════════════════════════════════════╗\n");
     printf("║     AATPE v94 Comprehensive AB Test - 10 Dimensions                 ║\n");
@@ -1245,7 +1117,6 @@ int main() {
 
     system("mkdir -p /tmp/aatpe_comp_ab/decisions /tmp/aatpe_comp_ab/state");
 
-    // Run all dimension tests
     testD1_SchedulingQuality();
     testD2_ScoringSystem();
     testD3_MLSystem();
@@ -1257,7 +1128,6 @@ int main() {
     testD9_Watchdog();
     testD10_ConfigVersion();
 
-    // Output JSON results
     printf("\n\n=== JSON RESULTS ===\n");
     printf("{\n");
     printf("  \"version\": \"%s\",\n", AATPE_VERSION);
@@ -1281,7 +1151,6 @@ int main() {
            g_totalTests, g_passedTests, g_totalTests - g_passedTests,
            100.0f * g_passedTests / g_totalTests);
 
-    // Per-dimension breakdown
     std::map<std::string, std::pair<int,int>> dimStats;
     for (auto& r : g_results) {
         dimStats[r.dimension].first++;
@@ -1292,9 +1161,6 @@ int main() {
         printf("  %s: %d/%d passed\n", ds.first.c_str(), ds.second.second, ds.second.first);
     }
 
-    // C02: fail the process (non-zero exit) when any dimension test failed, so CI
-    // does not see a green build from a red harness. Previously this was a bare
-    // `return 0;` regardless of g_totalTests - g_passedTests.
     int failed = g_totalTests - g_passedTests;
     if (failed != 0) {
         printf("\n  [FAIL] %d test(s) failed -> exiting non-zero\n", failed);

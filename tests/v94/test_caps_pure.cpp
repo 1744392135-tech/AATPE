@@ -1,10 +1,3 @@
-// test_caps_pure.cpp — host tests for the PURE decision helpers in aatpe_caps
-// that test_caps.cpp (which drives the on-disk probe) does not cover:
-//   - classifyGpuPlatform() priority order (kgsl > mali > ged > none)
-//   - inferCgroupUclampScaleReadOnly() threshold boundaries (fail-safe to unknown)
-//
-// Security property: an unreadable/garbage uclamp node must resolve to "unknown"
-// (callers treat as percent = safe under-boost) and never to "raw1024".
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -24,29 +17,25 @@ int main() {
     {
         CHECK(strcmp(classifyGpuPlatform(false,false,false,false,false,false), "none") == 0,
               "no GPU flags -> 'none'");
-        // kgsl wins even when mali/gpu flags also present
-        CHECK(strcmp(classifyGpuPlatform(/*devfreqGpu=*/true, /*devfreqMali=*/true,
-                    /*devfreqHasKgsl=*/false, /*kgslNodePresent=*/true,
+        CHECK(strcmp(classifyGpuPlatform( true, true,
+ false, true,
                     false, false), "kgsl") == 0,
               "kgslNodePresent beats mali -> 'kgsl'");
-        CHECK(strcmp(classifyGpuPlatform(false, false, /*devfreqHasKgsl=*/true,
+        CHECK(strcmp(classifyGpuPlatform(false, false, true,
                     false, false, false), "kgsl") == 0,
               "devfreqHasKgsl -> 'kgsl'");
-        // mali when no kgsl
-        CHECK(strcmp(classifyGpuPlatform(false, /*devfreqHasMali=*/true, false,
+        CHECK(strcmp(classifyGpuPlatform(false, true, false,
                     false, false, false), "mali") == 0,
               "mali flag only -> 'mali'");
-        CHECK(strcmp(classifyGpuPlatform(/*devfreqHasGpu=*/true, false, false,
+        CHECK(strcmp(classifyGpuPlatform( true, false, false,
                     false, false, false), "mali") == 0,
               "generic devfreq gpu -> 'mali'");
-        // ged only
         CHECK(strcmp(classifyGpuPlatform(false, false, false, false,
-                    /*gedHalPresent=*/true, false), "ged") == 0,
+ true, false), "ged") == 0,
               "gedHal only -> 'ged'");
         CHECK(strcmp(classifyGpuPlatform(false, false, false, false,
-                    false, /*gedDevPresent=*/true), "ged") == 0,
+                    false, true), "ged") == 0,
               "gedDev only -> 'ged'");
-        // kgsl beats ged even when both
         CHECK(strcmp(classifyGpuPlatform(false, false, false, true, true, true), "kgsl") == 0,
               "kgsl beats ged -> 'kgsl'");
     }
@@ -71,7 +60,6 @@ int main() {
               "102 -> 'raw1024'");
         CHECK(strcmp(inferCgroupUclampScaleReadOnly("800"), "raw1024") == 0,
               "800 -> 'raw1024'");
-        // negative is a valid percent-scale resting value, never raw1024
         CHECK(strcmp(inferCgroupUclampScaleReadOnly("-5"), "percent") == 0,
               "-5 -> 'percent'");
     }

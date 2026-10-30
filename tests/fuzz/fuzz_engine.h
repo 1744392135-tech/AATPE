@@ -1,10 +1,3 @@
-// fuzz_engine.h - in-process, hermetic fuzz harness for AATPE untrusted-input parsers.
-// No afl/libFuzzer on host. Provides: deterministic xorshift128+ PRNG, structured
-// mutator, dual gate (iteration count AND wall-clock), per-call watchdog thread to
-// catch hangs, timestamped progress, and a signal handler that dumps the exact
-// crashing input so ASan/UBSan stacks can be paired with a minimal reproducer.
-//
-// W1 constraint: this file lives ONLY under tests/fuzz/. It never touches product src.
 #pragma once
 
 #include <atomic>
@@ -21,20 +14,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-// v4.4.8 fuzz hang fix: wire the production logging backend to /dev/null before the
-// fuzz loop. None of the 16 fuzz mains call logInit(), so g_logFp stayed null and
-// every WARN/INFO was appended to g_logBuffer forever (the null-fp orphan branch in
-// aatped_logging.cpp had no drain under fuzz) -> unbounded growth -> geometric
-// realloc crossed the 3s watchdog. Pointing LOG_FILE at /dev/null (always writable)
-// makes g_logFp valid: WARN/ERROR write+flush immediately, INFO self-flushes at the
-// 4KB/100-entry threshold, so g_logBuffer stays bounded. Done once in run(), which
-// every fz_*.cpp goes through.
-#include "aatped_logging.h"   // logInit()
-extern const char* LOG_FILE;  // defined in fz_daemon_stub.cpp / dirs.cpp / logging_deps.cpp
+#include "aatped_logging.h"
+extern const char* LOG_FILE;
 
 namespace fz {
 
-// ---- deterministic PRNG (xorshift128+, splitmix-seeded for spread) ----------
 struct Rng {
   uint64_t s0, s1;
   explicit Rng(uint64_t seed) { reinit(seed); }
@@ -59,7 +43,6 @@ struct Rng {
   bool chance(uint64_t denom) { return bounded(denom) == 0; }
 };
 
-// ---- crash / hang global context -------------------------------------------
 inline std::string g_currentInput;
 inline std::atomic<bool> g_inCall{false};
 inline std::atomic<bool> g_done{false};
@@ -69,7 +52,6 @@ inline std::atomic<int> g_crashCount{0};
 inline std::string g_parserName = "parser";
 
 extern "C" inline void crash_dump_handler(int) {
-  // Async-signal-safe: dump the exact input that caused the fault.
   int n = ++g_crashCount;
   char path[320];
   snprintf(path, sizeof(path), "%s/crash_%s_%d.bin", g_crashDir.c_str(),
@@ -80,7 +62,6 @@ extern "C" inline void crash_dump_handler(int) {
       (void)!write(fd, g_currentInput.data(), g_currentInput.size());
     close(fd);
   }
-  // Let ASan/UBSan print its own stack to the redirected stderr.
   signal(SIGABRT, SIG_DFL); signal(SIGSEGV, SIG_DFL);
   signal(SIGILL, SIG_DFL);  signal(SIGBUS, SIG_DFL);
   signal(SIGFPE, SIG_DFL);
@@ -88,35 +69,33 @@ extern "C" inline void crash_dump_handler(int) {
   _exit(1);
 }
 
-// ---- structured mutator -----------------------------------------------------
 inline void mutate(Rng& r, std::string& s, size_t maxLen) {
-  // pick an operation by weight
   uint64_t op = r.bounded(32);
   switch (op) {
-    case 0: { // wipe to empty
+    case 0: {
       s.clear();
       break;
     }
-    case 1: { // all zero bytes
+    case 1: {
       size_t n = r.bounded(64) + 1;
       s.assign(n, '\0');
       break;
     }
-    case 2: { // random byte at random pos
+    case 2: {
       if (s.empty()) s.push_back((char)r.bounded(256));
       else s[r.bounded(s.size())] = (char)r.bounded(256);
       break;
     }
-    case 3: { // truncate
+    case 3: {
       if (!s.empty()) s.resize(r.bounded(s.size() + 1));
       break;
     }
-    case 4: { // insert random byte
+    case 4: {
       size_t pos = s.empty() ? 0 : r.bounded(s.size() + 1);
       s.insert(pos, 1, (char)r.bounded(256));
       break;
     }
-    case 5: { // delete a chunk
+    case 5: {
       if (s.size() > 2) {
         size_t pos = r.bounded(s.size());
         size_t len = r.bounded(s.size() - pos) + 1;
@@ -124,32 +103,32 @@ inline void mutate(Rng& r, std::string& s, size_t maxLen) {
       }
       break;
     }
-    case 6: { // oversize boundary (up to ~1MB)
+    case 6: {
       size_t n = (size_t)(r.bounded(1024) * 1024) + 1;
       if (n > maxLen) n = maxLen;
       s.assign(n, 'A' + (char)r.bounded(26));
       break;
     }
-    case 7: { // invalid UTF-8 / high bytes
+    case 7: {
       size_t n = r.bounded(48) + 1;
       s.clear();
       for (size_t i = 0; i < n; i++) s.push_back((char)(0x80 + r.bounded(128)));
       break;
     }
-    case 8: { // embedded quote / backslash / newline / NUL
+    case 8: {
       static const char specials[] = {'\"', '\\', '\n', '\r', '\t', '\0', '{', '}', '[', ']', ':', ',', '#'};
       if (s.empty()) s = "{}";
       size_t pos = r.bounded(s.size() + 1);
       s.insert(pos, 1, specials[r.bounded(sizeof(specials))]);
       break;
     }
-    case 9: { // path traversal / shell metacharacters
+    case 9: {
       static const char* frags[] = {"/", "..", "../", "./", ";", "|", "&", "$", "`", "'", "\"", " ", "*", "?", "~", "/dev/null", "%s", "%n"};
       if (s.empty()) s = "pkg";
       s += frags[r.bounded(sizeof(frags) / sizeof(frags[0]))];
       break;
     }
-    case 10: { // numeric extremes / negative / nan / inf
+    case 10: {
       static const char* nums[] = {"0", "-1", "1", "99999999999999999999", "-99999999999999999999",
                                    "0.0", "-0.0", "1e999", "-1e999", "NaN", "Inf", "-Inf", "0xFFFFFFFFFFFFFFFF",
                                    "0x", "-", "+", ".", "  ", " \t "};
@@ -157,7 +136,7 @@ inline void mutate(Rng& r, std::string& s, size_t maxLen) {
       s += nums[r.bounded(sizeof(nums) / sizeof(nums[0]))];
       break;
     }
-    case 11: { // field duplication / reorder: duplicate a line
+    case 11: {
       if (!s.empty()) {
         size_t nl = s.find('\n');
         if (nl != std::string::npos) {
@@ -169,19 +148,19 @@ inline void mutate(Rng& r, std::string& s, size_t maxLen) {
       }
       break;
     }
-    case 12: { // repeated structural char blowup
+    case 12: {
       char c = (char)('{' + r.bounded(6));
       s.assign((size_t)(r.bounded(2000) + 1), c);
       break;
     }
-    case 13: { // splice two seeds worth: append a known fragment
+    case 13: {
       static const char* frags[] = {"key=value", "pkg:com.foo", "0-7", "0xdeadbeef",
                                    "Status: 200", "Content-Length: 99999999", "GET / HTTP/1.1",
                                    "Timeline: ", "0 ms", "package:com.bar", "# comment", "a=b=c=d"};
       s += frags[r.bounded(sizeof(frags) / sizeof(frags[0]))];
       break;
     }
-    default: { // plain random bytes
+    default: {
       size_t n = r.bounded(64);
       s.clear();
       for (size_t i = 0; i < n; i++) s.push_back((char)r.bounded(256));
@@ -191,23 +170,18 @@ inline void mutate(Rng& r, std::string& s, size_t maxLen) {
   if (s.size() > maxLen) s.resize(maxLen);
 }
 
-// ---- options ----------------------------------------------------------------
 struct Options {
   std::string name;
   std::string crashDir;
   uint64_t minIter = 20000000ULL;
-  double minSeconds = 1800.0;  // 30 min wall-clock gate
+  double minSeconds = 1800.0;
   uint64_t seed = 0xC0FFEEULL;
   std::vector<std::string> seeds;
   size_t maxLen = 256 * 1024;
 };
 
-// ---- runner: dual gate + watchdog ------------------------------------------
 template <class Fn>
 int run(const Options& opt, Fn&& fn) {
-  // Wire the log sink to /dev/null once so the null-fp orphan buffer can never
-  // grow unbounded during the fuzz loop (see header comment). fchmod on /dev/null
-  // failing is harmless.
   LOG_FILE = "/dev/null";
   logInit();
 
@@ -224,7 +198,6 @@ int run(const Options& opt, Fn&& fn) {
   sigaction(SIGBUS, &sa, nullptr);
   sigaction(SIGFPE, &sa, nullptr);
 
-  // hang watchdog: if a single parse call exceeds 3 s, abort (infinite loop).
   std::thread watcher([&]() {
     while (!g_done.load()) {
       if (g_inCall.load()) {
@@ -258,7 +231,6 @@ int run(const Options& opt, Fn&& fn) {
   auto t0 = std::chrono::steady_clock::now();
   for (;;) {
     if (iter == 0 || rng.chance(64)) {
-      // re-seed from corpus occasionally to stay near structured grammar
       if (!opt.seeds.empty()) cur = opt.seeds[rng.bounded(opt.seeds.size())];
     }
     mutate(rng, cur, opt.maxLen);
@@ -297,7 +269,6 @@ int run(const Options& opt, Fn&& fn) {
   return 0;
 }
 
-// helper: load a seed file into a string
 inline std::string slurp(const char* path) {
   FILE* f = fopen(path, "rb");
   if (!f) return {};
@@ -310,4 +281,4 @@ inline std::string slurp(const char* path) {
   return s;
 }
 
-}  // namespace fz
+}

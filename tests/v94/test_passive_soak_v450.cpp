@@ -1,24 +1,3 @@
-// test_passive_soak_v450.cpp — v4.5.0 PASSIVE (observe-only) mode boundedness soak.
-//
-// Gate G2, task two. This is a PURE-HOST soak (AATPE_HOST_TEST seam, no device,
-// no sysfs, no control action). It drives the v4.5.0 ML shadow-sampling path
-// exactly the way the observe-only daemon would: shadow sampling ON, but the
-// formal control path (LearningModel::update()) is NEVER invoked — proving a
-// long-running passive daemon cannot:
-//   (a) grow the shadow ring without bound           (cap = kMaxShadowSamples=512)
-//   (b) grow pending decisions without bound           (cap = MAX_PENDING_DECISIONS=1024)
-//   (c) leak RSS / fds / threads across the run
-//   (d) emit any control action                       (no weights / sample_count /
-//                                                      alpha / drift movement).
-//
-// Because a 30-minute wall-clock soak is expensive on a 2-core VM, we use the
-// task-permitted "compressed-time fast tick": we push FAR more than 512 shadow
-// samples (200 000) plus 5000 pending cycles in milliseconds, and sample the
-// observable counters/ring/RSS/fds at checkpoints. If the ring seals at 512 and
-// memory is flat across that burst, a wall-clock paced run (which pushes the
-// same logical events far slower) cannot exceed these bounds.
-//
-// Links aatpe_ml.cpp + ml_deps + log_stub, identical to ml_shadow_v450.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -92,9 +71,8 @@ int main() {
     printf("=== PASSIVE-mode shadow boundedness soak (compressed fast-tick) ===\n");
     LearningModel m;
     m.setEnabled(true);
-    m.setShadowSamplingEnabled(true);   // passive observe-only sampling ON
+    m.setShadowSamplingEnabled(true);
 
-    // Baseline control-state must never move (we never call update()).
     long long colBase = m.getShadowSamplesCollected();
     long long dropBase = m.getShadowSamplesDropped();
     int totalSamplesBefore = m.getTotalSamples();
@@ -104,8 +82,8 @@ int main() {
            colBase, dropBase, totalSamplesBefore, rss0, fd0);
     printf("\n--- sample table: checkpoint, pushed, ring_size, collected, dropped, pending, rss_kb, fds ---\n");
 
-    const long N = 200000;          // far exceeds ring cap (512)
-    const long STEP = 5000;         // sample every 5000 pushes
+    const long N = 200000;
+    const long STEP = 5000;
     size_t maxRingSeen = 0;
     long long pushed = 0;
 
@@ -113,11 +91,9 @@ int main() {
         m.recordShadowOutcome((int)(i % 3), makeFeeds(1000.0f + (float)(i % 512)),
                               0.5f + 0.01f * (float)(i % 10));
         pushed++;
-        // Interleave a shadow pending decision each ~1000 pushes to exercise the
-        // pending path in observe mode (markPendingShadow + later clear).
         if ((i % 1000) == 0) {
-            int tid = 900000 + (int)(i % 4000);   // rotating tids up to 4000
-            m.recordPendingDecision(tid, /*cpu=*/2, /*pool=*/2,
+            int tid = 900000 + (int)(i % 4000);
+            m.recordPendingDecision(tid, 2, 2,
                                      makeFeeds(1500.0f), 1000ULL, 50ULL, 40);
             m.markPendingShadow(tid);
         }
@@ -134,32 +110,26 @@ int main() {
         }
     }
 
-    // ---- Phase B: ring must now be sealed at exactly 512 ----
     size_t ringAfter = m.getShadowRingSize();
     long long colAfter = m.getShadowSamplesCollected();
-    // push another burst with NO expectation of growth
     for (long i = 0; i < 20000; i++) {
         m.recordShadowOutcome(0, makeFeeds(999.0f), 0.7f);
     }
     size_t ringAfter2 = m.getShadowRingSize();
     long long colAfter2 = m.getShadowSamplesCollected();
 
-    // ---- Phase C: invalid sentinel -> dropped counter grows, ring/collected frozen ----
     long long dropBeforeC = m.getShadowSamplesDropped();
     size_t ringBeforeC = m.getShadowRingSize();
     long long colBeforeC = m.getShadowSamplesCollected();
     for (int i = 0; i < 1000; i++) {
-        m.recordShadowOutcome(0, makeFeeds(1000.0f), -1.0f);  // invalid
+        m.recordShadowOutcome(0, makeFeeds(1000.0f), -1.0f);
     }
 
-    // ---- Phase D: drive pending to its 1024 hard top with fresh tids ----
-    // Use freshly-unique tids so the same-tid overwrite / skip guards don't keep
-    // the deque tiny; this forces the eviction-at-MAX_PENDING_DECISIONS path.
     int pendBeforeD = countPending(m);
     int pendPeakD = 0;
     for (int i = 0; i < 15000; i++) {
-        int tid = 5000000 + i;   // 15000 distinct tids, never repeated
-        m.recordPendingDecision(tid, /*cpu=*/1, /*pool=*/1,
+        int tid = 5000000 + i;
+        m.recordPendingDecision(tid, 1, 1,
                                 makeFeeds(1200.0f), 1000ULL, 50ULL, 40);
         m.markPendingShadow(tid);
         if ((i % 2000) == 1999) {
@@ -187,16 +157,13 @@ int main() {
     CHECK(m.getShadowRingSize() == ringBeforeC, "ring unchanged after invalid-sentinel burst");
     CHECK(m.getShadowSamplesCollected() == colBeforeC, "collected unchanged by invalid sentinels");
 
-    // pending bounded (1024 hard top, oldest evicted)
     CHECK(pendPeakD <= 1024, "pending decision count bounded <=1024 after 15k fresh tids");
     CHECK(pendAfterD == 1024, "pending sealed at exactly 1024 (hard top, oldest evicted)");
 
-    // NO control action in passive mode: formal model untouched.
     CHECK(m.getTotalSamples() == totalSamplesBefore, "passive: formal total_samples never moved (no update())");
     CHECK(m.getAlpha() == 0.0f, "passive: alpha stays 0 (shadow never matures control)");
     CHECK(!g_mlDriftDetected.load(), "passive: no drift latch from shadow outcomes");
 
-    // RSS / fd boundedness: end must not be wildly above start after a 220k-event burst.
     long rssDelta = rss1 - rss0;
     CHECK(rssDelta < 4096, "RSS did not grow >4MB across the soak (flat / bounded)");
     CHECK(fd1 - fd0 <= 2, "fd count flat across soak (no fd leak)");

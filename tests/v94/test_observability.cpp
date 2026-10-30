@@ -1,7 +1,3 @@
-// test_observability.cpp - Direct unit tests for aatpe_observability.cpp
-// Covers: health status, alert dedup/count, metrics O(1) index, thresholds,
-//         health check state machine, JSON export incl. escaping.
-// Build: g++ -std=c++17 -I<SRC> -I<STUB> test_observability.cpp aatpe_observability.cpp -o t
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -32,8 +28,8 @@ int main() {
     clearAlerts();
     CHECK(getAlertCount(AlertSeverity::WARNING) == 0, "alerts empty after clear");
     raiseAlert(AlertSeverity::WARNING, "srcA", "disk low");
-    raiseAlert(AlertSeverity::WARNING, "srcA", "disk low");   // within 60s -> dedup
-    raiseAlert(AlertSeverity::WARNING, "srcA", "disk low");   // dedup again
+    raiseAlert(AlertSeverity::WARNING, "srcA", "disk low");
+    raiseAlert(AlertSeverity::WARNING, "srcA", "disk low");
     raiseAlert(AlertSeverity::ERROR, "srcB", "cpu hot");
     CHECK(getAlertCount(AlertSeverity::WARNING) == 1, "dedup keeps one WARNING record");
     CHECK(getAlertCount(AlertSeverity::ERROR) == 1, "distinct ERROR recorded");
@@ -42,7 +38,6 @@ int main() {
     int dedupCount = 0;
     for (auto& a : recent) if (a.source == "srcA") dedupCount = a.count;
     CHECK(dedupCount == 3, "duplicate-suppression count == 3");
-    // max-truncation of getRecentAlerts
     CHECK(getRecentAlerts(1).size() == 1, "getRecentAlerts(max=1) returns 1");
     clearAlerts();
     CHECK(getRecentAlerts(50).empty(), "alerts cleared");
@@ -58,7 +53,7 @@ int main() {
     updateMetric("cpu_usage", 42.5);
     CHECK(getMetricValue("cpu_usage") == 42.5, "update/getMetricValue roundtrip");
     CHECK(getMetricValue("nonexistent") == 0.0, "unknown metric returns 0");
-    updateMetric("cpu_usage", 10.0); // O(1) re-update
+    updateMetric("cpu_usage", 10.0);
     CHECK(getMetricValue("cpu_usage") == 10.0, "re-update via index works");
     CHECK(getAllMetrics().size() == 3, "getAllMetrics count");
 
@@ -97,7 +92,6 @@ int main() {
     raiseAlert(AlertSeverity::ERROR, "srv", "bad \"value\"\\here");
     std::string aj = exportAlertsJson();
     CHECK(aj.find("\"alerts\"") != std::string::npos, "alerts json has alerts key");
-    // quote and backslash must be escaped
     CHECK(aj.find("\\\"") != std::string::npos, "double-quote escaped in JSON");
     CHECK(aj.find("\\\\") != std::string::npos, "backslash escaped in JSON");
     CHECK(aj.find("\"severity\":\"ERROR\"") != std::string::npos, "severity string serialized");

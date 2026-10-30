@@ -1,13 +1,3 @@
-// fz_pkglist.cpp - R-W3 strengthened: fuzz getPkgUid() with parsing-semantic
-// assertions. We write mutated packages.list content, call the production
-// getPkgUid(), and compare against a reference parser that mirrors the
-// production logic (strncmp prefix + boundary space + strtol).
-//
-// INVARIANTS:
-//   - getPkgUid("com.fuzz.target") must equal the reference parser's result.
-//   - com.foo must NOT match com.foobar (boundary space enforced).
-//   - No matching line -> -1.
-//   - Truncated lines (>511 bytes) handled per fgets chunking.
 #include <string>
 #include <cstdio>
 #include <cstring>
@@ -17,7 +7,6 @@
 #include <sstream>
 #include "fuzz_engine.h"
 
-// fopen interposer: redirect hardcoded packages.list to our temp file.
 static std::string g_pkglistPath;
 extern "C" inline FILE* my_fopen(const char* path, const char* mode) {
   if (path && std::string(path) == "/data/system/packages.list") {
@@ -29,16 +18,11 @@ extern "C" inline FILE* my_fopen(const char* path, const char* mode) {
 #include "frame.cpp"
 #undef fopen
 
-// Reference parser: mirrors getPkgUid() exactly.
-// Production: fgets into char line[512]; strncmp(line,pkg,pkgLen)==0 &&
-//   line[pkgLen]==' '; then strtol(line+pkgLen+1).
 static long refGetPkgUid(const std::string& content, const std::string& pkg) {
   std::istringstream iss(content);
   std::string line;
   long uid = -1;
   while (std::getline(iss, line)) {
-    // fgets reads at most 511 chars per chunk (sizeof(line)=512).
-    // For reference, truncate to 511 chars per "line" (first chunk).
     if (line.size() > 511) line.resize(511);
     size_t pkgLen = pkg.size();
     if (line.size() >= pkgLen + 1 &&
@@ -58,9 +42,6 @@ int main(int argc, char** argv) {
   const char* crashDir = argc > 1 ? argv[1] : "crash";
   const char* logTag   = argc > 2 ? argv[2] : "fz_pkglist";
   g_pkglistPath = "/tmp/aatpe_pkglist/packages.list";
-  // F1 close-out: the harness must create its scratch directory, otherwise the
-  // ofstream below silently fails, getPkgUid reads a missing file and returns -1
-  // (vs the reference parser's parsed value), tripping a false SEMFAIL abort.
   mkdir("/tmp/aatpe_pkglist", 0755);
   fz::Options opt;
   opt.name = logTag;
@@ -76,8 +57,8 @@ int main(int argc, char** argv) {
     "com.fuzz.targetX 99999 0 /data\ncom.fuzz.target 2000 1 /data\n",
     "com.fuzz.target  abc 0 /data\n",
     "\x01\x02\x03 garbage line\ncom.fuzz.target 42\n",
-    "com.fuzz.target",   // no space -> must NOT match
-    "com.fuzz.target  \n",  // space but empty uid -> strtol returns 0
+    "com.fuzz.target",
+    "com.fuzz.target  \n",
   };
   fz::run(opt, [&](const std::string& in) {
     {

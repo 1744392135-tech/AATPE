@@ -3,7 +3,6 @@
 
 #include <math.h>
 
-/* ---- normal: rising load => boost hint ---- */
 static int test_normal_rising_boost(void)
 {
     LoadForecastConfig cfg;
@@ -12,7 +11,6 @@ static int test_normal_rising_boost(void)
     load_forecast_config_default(&cfg);
     load_forecast_state_init(&st);
 
-    /* Feed a steadily rising CPU load: 20, 30, 40, 50, 60, 70, 80... */
     LoadObservation obs;
     for (int i = 0; i < 20; i++) {
         obs.cpu_util_pct = 20.0f + (float)i * 4.0f;
@@ -22,13 +20,11 @@ static int test_normal_rising_boost(void)
         load_forecast_step(&obs, &cfg, &st, &out);
     }
 
-    /* After 20 rising samples, trend should be rising and boost hint set. */
     CHECK(out.trend_rising == 1);
     CHECK(out.num_windows == cfg.horizon_windows);
     CHECK(out.confidence > 0.0f);
-    CHECK(out.boost_hint == 1); /* CPU forecast should be high */
+    CHECK(out.boost_hint == 1);
 
-    /* Forecast values should all be finite and bounded. */
     for (uint32_t k = 0; k < out.num_windows; k++) {
         CHECK(isfinite(out.cpu_forecast[k]));
         CHECK(out.cpu_forecast[k] >= 0.0f && out.cpu_forecast[k] <= 100.0f);
@@ -37,7 +33,6 @@ static int test_normal_rising_boost(void)
     return test_summary("load_forecast normal rising boost");
 }
 
-/* ---- boundary: insufficient samples => low confidence ---- */
 static int test_boundary_insufficient_samples(void)
 {
     LoadForecastConfig cfg;
@@ -52,7 +47,6 @@ static int test_boundary_insufficient_samples(void)
     obs.frame_time_ms = 16.67f;
     obs.psi_cpu_avg10 = 0.0f;
 
-    /* Only 3 samples (min_samples=5 default). */
     for (int i = 0; i < 3; i++)
         load_forecast_step(&obs, &cfg, &st, &out);
 
@@ -63,7 +57,6 @@ static int test_boundary_insufficient_samples(void)
     return test_summary("load_forecast boundary insufficient samples");
 }
 
-/* ---- fault injection: NaN / inf / NULL ---- */
 static int test_fault_injection(void)
 {
     LoadForecastConfig cfg;
@@ -72,14 +65,12 @@ static int test_fault_injection(void)
     load_forecast_config_default(&cfg);
     load_forecast_state_init(&st);
 
-    /* NULL pointers */
     load_forecast_step(NULL, &cfg, &st, &out);
     load_forecast_step(NULL, NULL, &st, &out);
     load_forecast_step(NULL, &cfg, NULL, &out);
     load_forecast_step(NULL, &cfg, &st, NULL);
-    CHECK(1); /* no crash */
+    CHECK(1);
 
-    /* NaN observations */
     LoadObservation obs;
     obs.cpu_util_pct = NAN;
     obs.gpu_util_pct = NAN;
@@ -89,11 +80,9 @@ static int test_fault_injection(void)
     for (int i = 0; i < 20; i++)
         load_forecast_step(&obs, &cfg, &st, &out);
 
-    /* All NaN => no valid samples, confidence 0. */
     CHECK(out.confidence == 0.0f);
     CHECK(isfinite(out.cpu_forecast[0]));
 
-    /* Inf values */
     load_forecast_state_init(&st);
     obs.cpu_util_pct = INFINITY;
     obs.gpu_util_pct = INFINITY;
@@ -105,7 +94,6 @@ static int test_fault_injection(void)
     CHECK(isfinite(out.cpu_forecast[0]));
     CHECK(out.cpu_forecast[0] <= 100.0f);
 
-    /* Negative values */
     load_forecast_state_init(&st);
     obs.cpu_util_pct = -50.0f;
     obs.gpu_util_pct = -20.0f;
@@ -119,7 +107,6 @@ static int test_fault_injection(void)
     return test_summary("load_forecast fault injection");
 }
 
-/* ---- falling load => deboost hint ---- */
 static int test_falling_deboost(void)
 {
     LoadForecastConfig cfg;
@@ -128,7 +115,6 @@ static int test_falling_deboost(void)
     load_forecast_config_default(&cfg);
     load_forecast_state_init(&st);
 
-    /* Feed a steadily falling load from high to low. */
     LoadObservation obs;
     for (int i = 0; i < 20; i++) {
         obs.cpu_util_pct = 80.0f - (float)i * 3.5f;
@@ -144,7 +130,6 @@ static int test_falling_deboost(void)
     return test_summary("load_forecast falling deboost");
 }
 
-/* ---- long sequence: bounded, no overflow ---- */
 static int test_long_sequence_bounded(void)
 {
     LoadForecastConfig cfg;
@@ -156,7 +141,6 @@ static int test_long_sequence_bounded(void)
     LoadObservation obs;
     obs.psi_cpu_avg10 = 2.0f;
 
-    /* 10000 alternating up/down ticks. */
     for (int i = 0; i < 10000; i++) {
         float base = 30.0f + 30.0f * sinf((float)i * 0.01f);
         obs.cpu_util_pct = base;

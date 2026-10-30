@@ -1,21 +1,3 @@
-// AATPE v6.0.0 round3.2 cold-path microbench: backupModelFile mkstemp vs old
-// getpid-fixed-name. Models aatped_main.cpp:187 backupModelFile() faithfully:
-//   open(src O_RDONLY) -> create tmp -> 4KB read/write copy loop (EINTR-hardened)
-//   -> fsync -> close -> rename(tmp -> .bak).
-//
-// The ONLY behavioral difference between round3.2 and the old build is how the
-// temp leaf is created:
-//   NEW (round3.2):  mkstemp("<bak>.tmp.XXXXXX")   (atomic O_EXCL, unique per call)
-//   OLD (pre-round3): open("<bak>.tmp.<getpid()>", O_WRONLY|O_CREAT|O_TRUNC)
-//
-// Everything after the create (4KB copy loop, fsync, rename) is identical.
-// This harness times the FULL backup pipeline for both, so the measured delta is
-// exactly the cost of the create-step change, amortized over one backup.
-//
-// Cold path: called after a successful model save, ~once per tens of seconds.
-//
-// Build: g++ -std=c++17 -O2 -pthread backup_model_cold.cpp -o backup_model_cold
-// Run:   taskset -c 0 ./backup_model_cold [MODEL_BYTES] [ROUNDS]
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -32,7 +14,6 @@
 
 using clk = std::chrono::steady_clock;
 
-// NEW path: mkstemp-based create (mirrors aatped_main.cpp:206)
 static double backup_new(const char* src, const char* bak) {
     auto t0 = clk::now();
     std::string tmp = std::string(bak) + ".tmp.XXXXXX";
@@ -61,7 +42,6 @@ static double backup_new(const char* src, const char* bak) {
     return std::chrono::duration<double,std::nano>(clk::now()-t0).count();
 }
 
-// OLD path: fixed getpid() name, open O_TRUNC (pre-round3 behavior)
 static double backup_old(const char* src, const char* bak) {
     auto t0 = clk::now();
     std::string tmp = std::string(bak) + ".tmp." + std::to_string((long)::getpid());
@@ -100,7 +80,6 @@ int main(int argc, char** argv) {
     std::string src = std::string(dir) + "/model.dat";
     std::string bak = std::string(dir) + "/model.dat.bak";
 
-    // create source model file of representative size
     {
         int f = ::open(src.c_str(), O_WRONLY|O_CREAT|O_TRUNC, 0644);
         char chunk[4096]; for (int i=0;i<4096;++i) chunk[i]=(char)(i&0xff);
@@ -113,7 +92,6 @@ int main(int argc, char** argv) {
     std::printf("model size = %ld bytes (%ld x 4KB blocks), rounds=%d\n",
                 modelBytes, (modelBytes+4095)/4096, rounds);
 
-    // warmup
     for (int i=0;i<5;++i){ backup_old(src.c_str(),bak.c_str()); backup_new(src.c_str(),bak.c_str()); }
 
     std::vector<double> ot, nt;
@@ -133,7 +111,6 @@ int main(int argc, char** argv) {
     std::printf("absolute delta = %.1f ns = %.2f us\n", nMed-oMed, (nMed-oMed)/1e3);
     std::printf("sample n: old=%zu new=%zu\n", ot.size(), nt.size());
 
-    // cleanup
     ::unlink(src.c_str()); ::unlink(bak.c_str());
     return 0;
 }

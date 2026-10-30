@@ -3,10 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<!-- W-017: Content Security Policy. The page is served from the KSU/Magisk webview
-     (appassets origin) and talks only to the loopback daemon HTTP server. Inline
-     <script>/<style> are used throughout this single-file UI, so 'unsafe-inline' is
-     required for script/style; no remote origins are allowed except loopback fetch/SSE. -->
+
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' data:;">
 <title>AATPE - 自适应任务放置引擎</title>
 <style>
@@ -177,7 +174,7 @@ select:focus{outline:none;border-color:#00d4aa}
 <div class="header">
 <h1>AATPE</h1>
 <div class="ver">Adaptive Android Task Placement Engine v6.0.0
-  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel19 · 构建于 2026-10-29</span>
+  <span style="color:#ffd166;font-weight:700;margin-left:10px">rel20 · 构建于 2026-10-30</span>
 </div>
 <div class="status-bar">
 <span class="status-pill offline" id="daemonStatus">守护进程: 未运行</span>
@@ -199,7 +196,7 @@ select:focus{outline:none;border-color:#00d4aa}
 </div>
 
 <div class="tab-content active" id="tab-control">
-<!-- P0: 崩溃/被动面板 — 仅当后端状态键指示守护曾崩溃/被动时显示 -->
+
 <div id="crash-banner" style="display:none;border:1px solid #ff4757;background:rgba(255,71,87,.10);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px">
 <div style="color:#ff6b81;font-weight:bold;margin-bottom:4px">⚠ 守护曾反复崩溃，当前处于被动/降级模式</div>
 <div style="color:#ccc;line-height:1.6">
@@ -320,13 +317,11 @@ Watchdog 锁定状态: <span id="watchdog-lock-status" style="font-weight:bold;c
 <div class="stat-item"><div class="label">当前配置</div><div class="value" id="cur-profile">--</div></div>
 <div class="stat-item"><div class="label">迁移次数</div><div class="value green" id="cur-migrations">--</div></div>
 <div class="stat-item"><div class="label">决策次数</div><div class="value" id="cur-decisions">--</div></div>
-<!-- #99: HTTP channel state read from the SAME g_httpState/g_httpPort the top
-     status bar uses, so control page and status bar can never disagree. -->
+
 <div class="stat-item"><div class="label">HTTP 服务</div><div class="value" id="cur-http-state">--</div></div>
 </div>
 </div>
 
-<!-- rel12-perf: collapsible performance diagnostics -->
 <div class="card">
 <h2 style="cursor:pointer;user-select:none" onclick="togglePerfPanel()" id="perf-panel-toggle"><span class="dot"></span>性能诊断 <span style="font-size:10px;color:#888;font-weight:normal;margin-left:8px">rel12 · 折叠</span></h2>
 <div id="perf-panel-body" style="display:none;font-size:11px;line-height:1.7;color:#aaa;max-height:340px;overflow:auto;font-family:monospace;background:#111;padding:8px;border-radius:6px">
@@ -786,14 +781,7 @@ eBPF tracepoint实时监听线程创建/销毁/CPU调度/应用启动。支持em
 
 <div class="toast" id="toast"></div>
 <script type="module">
-// W1-#1: AbortSignal.timeout() compatibility shim.
-// Old MIUI/System WebView (Chromium < 98) has no static AbortSignal.timeout(),
-// which made fetch(..., {signal: aatpeTimeoutSignal(N)}) throw
-// "AbortSignal.timeout is not a function" before the request even started —
-// breaking "读取应用列表 /api/apps" and every other timed fetch. We detect the
-// static method; if absent we fall back to an AbortController we abort() ourselves.
-// If BOTH are unavailable we return undefined, which fetch() treats as "no signal"
-// (safe: the request simply won't time out from our side, but still won't throw).
+
 function aatpeTimeoutSignal(ms){
     try{
         if (typeof AbortSignal !== 'undefined' && AbortSignal && typeof AbortSignal.timeout === 'function') {
@@ -809,17 +797,12 @@ function aatpeTimeoutSignal(ms){
     } catch(e) {}
     return undefined;
 }
-// Classify a fetch() failure into a user-facing reason. Distinguishes
-// timeout (AbortError) from connection-refused/daemon-down (TypeError) from
-// endpoint-absent (HTTP 404, e.g. W2 /api/frame_apps not landed yet) from
-// "this WebView doesn't support timed fetch at all".
+
 function aatpeClassifyFetchError(e, fallbackLabel){
     if (!e) return (fallbackLabel || '未知错误');
     const name = e.name || '';
     const msg = (e.message || String(e));
-    // Check "unsupported WebView feature" FIRST: a message like
-    // "AbortSignal.timeout is not a function" contains the substring
-    // "signal", which the timeout regex below would otherwise swallow.
+
     if (/not a function|undefined is not a function|is not defined/i.test(msg)) return '当前 WebView 不支持该 fetch 特性';
     if (name === 'AbortError' || /aborted|timed out|timeout|The operation was aborted/i.test(msg)) return '超时（' + (fallbackLabel || '请求') + '超过时限）';
     if (/Failed to fetch|NetworkError|Load failed|ERR_CONNECTION|refused|disconnected/i.test(msg)) return '连接失败（守护进程未响应/端口未开）';
@@ -837,9 +820,7 @@ function showError(msg) {
     el.textContent = msg;
     el.classList.add('show');
 }
-// HTML-escaping helper. MUST be used on every dynamic string that is
-// concatenated into an HTML string assigned to innerHTML, to prevent stored XSS
-// via thread names, decision names, log lines, error messages, etc.
+
 function escapeHtml(str) {
     if (str === null || str === undefined) return '';
     return String(str)
@@ -873,18 +854,16 @@ function detectApi() {
     return false;
 }
 detectApi();
-// Top-level await in module script pauses the entire script until import resolves,
-// ensuring switchTab and other functions are defined before window exposure.
-// (An async IIFE previously caused ReferenceError: switchTab is not defined.)
+
 if (!execFn) {
     try {
         const mod = await import('kernelsu');
         if (mod && typeof mod.exec === 'function') { execFn = mod.exec; apiSource = 'import(kernelsu)'; }
-    } catch(e) { /* import(kernelsu) failed */ }
+    } catch(e) {   }
 }
 if (!execFn) detectApi();
 const apiAvailable = !!execFn;
-// execFn.toString() on native functions can throw in some browsers.
+
 try {
     if (execFn) { try { String(execFn).substring(0, 200); } catch(e) {} }
 } catch(e) {}
@@ -914,10 +893,7 @@ async function smartExec(cmd) {
             result = await new Promise((resolve) => {
                 try {
                     execFn(cmd, function(a, b, c) {
-                        // Support both callback formats:
-                        // 1. callback(code, stdout, stderr) - 3 args
-                        // 2. callback(result) - 1 arg, result={code,stdout,stderr}
-                        // KernelSU variants differ; checking typeof handles both.
+
                         let errno, stdout, stderr;
                         if (typeof a === 'object' && a !== null) {
                             errno = a.code ?? a.errno ?? 0;
@@ -972,12 +948,7 @@ async function smartExec(cmd) {
     return lastExecResult;
 }
 function updateDebugPanel() {
-    // rel12-perf: only touch the debugExec DOM when it is actually visible.
-    // On SukiSU exec mode every tick does 5-15 smartExec calls; previously each
-    // one synchronously rewrote debugExec.innerHTML, forcing layout even when
-    // the panel was off-screen (it lives inside API诊断 card which the user
-    // never scrolls to). Guard by offsetParent (hidden=display:none) and by
-    // the debugExec element's own visibility.
+
     const el = document.getElementById('debugExec');
     if (!el || !lastExecResult) return;
     if (!el.offsetParent && el.style.display !== 'block') return;
@@ -998,53 +969,39 @@ async function testExec() {
     else showToast('✗ exec测试失败，查看诊断结果', true);
 }
 
-// module dir is NOT hardcoded. It is resolved at launch
-// time in-shell across all supported roots (Magisk / KernelSU / modules_update).
-// Kept only as a documented fallback default string; the real path is probed in
-// startDaemon()'s shell command (MD=... loop) so KSU /data/adb/ksu/modules/aatpe
-// and /data/adb/modules_update/aatpe also work.
 const MODDIR = '/data/adb/modules/aatpe';
 const MODDIR_CANDIDATES = ['/data/adb/modules/aatpe', '/data/adb/ksu/modules/aatpe', '/data/adb/ap/modules/aatpe', '/data/adb/modules_update/aatpe'];
 const RUN_DIR = '/dev/aatpe';
 const STATE_DIR = RUN_DIR + '/state';
 const WEBUI_DIR = RUN_DIR + '/webui';
 const LOG_FILE = RUN_DIR + '/aatpe.log';
-// Built-in HTTP server port. WebUI uses fetch() to read state
-// files from daemon's HTTP server, avoiding unreliable KernelSU exec API.
+
 let g_httpPort = 0;
 let g_httpDetected = false;
-// HTTP server intentionally disabled (KSU webroot mode). When true,
-// detectHttpPort() stops probing and readFile falls back to exec/direct-file.
+
 let g_httpDisabled = false;
-// W-1: daemon-reported HTTP channel state (STATE_DIR/http_state):
-// on | disabled_by_config | failed_token | ports_busy | unknown(legacy).
+
 let g_httpState = 'unknown';
-// Global DOM helpers — element reference caching + change detection.
-// Previously getEl/setText were defined locally inside refreshSystem/refreshHybrid,
-// so updateStatus() couldn't use them and did 15+ raw getElementById+textContent
-// per refresh, causing severe UI lag. Now globally available to all functions.
+
 if (typeof window._elCache === 'undefined') window._elCache = {};
 if (typeof window._domCache === 'undefined') window._domCache = {};
 
-// ============== rel12-perf: lightweight performance instrumentation ==============
-// Zero-cost when nobody opens the perf panel: all data is in-memory arrays, no
-// extra DOM writes, no extra timers. Long-task observer is installed once.
 const PERF = {
   t0: (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(),
   scriptStart: Date.now(),
-  firstDataMs: null,          // time of first successful updateStatus() render with real data
+  firstDataMs: null,
   detect: { startedAt: 0, durationMs: 0, result: 'not-run', detail: '' },
   readAll: { count: 0, channel: 'none', lastMs: 0, maxMs: 0, sumMs: 0, execForks: 0 },
   exec: { count: 0, totalMs: 0, maxMs: 0, p50: 0, p95: 0, samples: [] },
-  refresh: {},                // fnName -> { count, totalMs, maxMs }
+  refresh: {},
   domFlush: { count: 0, totalMs: 0, maxMs: 0 },
-  longtasks: [],              // recent longtask entries
+  longtasks: [],
   tickCount: 0,
 };
 function perfNow() { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); }
 function perfMarkExec(cmd, ms, errno) {
   PERF.exec.count++; PERF.exec.totalMs += ms; if (ms > PERF.exec.maxMs) PERF.exec.maxMs = ms;
-  // Keep last 200 samples for p50/p95. Truncate aggressively to avoid memory growth.
+
   PERF.exec.samples.push(ms);
   if (PERF.exec.samples.length > 300) PERF.exec.samples.splice(0, PERF.exec.samples.length - 300);
 }
@@ -1065,7 +1022,7 @@ function perfWrap(fnName, fn) {
     }
   };
 }
-// Long-task observer (>50ms). Guarded because some WebViews don't support it.
+
 try {
   if (typeof PerformanceObserver !== 'undefined') {
     const lo = new PerformanceObserver((list) => {
@@ -1076,15 +1033,13 @@ try {
     });
     lo.observe({ entryTypes: ['longtask'] });
   }
-} catch (e) { /* older WebView, ignore */ }
+} catch (e) {   }
 
 function getEl(id) {
     if (!window._elCache[id]) window._elCache[id] = document.getElementById(id);
     return window._elCache[id];
 }
-/* DOM update batch rendering via requestAnimationFrame.
-   All setText/setHtml and direct DOM mutations go through this queue,
-   collapsing dozens of synchronous writes into one per frame. */
+ 
 const domUpdateQueue = [];
 let rafScheduled = false;
 function scheduleRafFlush() {
@@ -1105,7 +1060,7 @@ function setText(id, value) {
     window._domCache[key] = value;
     queueDOMUpdate(() => { const el = getEl(id); if (el) el.textContent = value; });
 }
-// P0: 导出诊断日志。优先走后端打包端点；不可用则给出可复制 root 抓取命令。
+
 async function exportDiagLogs() {
     const box = getEl('debugDiag');
     const cmd = 'su -c "tar czf /sdcard/aatpe-diag.tgz -C / data/adb/modules/aatpe/aatped.log '
@@ -1133,8 +1088,7 @@ function setHtml(id, value) {
     window._domCache[key] = value;
     queueDOMUpdate(() => { const el = getEl(id); if (el) el.innerHTML = value; });
 }
-// Debounce utility — merges rapid repeated calls within waitMs into one.
-// Used for button clicks to prevent double-submission and redundant refreshes.
+
 function debounce(fn, waitMs) {
     let timer = null;
     return function(...args) {
@@ -1142,8 +1096,7 @@ function debounce(fn, waitMs) {
         timer = setTimeout(() => { timer = null; fn.apply(this, args); }, waitMs);
     };
 }
-// Throttle utility — ensures fn runs at most once per intervalMs.
-// Used for resize events.
+
 function throttle(fn, intervalMs) {
     let last = 0;
     let timer = null;
@@ -1159,13 +1112,11 @@ function throttle(fn, intervalMs) {
         }
     };
 }
-window.addEventListener('resize', throttle(() => { /* layout recalculated naturally by CSS */ }, 200));
-/* Data cache layer.
-   /state/all cached 3s, JSON files cached 1s to eliminate redundant network requests. */
+window.addEventListener('resize', throttle(() => {   }, 200));
+ 
 const stateCache = { data: null, timestamp: 0 };
 const jsonCache = {};
-// Drop client-side caches so the next poll after the tab becomes
-// visible re-reads from the daemon instead of serving up to 3s-old data.
+
 function invalidateStateCache() {
     stateCache.data = null; stateCache.timestamp = 0;
     for (const k in jsonCache) delete jsonCache[k];
@@ -1178,15 +1129,12 @@ function getCachedJson(path, ttl) {
 function setCachedJson(path, data) {
     jsonCache[path] = { data, timestamp: Date.now() };
 }
-// Global refresh lock + page visibility to prevent request storms
-let g_refreshLock = false;       // true while a refresh cycle is in flight
-let g_lockSetAt = 0;             // [v4.3.1h] timestamp the lock was acquired (watchdog)
-let g_tickSeq = 0;               // [P1-3] 刷新链代际戳：旧链 finally 仅在本代际才放锁/排下一拍
-let g_pageVisible = true;        // pause refresh when tab is hidden
-// [v4.3.1h 临时热修] 任何一路刷新 Promise 永不 settle（root 桥 exec 回调不返回 /
-// 半开 fetch / 取 token 挂起）都不得永久占住 g_refreshLock，否则整页定时器在首帧
-// （约 1 秒）后停摆。给刷新链路统一加超时兜底：超时按"本拍跳过"resolve，让 .finally
-// 正常释放锁并继续下一拍；给原 promise 挂 noop catch 防止延迟 reject 变成未处理拒绝。
+
+let g_refreshLock = false;
+let g_lockSetAt = 0;
+let g_tickSeq = 0;
+let g_pageVisible = true;
+
 function withWatchdog(p, ms) {
     try {
         if (p && typeof p.then === 'function') {
@@ -1196,73 +1144,58 @@ function withWatchdog(p, ms) {
     } catch (e) {}
     return Promise.resolve();
 }
-let g_topologyLoaded = false;    // CPU topology rendered once per page load
-// When the tab becomes visible again, kick an immediate refresh so
-// the user does not wait up to the full interval (3-8s) for fresh data, and
-// bust the client-side state cache so the first visible poll is not stale.
-// While hidden, tick() back off to a longer 5s re-check instead of the fast
-// tab interval, cutting wakeups/requests for an invisible tab.
+let g_topologyLoaded = false;
+
 document.addEventListener('visibilitychange', () => {
     const wasVisible = g_pageVisible;
     g_pageVisible = !document.hidden;
     if (g_pageVisible && !wasVisible) {
-        // became visible: force a fresh core status read on next tick
+
         try { if (typeof invalidateStateCache === 'function') invalidateStateCache(); } catch(e) {}
-        // rel12-perf: if HTTP was blocked by WebView origin restriction, give
-        // one retry when the user comes back (e.g. they switched browser /
-        // network). Config-disabled (disabled_by_config) stays disabled.
+
         if (g_httpState === 'webview_blocked') { g_httpDisabled = false; g_httpState = 'unknown'; }
         if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
-        // (re)open SSE connection
+
         startSse();
         if (typeof startRefresh === 'function') startRefresh();
     } else if (!g_pageVisible && wasVisible) {
-        // became hidden: close SSE to save battery/CPU
+
         stopSse();
     }
 });
 
-// Batch-read ALL state files in one HTTP request instead of
-// 15+ serial readFile() calls. Falls back to individual exec reads if HTTP unavailable.
-// readAllState() has an exec fallback for core state keys when HTTP is unavailable,
-// so updateStatus() does not show all "--".
 const CORE_STATE_KEYS = [
     'daemon_uptime','control_mode','current_profile','profile_lock','auto_profile',
     'migration_count','decision_count','thermal_cpu_max','system_load','sf_latency_avg','layer_count',
     'clusters','clusters_raw_debug','topology_diagnostics',
-    // v4.1 新增
+
     'frame_source','game_frame_miss','game_hz','game_avg_fps','game_p90_fps','game_p99_fps','frame_unavailable_reason',
-    // v4.2.8 VM-aware frame attribution
+
     'vm_container_pkg','vm_inner_game','vm_inner_pids',
-    // v4.2.1 frame diagnostics (why no game layer / FPS) + manual game list
+
     'frame_debug_fg','frame_debug_candidates',
-    // #103/P3-3: backend's honest game-scene classification (combat/loading/menu/unknown).
-    // The state cache (/state/all aggregate, ui-snapshot, per-file batch) is keyed by
-    // STATE_DIR FILENAME, which is `current_game_scene` -- NOT the `game_scene` alias
-    // used inside writeStateJson()'s separate webui snapshot file. Use the filename here
-    // so delta/snapshot path hits directly without falling back to a direct readFile.
+
     'current_game_scene',
-    // #102: external scheduler coexistence warning (read-only observability)
+
     'external_scheduler_detected','external_scheduler_names',
     'thermal_hal_status','thermal_hal_skin','thermal_hal_headroom','thermal_source','gpu_hard_throttle','gpu_thermal_cap',
-    // ROUND-014 hotfix: dropped 'scan_loop_ms' (no producer; was a dead fallback read).
+
     'cgroup_uclamp_scale','ebpf_state','gpu_boost_active','watchdog_degraded','tmpfs_usage_kb','cold_start_window',
-    // v4.2 Batch C: cross-batch observability counters. Missing files degrade to '' -> '—'.
+
     'cold_start_rejected','ml_weight_degraded_count','sf_thread_count','schedtune_boost_current','autocal_ratio','thermal_headroom_pct'
 ];
-// ROUND-007g: multi-line state files need tr-safety (KSU exec strips newlines).
-// These files are read via `cat <f> | tr '\n' '\036'` and split on \u001e.
+
 const MULTILINE_STATE_FILES = ['clusters','clusters_raw_debug','topology_diagnostics','cluster_pressure'];
 async function readStateFileExec(key) {
     try {
-        // Multi-line files: use tr to preserve newlines as 0x1E record separator.
+
         if (MULTILINE_STATE_FILES.includes(key)) {
-            // Primary: tr '\n' '\036'. Fallback (old toybox): base64 encode.
+
             let r = await smartExec('cat ' + STATE_DIR + '/' + key + ' 2>/dev/null | tr \'\\n\' \'\\036\'');
             if (r && r.errno === 0 && r.stdout && r.stdout.length > 0) {
                 return r.stdout.split('\u001e').join('\n');
             }
-            // Fallback: base64 single-line, decode in JS.
+
             r = await smartExec('base64 ' + STATE_DIR + '/' + key + ' 2>/dev/null | tr -d \'\\n\'');
             if (r && r.errno === 0 && r.stdout && r.stdout.length > 0) {
                 try { return atob(r.stdout.trim()); } catch(e) {}
@@ -1274,10 +1207,7 @@ async function readStateFileExec(key) {
     } catch(e) {}
     return '';
 }
-// W-1: pull the daemon's http_state out of any state snapshot and reconcile the
-// probe-disable flag. disabled_by_config stops port probing (deliberate off, not a
-// fault); failed_* leaves probing live so a later ENABLE_HTTP_SERVER reload retry is
-// picked up without a page reload.
+
 function ingestHttpChannelState(o) {
     if (!o || typeof o !== 'object') return;
     const hs = (typeof o.http_state === 'string' ? o.http_state : '').trim();
@@ -1287,25 +1217,16 @@ function ingestHttpChannelState(o) {
     }
 }
 async function readAllState() {
-    /* 3-second client cache for /state/all */
+     
     if (Date.now() - stateCache.timestamp < 3000 && stateCache.data) return stateCache.data;
     const _t0 = perfNow();
-    // rel13-perf: NEVER block first paint on HTTP detection. The exec bridge
-    // (window.ksu.exec -> aatpe-cli ui-snapshot) works regardless of HTTP; on
-    // SukiSU the WebView origin cannot reach 127.0.0.1 and awaiting the probe
-    // stalled first real data for ~7.9s. Kick detection off in the background
-    // only and proceed straight to the exec snapshot below. (initBoot already
-    // fires it once; the g_httpDetecting lock prevents a second concurrent run.)
+
     if (g_httpPort === 0 && !g_httpDisabled && !g_httpDetecting) {
         detectHttpPort().catch(function(){});
     }
     if (g_httpPort > 0) {
         try {
-            // /state/all requires the daemon token (it leaks pid,
-            // foreground package, CPU topology). W-003: send the token via the
-            // X-Daemon-Token HEADER (not ?token=) so it does not leak into `ps`
-            // / proxy logs / browser history. SSE /events still uses ?token=
-            // because EventSource cannot set custom headers.
+
             const tok = await getDaemonToken();
             const resp = await fetch('http://127.0.0.1:' + g_httpPort + '/state/all', {
                 headers: tok ? { 'X-Daemon-Token': tok } : {},
@@ -1327,15 +1248,14 @@ async function readAllState() {
             }
         } catch(e) {}
     }
-    // Fallback: single root-bridge exec `aatpe-cli ui-snapshot` returns the
-    // entire STATE_DIR as one JSON object (one fork instead of N per-file cat).
+
     try {
         const r = await smartExec('MD=""; for p in /data/adb/modules/aatpe /data/adb/ksu/modules/aatpe /data/adb/ap/modules/aatpe /data/adb/modules_update/aatpe; do [ -x "$p/system/bin/aatpe-cli" ] && MD="$p" && break; done; "$MD/system/bin/aatpe-cli" ui-snapshot 2>/dev/null');
         if (r && r.stdout) {
             const obj = JSON.parse(r.stdout);
             stateCache.data = obj;
             stateCache.timestamp = Date.now();
-            // populate per-tick readFile snapshot cache
+
             invalidateSnapCache();
             for (const k of Object.keys(obj)) {
                 if (k === 'frame_apps_raw') { snapCache.set(STATE_DIR + '/frame_apps.json', obj[k]); }
@@ -1349,17 +1269,13 @@ async function readAllState() {
             PERF.readAll.lastMs = ms; if (ms > PERF.readAll.maxMs) PERF.readAll.maxMs = ms;
             PERF.readAll.sumMs += ms; PERF.readAll.channel = 'exec-snapshot'; PERF.readAll.execForks++;
             if (PERF.firstDataMs === null) {
-                // First time we got real data — mark first contentful paint.
+
                 PERF.firstDataMs = Math.round(perfNow() - PERF.t0);
             }
             return obj;
         }
     } catch(e) {}
-    // Last-resort: ONE batched exec instead of N per-file forks. Emits
-    //   KEY<US><base64><RS>  (US=0x1F unit sep, RS=0x1E record sep) for each core
-    //   file; base64 round-trips both single- and multi-line state files verbatim
-    //   (newlines included), so we don't need the tr/\036 dance. This collapses
-    //   ~40 root-bridge forks into 1.
+
     try {
         const keysArg = CORE_STATE_KEYS.join(' ');
         const r = await smartExec('cd ' + STATE_DIR + ' 2>/dev/null && for k in ' + keysArg +
@@ -1392,26 +1308,22 @@ async function readAllState() {
 }
 async function readAllStateCached() { return readAllState(); }
 
-// Detect daemon's built-in HTTP server port (8888-8899).
-// Probes the full 8888-8899 range (12 ports). Also reads the http_port file and
-// enforces a 10s cooldown to prevent detection storms caused by
-// readFileViaHttp() calling this on every read.
 let g_httpDetectAttempts = 0;
-let g_httpDetecting = false; // lock: prevent concurrent detection storms
-let g_httpLastDetect = 0;    // timestamp of last detection attempt (for cooldown)
+let g_httpDetecting = false;
+let g_httpLastDetect = 0;
 async function detectHttpPort() {
-    if (g_httpPort > 0) return g_httpPort; // already found
-    if (g_httpDisabled) return 0; // daemon intentionally disabled OR webview blocked
-    if (g_httpDetecting) return 0; // another detection in progress
-    // Cooldown: don't retry more than once every 10 seconds after first failure
+    if (g_httpPort > 0) return g_httpPort;
+    if (g_httpDisabled) return 0;
+    if (g_httpDetecting) return 0;
+
     const now = Date.now();
     if (g_httpDetectAttempts > 0 && (now - g_httpLastDetect) < 10000) return 0;
     g_httpLastDetect = now;
-    if (g_httpDetectAttempts >= 30) return 0; // give up after 30 attempts (was 5, too aggressive)
+    if (g_httpDetectAttempts >= 30) return 0;
     g_httpDetecting = true;
     g_httpDetectAttempts++;
     PERF.detect.startedAt = perfNow();
-    // Method 1: Read port file written by daemon (most reliable, zero network cost)
+
     let filePort = 0;
     try {
         const portStr = await smartExec('cat ' + STATE_DIR + '/http_port 2>/dev/null');
@@ -1419,8 +1331,7 @@ async function detectHttpPort() {
             const p = parseInt(portStr.stdout.trim());
             if (p >= 8888 && p <= 8899) filePort = p;
             else if (p === 0) {
-                // daemon wrote 0 = HTTP server intentionally disabled
-                // (KSU webroot mode). Stop probing to avoid port-scan lag.
+
                 g_httpDisabled = true;
                 g_httpState = 'disabled_by_config';
                 g_httpDetecting = false;
@@ -1430,11 +1341,7 @@ async function detectHttpPort() {
             }
         }
     } catch(e) {}
-    // rel12-perf: probe the filePort first (single short fetch). If it fails with
-    // a TypeError/NetworkError (cleartext/CORS block) rather than timeout, the
-    // WebView origin simply cannot reach 127.0.0.1 — mark webview_blocked and
-    // STOP periodic scanning. This removes the ~2s 12-port serial scan that ran
-    // on every cooldown cycle on SukiSU.
+
     const tryFetch = (p, ms) => new Promise((resolve) => {
         let done = false;
         const finish = (ok, kind) => { if (!done) { done = true; resolve({ ok, kind }); } };
@@ -1455,13 +1362,7 @@ async function detectHttpPort() {
             PERF.detect.durationMs = Math.round(perfNow() - PERF.detect.startedAt);
             return filePort;
         }
-        // rel13-perf: the http_port file proves the daemon IS listening, yet this
-        // WebView cannot reach it. On SukiSU the failure surfaces as *timeout*
-        // (cleartext blocked by the WebView origin), NOT a network 'blocked'
-        // error, so the old code fell through to the 12-port parallel scan and
-        // later retries — accumulating ~7.9s. When an exec bridge exists we do
-        // NOT need HTTP at all: declare webview_blocked ONCE and stop. Only a
-        // pure browser (no execFn) keeps hunting for the right port below.
+
         if (execFn) {
             g_httpDisabled = true;
             g_httpState = 'webview_blocked';
@@ -1471,12 +1372,9 @@ async function detectHttpPort() {
             PERF.detect.durationMs = Math.round(perfNow() - PERF.detect.startedAt);
             return 0;
         }
-        // no exec bridge: fall through to the parallel port scan (pure browser
-        // needs HTTP to work).
+
     }
-    // Method 2: PARALLEL probe ALL daemon ports (8888-8899) with a short timeout.
-    // Previously this was serial: 12 * 150ms = 1.8s of blocking. Now all 12 in
-    // parallel; total wall time = max(one fetch) ≈ 200ms.
+
     const ports = [];
     for (let p = 8888; p <= 8899; p++) ports.push(p);
     const results = await Promise.all(ports.map(p => tryFetch(p, 250)));
@@ -1496,9 +1394,7 @@ async function detectHttpPort() {
         PERF.detect.durationMs = Math.round(perfNow() - PERF.detect.startedAt);
         return firstOk;
     }
-    // If every fetch was "blocked" (not timeout), the WebView cannot do http://
-    // at all — stop scanning forever. If they were timeouts, keep retrying
-    // later (port might come up).
+
     if (anyBlocked && !anyTimeout) {
         g_httpDisabled = true;
         g_httpState = 'webview_blocked';
@@ -1513,28 +1409,21 @@ async function detectHttpPort() {
     return 0;
 }
 
-// Read file via HTTP fetch first, fall back to KernelSU exec.
-// Does NOT call detectHttpPort() here — that would cause detection storms when
-// g_httpPort=0 and 48+ readFile() calls in refreshSystem() each triggered a
-// full 12-port scan, instantly exhausting the attempt limit.
-// Port detection is handled exclusively by readAllState() and initialization.
 async function readFileViaHttp(path) {
     if (!g_httpPort) return null;
-    // Map filesystem path to HTTP path
+
     let httpPath = null;
     if (path.indexOf(STATE_DIR) === 0) {
         httpPath = '/state' + path.substring(STATE_DIR.length);
     } else if (path.indexOf(WEBUI_DIR) === 0) {
         httpPath = '/webui' + path.substring(WEBUI_DIR.length);
     } else if (path === LOG_FILE) {
-        httpPath = '/state/../aatpe.log'; // not supported, return null
+        httpPath = '/state/../aatpe.log';
         return null;
     }
     if (!httpPath) return null;
     try {
-        // ROUND-005: send X-Daemon-Token for /state/<name> (private keys require
-        // auth; public keys like control_mode work without it but sending anyway
-        // is harmless).
+
         const headers = {};
         try {
             const tok = await getDaemonToken();
@@ -1545,20 +1434,19 @@ async function readFileViaHttp(path) {
         });
         if (resp.ok) {
             const text = await resp.text();
-            // /state/<name> returns JSON {"<name>":"<value>"}; extract the value
-            // so callers (who expect raw file content) see plain text.
+
             if (httpPath.startsWith('/state/') && !httpPath.startsWith('/state/all') &&
                 !httpPath.startsWith('/state/public') && text.trim().startsWith('{')) {
                 try {
                     const j = JSON.parse(text);
-                    // Extract the single key's value.
+
                     const keys = Object.keys(j);
                     if (keys.length === 1 && typeof j[keys[0]] === 'string') {
                         return j[keys[0]];
                     }
-                } catch(e) { /* fall through, return raw text */ }
+                } catch(e) {   }
             }
-            // Integrity check for JSON files: try parse, reject if truncated.
+
             if (httpPath.endsWith('.json') && text.trim().startsWith('{')) {
                 try { JSON.parse(text); }
                 catch(e) {
@@ -1568,28 +1456,20 @@ async function readFileViaHttp(path) {
             }
             return text;
         }
-        return null; // 404 or other error
+        return null;
     } catch(e) {
-        return null; // fetch failed
+        return null;
     }
 }
 
-// v4.2.8: per-tick snapshot cache. readAllState() (root bridge, one exec)
-// populates this; readFile() hits it before exec so monitoring tick = 1 exec.
 const snapCache = new Map();
 function invalidateSnapCache() { snapCache.clear(); }
-// FE-01 fix: global readAgg. Previously readAgg was only a local closure inside
-// refreshSystem() and refreshSystemFromData(), so updatePerCpu()'s call to
-// readAgg('clusters') threw ReferenceError (swallowed by try/catch) and the whole
-// clusters-based topology override was dead code. readAllState() always populates
-// stateCache.data on success, so reading it here returns the same aggregated object.
+
 function readAgg(name) {
     const S = (typeof stateCache !== 'undefined') ? stateCache.data : null;
     return (S && typeof S === 'object' && S[name] !== undefined) ? S[name] : null;
 }
-// FE-02 fix: leading-edge throttle for toggle buttons. A double-tap within ms
-// collapses to a single action (the second tap is dropped), so a toggle cannot
-// flip twice and end up back where it started. Works regardless of button id.
+
 const _lastToggleAt = {};
 function throttleToggle(key, ms) {
     const now = Date.now();
@@ -1599,17 +1479,14 @@ function throttleToggle(key, ms) {
 }
 
 async function readFile(path) {
-    // Snapshot cache first (root-bridge mode only; HTTP path bypasses).
+
     if (g_httpPort === 0 && snapCache.has(path)) return snapCache.get(path);
-    // Three-tier file reading:
-    //   1. HTTP fetch (daemon's built-in HTTP server, if enabled)
-    //   2. KSU exec API (cat command, works in KSU webroot pages)
-    //   3. Direct file reading (file:// URL or relative path, fallback for file:// pages)
+
     const httpResult = await readFileViaHttp(path);
     if (httpResult !== null && httpResult !== undefined) return httpResult;
-    // Tier 2: KernelSU exec API
+
     if (execFn) {
-        // ROUND-007g: multi-line files use tr to preserve newlines through KSU exec.
+
         const baseName = path.split('/').pop();
         if (MULTILINE_STATE_FILES.includes(baseName)) {
             const r = await smartExec('cat ' + path + ' 2>/dev/null | tr \'\\n\' \'\\036\'');
@@ -1620,8 +1497,7 @@ async function readFile(path) {
             if (r.errno === 0) return r.stdout;
         }
     }
-    // Tier 3: Direct file reading (file:// or absolute path fetch)
-    // Works when page is loaded via file:// protocol or in permissive WebViews.
+
     try {
         const resp = await fetch('file://' + path, { signal: aatpeTimeoutSignal(2000) });
         if (resp.ok) {
@@ -1639,7 +1515,7 @@ async function readFile(path) {
     return '';
 }
 async function readJson(path) {
-    /* 1-second cache for model.json / system.json / percpu.json */
+     
     const isCacheable = path.indexOf('model.json') >= 0 || path.indexOf('system.json') >= 0 || path.indexOf('percpu.json') >= 0;
     if (isCacheable) {
         const cached = getCachedJson(path, 1000);
@@ -1647,11 +1523,7 @@ async function readJson(path) {
     }
     const text = await readFile(path);
     if (text === null || text === undefined || text === '') return null;
-    // SukiSU root-bridge mode: exec ui-snapshot inlines percpu_raw/system_raw as
-    // already-parsed JSON OBJECTS, and snapCache stores them as objects. Feeding
-    // an object into JSON.parse() coerces it to "[object Object]" and throws, so
-    // percpu.json / system.json permanently read as "unavailable" — the on-device
-    // "percpu.json 不可用" bug. Pass already-parsed objects straight through.
+
     if (typeof text === 'object') {
         if (isCacheable) setCachedJson(path, text);
         return text;
@@ -1663,12 +1535,11 @@ async function readJson(path) {
     }
     catch(e) { return null; }
 }
-// Cache daemon PID for 15s to avoid spawning `pgrep` on every
-// refresh cycle (was every 3-8s, causing visible UI lag on low-end devices).
+
 let g_cachedPid = 0;
 let g_cachedPidTime = 0;
 async function getDaemonPid() {
-    // Fast path: serve cached PID for 15s
+
     if (g_cachedPid > 0 && (Date.now() - g_cachedPidTime) < 15000) {
         return g_cachedPid;
     }
@@ -1687,20 +1558,10 @@ async function getDaemonPid() {
     if (pidStr) { const pid = parseInt(pidStr); if (pid > 0) { g_cachedPid = pid; g_cachedPidTime = Date.now(); return pid; } }
     return 0;
 }
-// HMAC signing for the HTTP /control surface.
-// The daemon requires HMAC by default (HMAC_REQUIRED=1). The WebUI (running as root
-// via the KSU exec channel) reads the 0600 daemon_token, fetches the HMAC key from
-// /api/hmac_key, and signs each command as:
-//   <cmd>.ts=<unix_ts>.sig=<hex_hmac_sha256>
-// The signature is computed over "<cmd>.ts=<ts>" (timestamp bound in), matching the
-// server-side verification in webui_http.cpp handleControl(). Replay window: +/-300s.
+
 let g_hmacKeyCache = null;
 let g_hmacKeyFetching = null;
 
-// Cached daemon token used to authenticate the sensitive state
-// aggregate (/state/all) and the SSE /events stream. The token is the same 0600
-// root-minted value read via the KSU/Magisk exec bridge; loopback-only HTTP
-// /api/daemon_token is disabled, so the exec read is the primary path.
 let g_daemonToken = '';
 let g_daemonTokenPromise = null;
 function getDaemonToken() {
@@ -1723,21 +1584,16 @@ async function getAatpeHmacKey() {
     if (g_hmacKeyCache) return g_hmacKeyCache;
     if (g_hmacKeyFetching) return g_hmacKeyFetching;
     g_hmacKeyFetching = (async () => {
-        // W-018: the daemon_token is ONLY readable through the root exec bridge.
-        // The HTTP /api/daemon_token endpoint was disabled (it cannot verify the
-        // caller UID on TCP loopback), so the old Tier-2 HTTP fetch branch was dead
-        // code that just burned a 2s timeout and 403'd. We now read the 0600 token
-        // via smartExec and fail loudly if the exec channel is unavailable.
+
         let token = '';
         if (execFn) {
             try {
                 const t = await smartExec('cat ' + STATE_DIR + '/daemon_token 2>/dev/null');
                 token = (t.stdout || '').trim();
-            } catch(e) { /* smartExec threw below */ }
+            } catch(e) {   }
         }
         if (!token) throw new Error('no daemon_token: read ' + STATE_DIR + '/daemon_token as root (exec bridge unavailable)');
-        // W-003: send the daemon token via X-Daemon-Token header instead of
-        // ?token= so it does not leak into `ps` / proxy logs / history.
+
         const resp = await fetch('http://127.0.0.1:' + g_httpPort +
             '/api/hmac_key', {
             headers: { 'X-Daemon-Token': token },
@@ -1752,8 +1608,7 @@ async function getAatpeHmacKey() {
     try { return await g_hmacKeyFetching; }
     finally { g_hmacKeyFetching = null; }
 }
-// ROUND-004: cache /api/config_meta (key -> live/hook/boot class) so UI can tag
-// boot-class controls with a "重启后生效" badge. Fetched once after hmac bootstrap.
+
 let g_configMeta = null;
 async function getConfigMeta() {
     if (g_configMeta) return g_configMeta;
@@ -1778,24 +1633,19 @@ async function hmacSha256Hex(keyStr, dataStr) {
     return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Short-lived SSE ticket cache. We ask /api/session for a 5-min stok and use it
-// ONLY for EventSource ?stok= (F-01: stok is never a write credential; writes go
-// via X-Daemon-Token header or per-command HMAC .sig).
 let g_sessionToken = null;
 let g_sessionTokenExpiry = 0;
 async function getSessionToken() {
     const now = Date.now();
     if (g_sessionToken && now < g_sessionTokenExpiry - 30000) return g_sessionToken;
-    // Issue a token by signing "session_issue.ts=<ts>.nonce=<hex>" with the long-term key.
-    // W-006: the daemon now requires a per-call nonce bound into the signed data so a
-    // captured session proof cannot be replayed inside the ±300s window.
+
     const key = await getAatpeHmacKey();
     const ts = Math.floor(now / 1000);
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)))
         .map(b => b.toString(16).padStart(2, '0')).join('');
     const data = 'session_issue.ts=' + ts + '.nonce=' + nonce;
     const sig = await hmacSha256Hex(key, data);
-    // F-01: wire order = nonce.ts.sig (PoC contract); signed payload stays ts.nonce.
+
     const wire = 'session_issue.nonce=' + nonce + '.ts=' + ts + '.sig=' + sig;
     const url = 'http://127.0.0.1:' + g_httpPort + '/api/session?cmd=' +
         encodeURIComponent(wire);
@@ -1810,27 +1660,23 @@ async function getSessionToken() {
 function invalidateSessionToken() { g_sessionToken = null; g_sessionTokenExpiry = 0; }
 
 async function buildSignedCommand(cmd) {
-    // F-01[P1]: HMAC-only fallback (stok is SSE-only, never for writes).
+
     const key = await getAatpeHmacKey();
     const ts = Math.floor(Date.now() / 1000);
-    // per-call random nonce bound into the signed data so a captured
-    // (cmd,ts,sig) triple cannot be replayed inside the ±300s window.
+
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)))
         .map(b => b.toString(16).padStart(2, '0')).join('');
     const data = cmd + '.ts=' + ts + '.nonce=' + nonce;
     const sig = await hmacSha256Hex(key, data);
-    // F-01: wire order = nonce.ts.sig (PoC contract).
+
     return cmd + '.nonce=' + nonce + '.ts=' + ts + '.sig=' + sig;
 }
 
-// writeControl优先使用HTTP服务器发送控制命令，
-// 因为KernelSU exec API在file://页面中不可用。
 async function writeControl(cmd) {
-    // Try HTTP first (daemon's built-in HTTP server /control endpoint)
+
     if (g_httpPort > 0) {
         try {
-            // F-01[P1]: X-Daemon-Token header preferred (token never in URL).
-            // HMAC .sig kept for non-browser fallback when no daemon token.
+
             const tok = await getDaemonToken();
             const headers = {};
             let wireCmd = cmd;
@@ -1848,9 +1694,7 @@ async function writeControl(cmd) {
                 return { ok: false, error: data.error || 'HTTP control failed',
                          read_only: !!data.read_only, reason: data.reason };
             }
-            // ROUND-003: on 403, parse the JSON body to detect read_only gate
-            // (integrity_failed / hmac_unavailable). Surface it so sendCommand
-            // can show a one-time explanatory toast instead of "button dead".
+
             if (resp.status === 403) {
                 try {
                     const errBody = await resp.json();
@@ -1858,10 +1702,9 @@ async function writeControl(cmd) {
                         return { ok: false, error: errBody.error || 'read-only',
                                  read_only: true, reason: errBody.reason || 'unknown' };
                     }
-                } catch(e) { /* non-JSON body, fall through */ }
+                } catch(e) {   }
             }
-            // 401/403 = auth rejection (HMAC/token). Invalidate any cached
-            // session token so the next call re-authenticates with HMAC.
+
             if (resp.status !== 401 && resp.status !== 403) {
                 return { ok: false, error: 'HTTP control http ' + resp.status };
             }
@@ -1870,11 +1713,7 @@ async function writeControl(cmd) {
             console.warn('[writeControl] HTTP failed, falling back to exec:', e.message);
         }
     }
-    // Fallback to KernelSU exec API. v4.2.8: route through aatpe-cli send
-    // (the same verified root channel the rest of the app uses), not a raw
-    // `echo > /dev/aatpe/control`. The CLI validates charset, appends, and
-    // SIGUSR1-wakes the daemon, eliminating the >-overwrite race and the
-    // ~2s delay from not signalling.
+
     try {
         const cliPath = 'MD=""; for p in /data/adb/modules/aatpe /data/adb/ksu/modules/aatpe /data/adb/ap/modules/aatpe /data/adb/modules_update/aatpe; do [ -x "$p/system/bin/aatpe-cli" ] && MD="$p" && break; done; ';
         const safe = cmd.replace(/'/g, "'\\''");
@@ -1908,36 +1747,31 @@ function roleClass(role) {
     const m = role.match(/^S(\d)/);
     return m ? 'role-S' + m[1] : 'role-S5';
 }
-// Normalize negative zero and tiny values for display.
-// val+0 converts IEEE -0 to +0; abs<1e-9 clamp eliminates tiny negatives
-// (e.g. -0.0001) that would round to "-0.000" under .toFixed(3).
+
 function normNegZero(v) {
     v = Number(v) + 0;
     if (v !== 0 && Math.abs(v) < 1e-9) v = 0;
     return v;
 }
-// Format a weight value for display (3 decimals, no -0.000).
+
 function fmtWeight(v) {
     return normNegZero(v).toFixed(3);
 }
 
-let g_readOnlyToastShown = false;  // ROUND-003: show read-only banner once per reason
+let g_readOnlyToastShown = false;
 function confirmRestart() {
     if (confirm('确认重启守护进程？WebUI 将短暂断开后自动恢复。')) {
         sendCommand('restart');
     }
 }
 async function sendCommand(cmd) {
-    // writeControl() tries HTTP /control first (daemon built-in server), then falls
-    // back to exec. No apiAvailable gate: exec may be unavailable in file:// pages
-    // while HTTP still works, so blocking on apiAvailable would break all commands.
+
     const r = await writeControl(cmd);
     if (r.ok) {
         showToast('✓ 命令已发送: ' + cmd);
         setTimeout(updateStatus, 1000);
     } else {
-        // ROUND-003: read-only gate (integrity_failed / hmac_unavailable). Show
-        // a one-time explanatory banner; same reason not repeated for 60s.
+
         if (r.read_only) {
             const key = r.reason || 'unknown';
             const now = Date.now();
@@ -1959,8 +1793,7 @@ async function sendCommand(cmd) {
     return r;
 }
 function setMode(mode) {
-    // ROUND-004: during emergency override, user mode switches are rejected by
-    // the daemon. Show an explicit toast instead of silently failing.
+
     const emergEl = document.getElementById('emergency-overlay');
     if (emergEl && emergEl.style.display === 'block') {
         showToast('⚠ 紧急覆盖中，暂时无法切换控制模式', true);
@@ -2026,7 +1859,7 @@ async function startDaemon() {
     btn.textContent = '启动中...';
     showToast('正在启动守护进程...');
     const launchCmd =
-        // resolve module dir across Magisk / KSU / modules_update roots.
+
         'MD=""; for p in /data/adb/modules/aatpe /data/adb/ksu/modules/aatpe /data/adb/ap/modules/aatpe /data/adb/modules_update/aatpe; do [ -x "$p/system/bin/aatped" ] && MD="$p" && break; done; ' +
         'if [ -z "$MD" ]; then echo "NOMODDIR"; exit 1; fi; ' +
         'mkdir -p ' + STATE_DIR + ' ' + RUN_DIR + '/metrics ' + RUN_DIR + '/decisions ' + RUN_DIR + '/webui ' + RUN_DIR + '/helper ' + RUN_DIR + '/thread_db ' + RUN_DIR + '/history ' + RUN_DIR + '/rules; ' +
@@ -2065,8 +1898,7 @@ function toggleAutoScroll(btn) {
     btn.textContent = '自动滚动: ' + (autoScroll ? '开' : '关');
     btn.classList.toggle('active', autoScroll);
 }
-// ROUND-005: pause auto-scroll when user manually scrolls up to view history.
-// Resume when they scroll back to bottom.
+
 function setupLogScrollPause() {
     const c = document.getElementById('log-container');
     if (!c || c._scrollPauseBound) return;
@@ -2074,7 +1906,7 @@ function setupLogScrollPause() {
     c.addEventListener('scroll', () => {
         const atBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 30;
         if (!atBottom && autoScroll) {
-            // User scrolled up — pause auto-scroll without flipping the toggle.
+
             c._userPaused = true;
         } else if (atBottom && c._userPaused) {
             c._userPaused = false;
@@ -2083,10 +1915,8 @@ function setupLogScrollPause() {
 }
 
 let g_threadsData = [];
-// Incremental thread table rendering.
-// Keep a row cache keyed by tid; only rebuild when the set of visible tids changes.
-// Value changes (CPU%, score) are updated in-place via textContent.
-let g_threadRowCache = {};  // tid -> { rowEl, name, role, cpu, usage, score }
+
+let g_threadRowCache = {};
 let g_threadLastSig = '';
 
 async function refreshThreads() {
@@ -2110,12 +1940,11 @@ function renderThreads() {
     if (!tbody) return;
     if (list.length === 0) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">暂无线程数据</td></tr>'; g_threadRowCache = {}; g_threadLastSig = ''; return; }
 
-    // Build a signature of the visible thread list (tids in order).
     const sig = list.map(t => t.tid).join(',');
     const structureChanged = (sig !== g_threadLastSig);
 
     if (structureChanged) {
-        // Full rebuild: structure changed (threads added/removed/filter/sort changed)
+
         g_threadLastSig = sig;
         g_threadRowCache = {};
         const frag = document.createDocumentFragment();
@@ -2125,17 +1954,12 @@ function renderThreads() {
             const scorePct = Math.min(100, Math.max(0, (score + 200) / 6));
             const tr = document.createElement('tr');
             tr.className = 'clickable';
-            // G8-008 (ROUND-001): use addEventListener + Number coercion instead
-            // of setAttribute('onclick', '...' + t.tid + '...'). The old form
-            // interpolated t.tid directly into a JS string; if a future data
-            // path ever put a non-numeric value into threads.json it would be
-            // an XSS-to-root-exec sink (the WebView has a root exec bridge).
-            // Number(t.tid) coerces and rejects NaN at bind time.
+
             const _tid = Number(t.tid);
             if (Number.isFinite(_tid)) {
                 tr.addEventListener('click', () => showThreadExplain(_tid));
             }
-            // Build cells
+
             const tdName = document.createElement('td');
             tdName.textContent = (t.name && t.name.trim()) ? t.name : ('[tid ' + (t.tid||'?') + ']');
             const tdRole = document.createElement('td');
@@ -2171,7 +1995,7 @@ function renderThreads() {
             tr.appendChild(tdUsage);
             tr.appendChild(tdScore);
             frag.appendChild(tr);
-            // Cache references for incremental updates
+
             g_threadRowCache[t.tid] = {
                 rowEl: tr,
                 tdName, tdRole, tdCpu, tdUsage, tdScore,
@@ -2182,7 +2006,7 @@ function renderThreads() {
         tbody.innerHTML = '';
         tbody.appendChild(frag);
     } else {
-        // Incremental: only update values that changed
+
         for (const t of list) {
             const cached = g_threadRowCache[t.tid];
             if (!cached) continue;
@@ -2199,7 +2023,7 @@ function renderThreads() {
                 cached.scoreText.textContent = String(score);
                 cached.scoreBar.style.width = scorePct + '%';
             }
-            // Update CPU and role if changed
+
             const cpuStr = 'CPU' + (t.current_cpu ?? '?');
             if (cached.tdCpu.textContent !== cpuStr) cached.tdCpu.textContent = cpuStr;
             const roleStr = (t.role && t.role.trim()) ? t.role : 'unknown';
@@ -2233,9 +2057,6 @@ function showThreadExplain(tid) {
     onExplainThreadChange();
 }
 
-// Incremental decisions timeline.
-// Track the last-seen decision timestamp; only prepend NEW items instead of
-// rebuilding the entire timeline every refresh.
 let g_lastDecisionTs = 0;
 async function refreshDecisions() {
     const data = await readJson(WEBUI_DIR + '/decisions.json');
@@ -2247,10 +2068,10 @@ async function refreshDecisions() {
         return;
     }
     setText('decisions-count', data.decisions.length + '条');
-    // Find the newest decision timestamp
+
     const latestTs = data.decisions[0] ? data.decisions[0].timestamp : 0;
     if (g_lastDecisionTs === 0 || container.querySelector('.empty-state')) {
-        // First load or was empty — full render
+
         g_lastDecisionTs = latestTs;
         let html = '';
         for (const d of data.decisions) {
@@ -2264,7 +2085,7 @@ async function refreshDecisions() {
         }
         container.innerHTML = html;
     } else if (latestTs > g_lastDecisionTs) {
-        // Incremental: prepend only new decisions
+
         const newItems = data.decisions.filter(d => d.timestamp > g_lastDecisionTs);
         if (newItems.length > 0) {
             const frag = document.createDocumentFragment();
@@ -2299,9 +2120,9 @@ async function refreshDecisions() {
                 div.appendChild(scoreDiv);
                 frag.appendChild(div);
             }
-            // Insert new items at the top
+
             container.insertBefore(frag, container.firstChild);
-            // Trim to max 20 items
+
             while (container.children.length > 20) {
                 container.removeChild(container.lastChild);
             }
@@ -2376,7 +2197,6 @@ function renderExplain() {
     }
 }
 
-// v4.4.7: read-only C4 freezer status panel. Pulls c4.json; OFF -> grey disabled.
 async function refreshC4() {
     const box = document.getElementById('c4-panel');
     if (!box) return;
@@ -2391,11 +2211,7 @@ async function refreshC4() {
     set('c4-cgdir', c.cgDir || '--');
     set('c4-action', c.lastAction || 'NO_CHANGE');
     set('c4-audio', c.audioActive ? '活跃（不冻）' : '静默');
-    // rel12 Bug6: separate "freezer BACKEND available" from "currently has a
-    // freezable target". The backend already probes v1/v2 independently
-    // (freezerBackend), so when a v1/v2 backend exists but there is no background
-    // target (degraded=no-game-target) we must NOT read as "不可用" -- that conflates
-    // "no app to freeze right now" with "the freezer driver is missing".
+
     const fb = c.freezerBackend || '';
     if (fb) {
         set('c4-freezer', fb + ' 后端可用' + (c.target ? '' : '（当前无目标）'));
@@ -2404,8 +2220,7 @@ async function refreshC4() {
     } else {
         set('c4-freezer', '不可用');
     }
-    // #96: map the degraded reason code to a human sentence. "no-game-target" must
-    // read as "后端可用/当前无游戏目标" (NOT as "freezer 不可用").
+
     const DEGRADED_LABELS = {
         'disabled': '功能已关闭',
         'no-game-target': '后端可用 · 当前无游戏目标（后台暂无应用可冻）',
@@ -2415,20 +2230,12 @@ async function refreshC4() {
     set('c4-degraded', (c.degraded && DEGRADED_LABELS[c.degraded]) ? DEGRADED_LABELS[c.degraded] : (c.degraded || ''));
 }
 
-// #102: external scheduler coexistence warning. The daemon writes two state files:
-//   STATE_DIR/external_scheduler_detected  ("0" | "1")
-//   STATE_DIR/external_scheduler_names     (comma-separated, e.g. scene_fas_ft_provider,scene_swap_controller)
-// We only surface a conservative banner -- NO adversarial action, no toggle.
-// P2-3: this runs on the GLOBAL tick (not only on tab-control) so a user parked on
-// the monitor tab still sees the banner within ~5s. Throttled to once per 5s to
-// avoid re-reading two state files every 1s control-tick; idempotent (it only
-// toggles banner.style.display, no toast / no repeated alert on every poll).
 let _extSchedLastRun = 0;
 async function refreshExternalScheduler() {
     const banner = document.getElementById('ext-sched-banner');
     if (!banner) return;
     const now = Date.now();
-    if (now - _extSchedLastRun < 5000) return;   // 5s throttle
+    if (now - _extSchedLastRun < 5000) return;
     _extSchedLastRun = now;
     let detected = '';
     let names = '';
@@ -2459,7 +2266,7 @@ async function refreshModel() {
     document.getElementById('model-max-alpha').textContent = maxAlpha.toFixed(2);
     document.getElementById('model-enabled').textContent = data.enabled ? '启用' : '禁用';
     document.getElementById('model-enabled').className = 'value ' + (data.enabled ? 'green' : '');
-    // ML learning funnel diagnostics
+
     if (data.funnel) {
         document.getElementById('funnel-pending').textContent = data.funnel.pending_created ?? '--';
         document.getElementById('funnel-skipped-existing').textContent = data.funnel.pending_skipped_existing ?? '--';
@@ -2471,15 +2278,14 @@ async function refreshModel() {
         document.getElementById('funnel-other').textContent = data.funnel.skip_other ?? '--';
         document.getElementById('funnel-expired').textContent = data.funnel.pending_expired ?? '--';
         document.getElementById('funnel-tidreuse').textContent = data.funnel.pending_tid_reused ?? '--';
-        // W2-B: internal-gate rejection counters (why finite outcomes were NOT learned).
+
         const setF = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = (v === null || v === undefined) ? '--' : v; };
         setF('funnel-skip-update-thermal', data.funnel.skip_update_thermal);
         setF('funnel-skip-update-disabled', data.funnel.skip_update_disabled);
         setF('funnel-skip-update-pool', data.funnel.skip_update_pool);
         setF('funnel-skip-update-outcome', data.funnel.skip_update_outcome);
     }
-    // W2-B: explicit gate-status warnings — tell the user which gate is capping
-    // sample growth (training paused by SEVERE thermal / anomaly latched off).
+
     (function renderMlGateWarnings() {
         const box = document.getElementById('ml-gate-warnings');
         if (!box) return;
@@ -2495,11 +2301,7 @@ async function refreshModel() {
     const pct = maxAlpha > 0 ? Math.min(100, (alpha / maxAlpha) * 100) : 0;
     document.getElementById('model-alpha-bar').style.width = pct + '%';
     document.getElementById('model-alpha-pct').textContent = pct.toFixed(1) + '%';
-    // Model readiness = min(per-pool samples / mlMinSamples) across PRESENT pools.
-    // #97: a tier that has no CPU on this device (present=false, e.g. MID on the
-    // audit box) MUST NOT drag readiness to 0% -- it will never accumulate samples.
-    // Pools without the present field (older daemon) default to present=true so the
-    // historical "every slot is a cluster" behavior is preserved.
+
     const readinessMin = 2000;
     let readinessPct = 0;
     let minSamples = 0;
@@ -2520,7 +2322,7 @@ async function refreshModel() {
     }
     const rPct = document.getElementById('model-readiness-pct');
     if (rPct) rPct.textContent = minSamples + ' / ' + readinessMin + ' (' + readinessPct.toFixed(1) + '%)';
-    // ML cold start protection status + per-pool progress
+
     const csEnabled = data.cold_start_protection !== undefined ? data.cold_start_protection : true;
     const csMin = data.min_samples || 2000;
     const csStatusEl = document.getElementById('cold-start-status');
@@ -2532,7 +2334,7 @@ async function refreshModel() {
     if (csMinEl) csMinEl.textContent = csMin;
     const csBtn = document.getElementById('btn-cold-start');
     if (csBtn) csBtn.textContent = csEnabled ? '关闭冷启动保护' : '开启冷启动保护';
-    // ML在线学习状态刷新 (从state文件读取)
+
     try {
         const mlLearnStr = await readFile(STATE_DIR + '/ml_learning_enabled');
         const mlLearnOn = (mlLearnStr && mlLearnStr.trim() === '1');
@@ -2546,28 +2348,26 @@ async function refreshModel() {
             mlLearnBtn.textContent = mlLearnOn ? '关闭ML学习' : '启用ML学习';
             mlLearnBtn.className = 'btn btn-log ' + (mlLearnOn ? 'active' : '');
         }
-        // ML alpha显示
+
         const mlAlphaEl = document.getElementById('ml-learning-alpha');
         if (mlAlphaEl) {
             const alpha = data.alpha != null ? data.alpha : 0;
             mlAlphaEl.textContent = alpha.toFixed(3);
         }
     } catch(e) {}
-    // Render per-pool sample progress
+
     const csPoolsEl = document.getElementById('cold-start-pools');
     if (csPoolsEl && data.pools && data.pools.length > 0) {
         let poolHtml = '';
         for (const p of data.pools) {
-            const present = (p.present !== false);  // older daemon: default true
+            const present = (p.present !== false);
             const sc = p.sample_count || 0;
             const ready = p.ready === true;
             poolHtml += '<div style="margin-bottom:10px">';
             poolHtml += '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">';
             poolHtml += '<span style="color:#aaa"><b>' + escapeHtml(p.name || ('POOL'+p.pool)) + '</b></span>';
             if (!present) {
-                // #97: this tier has no CPU on this device -- not "still learning",
-                // not a readiness blocker. Show it as N/A so the user understands
-                // why MID has 0 samples without panic.
+
                 poolHtml += '<span class="gray" style="color:#666">— 无此簇（本机无对应 CPU，不参与就绪度）</span>';
                 poolHtml += '</div>';
                 poolHtml += '<div class="progress-bar"><div class="progress-bar-fill" style="width:0%;background:#333"></div></div>';
@@ -2586,7 +2386,7 @@ async function refreshModel() {
     } else if (csPoolsEl) {
         csPoolsEl.innerHTML = '<div class="empty-state">暂无pool数据</div>';
     }
-    // Frame-time outcome training target and diagnostics
+
     const ttEl = document.getElementById('training-target');
     if (ttEl) {
         const tt = data.training_target || 'run_ratio_only';
@@ -2598,8 +2398,7 @@ async function refreshModel() {
         const ftw = data.frame_time_weight != null ? data.frame_time_weight : 0.5;
         ftwEl.textContent = (ftw * 100).toFixed(0) + '% / ' + ((1-ftw) * 100).toFixed(0) + '%';
     }
-    // Frame-time outcome — read from model.json first, fallback to
-    // /api/frame_time HTTP endpoint and state files if model.json is stale.
+
     let fto = data.frame_time_outcome || null;
     if (!fto) {
         try {
@@ -2610,7 +2409,7 @@ async function refreshModel() {
         } catch(e) {}
     }
     if (!fto) {
-        // Last resort: read individual state files via /state/all
+
         const S = await readAllState();
         if (S && S.ft_outcome_samples) {
             fto = {
@@ -2634,7 +2433,7 @@ async function refreshModel() {
         setVal('ft-degraded', fto.degraded);
         setVal('ft-gfxinfo-calls', fto.gfxinfo_calls);
         setVal('ft-gfxinfo-cache', fto.gfxinfo_cache_hits);
-        // also display frame time percentiles if elements exist
+
         setVal('ft-avg', fto.frame_time_avg != null ? fto.frame_time_avg.toFixed(2) + 'ms' : '--');
         setVal('ft-p95', fto.frame_time_p95 != null ? fto.frame_time_p95.toFixed(2) + 'ms' : '--');
         setVal('ft-p99', fto.frame_time_p99 != null ? fto.frame_time_p99.toFixed(2) + 'ms' : '--');
@@ -2653,14 +2452,14 @@ async function refreshModel() {
         html += '<tr><td><b>CPU' + c.cpu + '</b></td>';
         for (let i = 0; i < 15; i++) {
             let val = w[i] !== undefined ? w[i] : 0;
-            val = normNegZero(val); // normalize -0 and tiny negatives to 0
+            val = normNegZero(val);
             const cls = val < 0 ? ' style="color:#ff6b6b"' : (val > 0 ? ' style="color:#4ecdc4"' : '');
             html += '<td' + cls + '>' + fmtWeight(val) + '</td>';
         }
         html += '<td>' + (c.sample_count || 0) + '</td></tr>';
     }
     tbody.innerHTML = html;
-    // refresh hybrid learning status
+
     refreshHybrid();
 }
 async function resetModel() {
@@ -2680,17 +2479,17 @@ async function toggleHybrid() {
     const btn = document.getElementById('hybrid-toggle-btn');
     const cur = el ? el.textContent : '--';
     const enabling = (cur !== '启用');
-    // Optimistic update: immediately reflect user's action in UI
+
     if (el) { el.textContent = enabling ? '启用' : '禁用'; el.className = 'value ' + (enabling ? 'green' : ''); }
     if (btn) { btn.textContent = enabling ? '关闭混合学习' : '启用混合学习'; btn.className = 'btn btn-sm ' + (enabling ? 'btn-danger' : 'btn-primary'); }
     const cmd = enabling ? 'set_ml_hybrid=1' : 'set_ml_hybrid=0';
     await sendCommand(cmd);
     showToast(enabling ? '✓ 混合学习已启用' : '✓ 混合学习已关闭');
-    // Single confirmation after 800ms (avoids double refresh)
+
     setTimeout(refreshHybrid, 800);
 }
 async function refreshHybrid() {
-    // Uses global getEl/setText (element caching + change detection)
+
     const enabledStr = await readFile(STATE_DIR + '/ml_hybrid_enabled');
     const updatesStr = await readFile(STATE_DIR + '/ml_hybrid_updates');
     const ebpfStr = await readFile(STATE_DIR + '/ml_hybrid_ebpf_samples');
@@ -2700,7 +2499,7 @@ async function refreshHybrid() {
     setText('hybrid-enabled', enabled ? '启用' : '禁用');
     setText('hybrid-updates', String(updates));
     setText('hybrid-ebpf', String(ebpfSamples));
-    // Button text + class (change detection for text, class always set if element exists)
+
     const btn = getEl('hybrid-toggle-btn');
     if (btn) {
         const btnText = enabled ? '关闭混合学习' : '启用混合学习';
@@ -2711,36 +2510,28 @@ async function refreshHybrid() {
         }
         btn.className = 'btn btn-sm ' + (enabled ? 'btn-danger' : 'btn-primary');
     }
-    // enabled element color class
+
     const el = getEl('hybrid-enabled');
     if (el) el.className = 'value ' + (enabled ? 'green' : '');
 }
 
 async function refreshSystem() {
-    // Use readAllState() (shared 2s cache with updateStatus) instead of a
-    // separate /state/all fetch. This eliminates the double-fetch on the system tab
-    // (updateStatus + refreshSystem each fetched /state/all = 2x requests every 5s).
-    // When aggregated data is available, ALL 60+ fields are read from memory with
-    // zero network requests. Only missing keys fall back to individual file reads.
+
     const perfStart = performance.now();
     const S = STATE_DIR + '/';
 
-    // Uses global getEl/setText/setHtml (element caching + change detection)
-
-    // Single shared aggregated state fetch (cached 2s in readAllState)
     let aggData = await readAllState();
     if (!aggData || typeof aggData !== 'object') aggData = {};
 
-    // Helper: read from aggregated data or fallback to individual file (only for missing keys)
     const readAgg = (name) => {
         if (aggData && aggData[name] !== undefined) return aggData[name];
         return null;
     };
-    // Synchronous parsers from aggData — no async overhead when data is cached
+
     const parseIntAgg = (name) => {
         const v = readAgg(name);
         if (v !== null && v !== '') { const n = parseInt(v); return isNaN(n) ? null : n; }
-        return undefined; // sentinel: need file fallback
+        return undefined;
     };
     const parseFloatAgg = (name) => {
         const v = readAgg(name);
@@ -2752,7 +2543,7 @@ async function refreshSystem() {
         if (v !== null) return String(v).trim();
         return undefined;
     };
-    // Fallback async file read (only called when aggData is missing the key)
+
     const readIntFile = async (name) => {
         try { const t = await readFile(S + name); if (!t || t.trim() === '') return null; const v = parseInt(t.trim()); return isNaN(v) ? null : v; } catch(e) { return null; }
     };
@@ -2762,13 +2553,11 @@ async function refreshSystem() {
     const readFloatFile = async (name) => {
         try { const t = await readFile(S + name); if (!t || t.trim() === '') return null; const v = parseFloat(t.trim()); return isNaN(v) ? null : v; } catch(e) { return null; }
     };
-    // Resolve a field: try aggData first (sync), fall back to file read (async)
+
     const resolveInt = async (name) => { const v = parseIntAgg(name); return v !== undefined ? v : readIntFile(name); };
     const resolveStr = async (name) => { const v = parseStrAgg(name); return v !== undefined ? v : readStrFile(name); };
     const resolveFloat = async (name) => { const v = parseFloatAgg(name); return v !== undefined ? v : readFloatFile(name); };
 
-    // Build reader list, but if ALL keys are in aggData we can resolve synchronously
-    // and skip the entire batching/Promise overhead (the common case after first refresh).
     const fieldDefs = [
         ['int','vsync_refresh_rate'], ['int','frame_critical'], ['int','sf_latency_avg'],
         ['int','jank_detected'], ['int','safety_latency_active'], ['int','target_frame_time'],
@@ -2792,12 +2581,10 @@ async function refreshSystem() {
         ['int','vsync_enabled'], ['int','vsync_refresh_rate'], ['int','vsync_frame_interval'],
         ['int','vsync_decisions'], ['int','vsync_migrations'], ['int','vsync_overruns'],
         ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations'],
-        // S1: gate SF frame latency on sf_latency_valid, mirroring the monitoring
-        // page (mon-sf). A theoretical fallback (timestats disabled) must render
-        // "--" instead of a misleading "0 μs = perfect".
+
         ['str','sf_latency_valid']
     ];
-    // Fast path — if all keys present in aggData, resolve synchronously (zero awaits)
+
     let allResults;
     const allInAgg = fieldDefs.every(([_, name]) => aggData[name] !== undefined);
     if (allInAgg) {
@@ -2807,7 +2594,7 @@ async function refreshSystem() {
             return parseStrAgg(name);
         });
     } else {
-        // Slow path — only for keys missing from aggData (batched to avoid connection storm)
+
         const readers = fieldDefs.map(([type, name]) => {
             if (type === 'int') return resolveInt(name);
             if (type === 'float') return resolveFloat(name);
@@ -2835,16 +2622,14 @@ async function refreshSystem() {
         predMae, predConf, predProactive,
         sfLatValid
     ] = allResults;
-    // Update each DOM element independently (try-catch per field)
+
     setText('sys-fps', (fps || 0) + ' Hz');
     try {
         const fcEl = getEl('sys-frame-critical');
         fcEl.textContent = frameCritical ? '是 ⚠' : '否';
         fcEl.className = 'value ' + (frameCritical ? 'red' : 'green');
     } catch(e) {}
-    // S1: only show SF frame latency when it was actually measured (sf_latency_valid
-    // === '1'). A missing/invalid reading (timestats disabled -> theoretical 0) must
-    // render "--" instead of "0 μs", which previously looked like a perfect score.
+
     setText('sys-frame-latency', (sfLatValid === '1' && (frameLatency != null) && !isNaN(frameLatency)) ? (frameLatency + ' μs') : '--');
     try {
         const jankEl = getEl('sys-jank-detected');
@@ -2865,7 +2650,7 @@ async function refreshSystem() {
     try {
         const battHealthEl = getEl('sys-battery-health');
         if (battHealthEl) {
-            // -1 or null = unknown → show "--", not default 100%
+
             if (battHealth == null || battHealth < 0) {
                 battHealthEl.textContent = '--';
                 battHealthEl.className = 'value gray';
@@ -2875,7 +2660,7 @@ async function refreshSystem() {
             }
         }
     } catch(e) {}
-    // cycle count -1 = unknown → show "--"
+
     setText('sys-battery-cycles', (battCycles != null && battCycles >= 0) ? battCycles : '--');
     try {
         const battAgedEl = getEl('sys-battery-aged');
@@ -2884,7 +2669,7 @@ async function refreshSystem() {
     try {
         const battEnEl = getEl('sys-battery-aging-enabled');
         if (battEnEl) { const en = battEnabled !== 0; battEnEl.textContent = en ? '启用' : '禁用'; battEnEl.className = 'value ' + (en ? 'green' : 'gray'); }
-        // Update battery aging toggle button text to reflect current state
+
         const battBtn = getEl('btn-batt-aging');
         if (battBtn) {
             const btnText = battEnabled !== 0 ? '禁用电池老化惩罚' : '启用电池老化惩罚';
@@ -2904,14 +2689,14 @@ async function refreshSystem() {
     setText('sys-apk-age', (apkAge != null && apkAge !== '' ? apkAge + 's' : '--'));
     setText('sys-apk-path', apkPath || '--');
     try {
-        // Primary metric = CPU usage (not inflated loadavg). system_load now stores cpu%.
+
         const displayLoad = (cpuUsage != null) ? cpuUsage : ((loadAvg != null) ? loadAvg : 0);
         getEl('sys-load-text').textContent = displayLoad + '%';
         const loadBar = getEl('sys-load-bar');
         loadBar.style.width = Math.min(100, displayLoad) + '%';
         loadBar.className = 'progress-bar-fill' + (displayLoad >= 85 ? ' danger' : (displayLoad >= 70 ? ' warn' : ''));
     } catch(e) {}
-    // Show raw loadavg as secondary reference below the bar
+
     try {
         const loadSubEl = document.getElementById('sys-loadavg-sub');
         if (loadSubEl) loadSubEl.textContent = 'loadavg: ' + (loadavgRaw || '--') + ' (归一化: ' + ((loadAvg != null) ? loadAvg + '%' : '--') + ')';
@@ -2935,7 +2720,7 @@ async function refreshSystem() {
         const ebpfEl = getEl('sys-ebpf-active');
         if (ebpfEl) { ebpfEl.textContent = ebpfActive ? '活跃' : '未启用'; ebpfEl.className = 'value ' + (ebpfActive ? 'green' : 'gray'); }
     } catch(e) {}
-    // eBPF event-driven panel updates
+
     try {
         const modeEl = getEl('ebpf-mode');
         if (modeEl) {
@@ -2962,8 +2747,7 @@ async function refreshSystem() {
     try {
         const lostRateEl = getEl('ebpf-lost-rate');
         if (lostRateEl) {
-            // use window events as denominator so loss rate
-            // reflects the current 60s window, not cumulative totals.
+
             const winEvt = (ebpfWindowEvents != null && ebpfWindowEvents > 0) ? ebpfWindowEvents : (ebpfTotal || 0);
             const lost = ebpfLost || 0;
             const rate = winEvt > 0 ? (lost / (lost + winEvt) * 100) : 0;
@@ -2981,20 +2765,14 @@ async function refreshSystem() {
     setText('sys-fed-exports', (fedExports != null ? fedExports : '--'));
     setText('sys-fed-imports', (fedImports != null ? fedImports : '--'));
     setText('sys-fed-trusted', (fedTrusted != null ? fedTrusted : '--'));
-    // decision fusion average weights
-    // Prioritize /api/fusion endpoint (purpose-built, clean JSON),
-    // fallback to /state/all aggregated data, final fallback to direct state file read.
-    // Root cause of all-zero display: old code read /state/all first; if fusion_weights
-    // value was missing/empty/non-string or g_httpPort=0, both paths silently failed
-    // and values stayed at default 0. Also fwRaw.trim() threw on non-string values,
-    // caught by outer try{} and silently skipped.
+
     try {
         let df = null;
-        // Ensure HTTP port is detected before trying HTTP endpoints
+
         if (g_httpPort === 0 && !g_httpDisabled) {
             try { await detectHttpPort(); } catch(e) {}
         }
-        // Priority 1: /api/fusion endpoint (purpose-built, returns clean JSON object)
+
         if (g_httpPort > 0) {
             try {
                 const fresp = await fetch('http://127.0.0.1:' + g_httpPort + '/api/fusion', { signal: aatpeTimeoutSignal(2000) });
@@ -3004,7 +2782,7 @@ async function refreshSystem() {
                 }
             } catch(e) {}
         }
-        // Priority 2: /state/all aggregated data (fusion_weights as JSON string)
+
         if (!df) {
             const fwRaw = readAgg('fusion_weights');
             if (fwRaw && typeof fwRaw === 'string' && fwRaw.trim().length > 0) {
@@ -3014,7 +2792,7 @@ async function refreshSystem() {
                 } catch(e) {}
             }
         }
-        // Priority 3: direct state file read (works even when HTTP unavailable)
+
         if (!df) {
             try {
                 const fwFile = await readFile(STATE_DIR + '/fusion_weights');
@@ -3057,26 +2835,19 @@ async function refreshSystem() {
     setText('sys-pred-mae', (predMae != null ? predMae.toFixed(2) : '--'));
     setText('sys-pred-confidence', (predConf != null ? predConf.toFixed(2) : '--'));
     setText('sys-pred-proactive', (predProactive !== null && predProactive !== undefined && predProactive !== '') ? predProactive : '0');
-    // CPU topology: use same read pattern as other state fields.
-    // CPU topology is static at runtime (only changes on hotplug,
-    // which triggers a daemon restart/topology regen). Read + render it ONCE per
-    // page load instead of re-reading /cpu_topology on every 8s system-tab poll.
-    // Direct fetch requires g_httpPort > 0. When HTTP port is 0 (daemon not started
-    // or port detection failed), there was NO fallback — unlike other state fields that
-    // use readInt/readStr with readFile fallback (exec API). Use readFile instead of
-    // direct fetch, so it gets the same HTTP + exec fallback chain as everything else.
+
     try {
         const topoEl = getEl('sys-topology');
-        if (g_topologyLoaded) { /* already rendered this page-load; topology is static */ }
+        if (g_topologyLoaded) {   }
         else {
         let topoData = null;
-        // Try aggregated data first (zero network cost if /state/all already fetched)
+
         const aggRaw = readAgg('cpu_topology');
         if (aggRaw && aggRaw.trim().length > 0) {
             try { topoData = JSON.parse(aggRaw); }
             catch(e) { console.warn('[topology] agg parse failed, trying readFile:', e.message); }
         }
-        // Fallback to readFile (same as other state fields — HTTP first, then exec API)
+
         if (!topoData) {
             try {
                 const text = await readFile(STATE_DIR + '/cpu_topology');
@@ -3090,8 +2861,7 @@ async function refreshSystem() {
         let topoHtml = '';
         let totalCpus = 0;
         let clusterGroups = [];
-        // ROUND-007f: prefer aggregated /state/all channel (reliable multiline),
-        // fallback to single-file /state/<name> (KSU exec may truncate on real device).
+
         let clustersText = '';
         let clustersSource = 'none';
         const clustersAgg = readAgg('clusters');
@@ -3109,7 +2879,7 @@ async function refreshSystem() {
             const tierCls   = {LITTLE:'little',MID:'mid',BIG:'big',PRIME:'prime'};
             const lines = clustersText.trim().split('\n');
             for (const line of lines) {
-                // Tolerate both "min-max:cpus" and "freq:cpus" (single freq) formats.
+
                 const m = line.match(/^([A-Z]+),(\d+),(\d+)(?:-(\d+))?:([\d,]+)$/);
                 if (!m) continue;
                 const [, tier, cap, minKhz, maxKhzOrSingle, cpus] = m;
@@ -3122,16 +2892,15 @@ async function refreshSystem() {
             }
         }
         if (clusterGroups.length > 0) {
-            // Render clusters (new path).
+
             topoHtml += '<div style="font-size:11px;color:#00d4aa;margin-bottom:6px">' +
                 '共 <b>' + totalCpus + '</b> 核 / ' + clusterGroups.length + ' 簇</div>';
-            // Incomplete-data warning: if cpu_topology.cpus says more cores than
-            // clusters rendered, show a warning AND legacy groups side by side.
+
             const legacyCpuCount = topoData.cpus || 0;
             if (legacyCpuCount > 0 && totalCpus < legacyCpuCount) {
                 topoHtml += '<div style="font-size:11px;color:#ff6b6b;margin-bottom:6px;font-weight:bold">' +
                     '⚠ 拓扑数据不完整（clusters 显示 ' + totalCpus + ' 核，系统共 ' + legacyCpuCount + ' 核）</div>';
-                // Also render legacy groups below for visibility.
+
                 const lg = [{key:'little'},{key:'mid'},{key:'big'},{key:'prime'}];
                 for (const g of lg) {
                     const cores = topoData[g.key] || [];
@@ -3141,7 +2910,7 @@ async function refreshSystem() {
                     topoHtml += '</div></div>';
                 }
             }
-            // ROUND-007d/f: raw clusters debug block with source label + diagnostics.
+
             topoHtml += '<details style="margin-top:8px;font-size:10px;color:#888">' +
                 '<summary>拓扑调试 (clusters 原始数据 · 来源: ' + clustersSource + ')</summary>' +
                 '<pre style="background:#0a0a0f;padding:6px;border-radius:4px;overflow-x:auto;margin:4px 0">';
@@ -3150,7 +2919,7 @@ async function refreshSystem() {
                 topoHtml += (i+1) + ': ' + escapeHtml(ln) + '\n';
             });
             topoHtml += '</pre>';
-            // topology_diagnostics (G6) — agg first, fallback file.
+
             let diagText = readAgg('topology_diagnostics');
             let diagSource = 'agg';
             if (!diagText || diagText.trim() === '') {
@@ -3161,7 +2930,7 @@ async function refreshSystem() {
                     '<pre style="background:#0a0a0f;padding:6px;border-radius:4px;overflow-x:auto;margin:4px 0">' +
                     escapeHtml(diagText.substring(0, 500)) + '</pre>';
             }
-            // clusters_raw_debug (G1) — agg first, fallback file.
+
             let rawDebug = readAgg('clusters_raw_debug');
             let rawSource = 'agg';
             if (!rawDebug || rawDebug.trim() === '') {
@@ -3182,7 +2951,7 @@ async function refreshSystem() {
                 for (const c of g.cpulist) topoHtml += '<div class="topology-core ' + g.cls + '">CPU' + c + '</div>';
                 topoHtml += '</div></div>';
             }
-            // PRIME spillover readout (G5 state fields). readAgg first, fallback readFile.
+
             const hostedAgg = readAgg('prime_hosted_threads');
             const spillAgg  = readAgg('prime_spillover_count');
             let hosted = hostedAgg, spill = spillAgg;
@@ -3192,7 +2961,7 @@ async function refreshSystem() {
             if (spill === null || spill === undefined || spill === '') {
                 try { spill = await readFile(STATE_DIR + '/prime_spillover_count'); } catch(e) {}
             }
-            // Show 0 (not --) when value exists and is "0".
+
             const hostedDisp = (hosted !== null && hosted !== undefined && String(hosted).trim() !== '') ? String(hosted).trim() : '--';
             const spillDisp  = (spill  !== null && spill  !== undefined && String(spill).trim()  !== '') ? String(spill).trim()  : '--';
             topoHtml += '<div class="topology-group" style="margin-top:8px;font-size:11px;color:#888">' +
@@ -3200,7 +2969,7 @@ async function refreshSystem() {
                 ' &nbsp;|&nbsp; 溢出提升次数: <span style="color:#ffd93d">' + spillDisp + '</span>' +
                 '</div>';
         } else {
-            // Fallback: legacy cpu_topology JSON (little/mid/big cpus arrays).
+
             const groups = [
                 {label: '小核 (LITTLE)', key: 'little', cls: 'little'},
                 {label: '中核 (MID)', key: 'mid', cls: 'mid'},
@@ -3222,8 +2991,8 @@ async function refreshSystem() {
         }
         if (!topoHtml) topoHtml = '<div class="empty-state" style="color:#ff6b6b">无法获取拓扑数据（clusters 文件为空且 legacy JSON 无数据）</div>';
         topoEl.innerHTML = topoHtml;
-        g_topologyLoaded = true;  // do not re-read /cpu_topology this page-load
-        } // end else (g_topologyLoaded guard)
+        g_topologyLoaded = true;
+        }
     } catch(e) {
         console.error('[topology] error:', e.message);
         const topoEl = getEl('sys-topology');
@@ -3232,7 +3001,6 @@ async function refreshSystem() {
     refreshC4();
 }
 
-// Toggle thermal protection enable (live, persisted to aatpe.conf)
 async function toggleThermalEnabled() {
     if (throttleToggle('thermal', 800)) return;
     try {
@@ -3248,24 +3016,19 @@ async function toggleThermalEnabled() {
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
 async function refreshThermalButton(retryCount) {
-    // W1-#3: the toggle previously only refreshed on an SSE push or after a
-    // manual click; if SSE failed to connect it stayed on its static placeholder
-    // "温控: --" forever. Now:
-    //   * wrapped in try/catch so a rejected readFile never leaves it stuck;
-    //   * called at init AND on every polling tick (see startRefresh), so the
-    //     button always converges to the real state regardless of SSE health.
+
     retryCount = retryCount || 0;
     let v = null;
     try {
         v = await readFile(STATE_DIR + '/thermal_enabled');
     } catch(e) { v = null; }
-    // If read failed (null) and we haven't exhausted retries, retry with backoff.
+
     if ((v === null || v === undefined) && retryCount < 5) {
         const delay = 500 * (retryCount + 1);
         setTimeout(() => refreshThermalButton(retryCount + 1), delay);
         return;
     }
-    // Default THERMAL_ENABLED=1 (enabled) when state file doesn't exist.
+
     const en = (v === null || v === undefined || String(v).trim() === '') ? true : (String(v).trim() === '1');
     try {
         const btn = getEl('btn-thermal-enabled');
@@ -3273,16 +3036,15 @@ async function refreshThermalButton(retryCount) {
             btn.textContent = '温控: ' + (en ? '已开启' : '已关闭');
             btn.className = 'btn btn-log' + (en ? ' active' : '');
         }
-    } catch(e) { /* button not on this tab yet — harmless */ }
+    } catch(e) {   }
 }
 
-// Toggle battery aging penalty via control pipe
 async function toggleBatteryAging() {
     if (throttleToggle('batteryAging', 800)) return;
     try {
         const current = await readFile(STATE_DIR + '/battery_aging_enabled');
         const newVal = (current && current.trim() === '1') ? '0' : '1';
-        // Optimistic UI update
+
         const battBtn = getEl('btn-batt-aging');
         if (battBtn) {
             battBtn.textContent = newVal === '1' ? '禁用电池老化惩罚' : '启用电池老化惩罚';
@@ -3301,11 +3063,9 @@ async function toggleBatteryAging() {
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
 
-// Toggle C4 后台冻结 (v6.0.0 round4c, persisted)
 async function toggleC4Freezer() {
     if (throttleToggle('c4Freezer', 800)) return;
-    // rel12-perf: immediate visual feedback so the tap doesn't feel dead while
-    // the root exec round-trip (~100-500ms on SukiSU) is in flight.
+
     showToast('… 切换 C4 冻结中');
     try {
         const current = await readFile(STATE_DIR + '/c4_freezer_enabled');
@@ -3313,14 +3073,12 @@ async function toggleC4Freezer() {
         const r = await writeControl('set_c4_freezer=' + newVal);
         if (r.ok) {
             showToast('✓ C4 后台冻结已' + (newVal === '1' ? '启用' : '停用') + ' (永久配置)');
-            // rel12-fix: was setTimeout(loadAll,800) — loadAll is not defined anywhere
-            // in this module (only these 3 call sites), causing "loadAll is not defined"
-            // toast on every toggle. C4 panel is rendered by refreshC4().
+
             setTimeout(refreshC4, 800);
         } else { showToast('✗ 切换失败: ' + (r.errno || 'unknown'), true); }
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
-// Toggle eBPF 事件驱动 (v6.0.0 round4c, persisted; auto-downgrade still enforced)
+
 async function toggleEbpf() {
     if (throttleToggle('ebpf', 800)) return;
     showToast('… 切换 eBPF 中');
@@ -3330,13 +3088,12 @@ async function toggleEbpf() {
         const r = await writeControl('set_ebpf=' + newVal);
         if (r.ok) {
             showToast('✓ eBPF 事件驱动已' + (newVal === '1' ? '开启（不支持自动降级轮询）' : '关闭（轮询）') + ' (永久配置)');
-            // rel12-fix: was setTimeout(loadAll,800) (undefined). eBPF status elements
-            // (sys-ebpf-active / ebpf-mode / ebpf-state ...) are rendered by refreshSystem().
+
             setTimeout(refreshSystem, 800);
         } else { showToast('✗ 切换失败: ' + (r.errno || 'unknown'), true); }
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
-// Toggle 联邦学习本地导出/导入 (v6.0.0 round4c, persisted)
+
 async function toggleFederated() {
     if (throttleToggle('federated', 800)) return;
     showToast('… 切换联邦聚合中');
@@ -3346,14 +3103,12 @@ async function toggleFederated() {
         const r = await writeControl('set_federated=' + newVal);
         if (r.ok) {
             showToast('✓ 联邦学习聚合/导入已' + (newVal === '1' ? '允许' : '停用') + ' (永久配置)');
-            // rel12-fix: was setTimeout(loadAll,800) (undefined). Federated counters
-            // (federated_rounds/imports/...) are state rows rendered by refreshSystem().
+
             setTimeout(refreshSystem, 800);
         } else { showToast('✗ 切换失败: ' + (r.errno || 'unknown'), true); }
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
 
-// Toggle ML cold start protection via /control command (persisted to aatpe.conf)
 async function toggleMlColdStart() {
     if (throttleToggle('mlColdStart', 800)) return;
     try {
@@ -3369,13 +3124,12 @@ async function toggleMlColdStart() {
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
 
-// ML在线学习开关切换
 async function toggleMlLearning() {
     if (throttleToggle('mlLearning', 800)) return;
     try {
         const current = await readFile(STATE_DIR + '/ml_learning_enabled');
         const newVal = (current && current.trim() === '1') ? '0' : '1';
-        // Optimistic UI update
+
         const btn = getEl('btn-ml-learning');
         if (btn) {
             btn.textContent = newVal === '1' ? '关闭ML学习' : '启用ML学习';
@@ -3394,8 +3148,6 @@ async function toggleMlLearning() {
     } catch(e) { showToast('✗ 切换异常: ' + e.message, true); }
 }
 
-// v4.2.8: keyed incremental row reconciler. Reuses existing row nodes by
-// data-key, only updates changed rows. No per-tick innerHTML rebuild.
 function reconcileRows(container, items, keyFn, bindFn, maxRows) {
     if (!container) return;
     const seen = {};
@@ -3414,7 +3166,7 @@ function reconcileRows(container, items, keyFn, bindFn, maxRows) {
         bindFn(row, it, i);
     }
     if (frag.childNodes.length) container.appendChild(frag);
-    // drop removed rows
+
     const rows = container.querySelectorAll('[data-rkey]');
     for (let i = 0; i < rows.length; i++) {
         if (!seen[rows[i].getAttribute('data-rkey')]) rows[i].remove();
@@ -3422,11 +3174,10 @@ function reconcileRows(container, items, keyFn, bindFn, maxRows) {
 }
 
 async function updateStatus() {
-    // Batch-read ALL state via /state/all (1 HTTP request) instead of
-    // 15+ serial readFile() calls. Falls back to per-file exec reads if HTTP unavailable.
+
     const S = await readAllState();
     const get = (key) => (S && S[key] !== undefined) ? S[key] : '';
-    // PID detection: try pgrep first, then daemon_pid file, then infer from uptime
+
     let pid = 0;
     try { pid = await getDaemonPid(); } catch(e) {}
     const uptimeVal = parseInt(get('daemon_uptime')) || 0;
@@ -3464,8 +3215,7 @@ async function updateStatus() {
     const autoOn = getEl('auto-on');
     const autoOff = getEl('auto-off');
     if (autoOn && autoOff) { autoOn.classList.toggle('active', !isLocked); autoOff.classList.toggle('active', isLocked); }
-    // Log level button active state must reflect actual config (was hardcoded INFO).
-    // Reads log_level from /state/all and highlights the corresponding button.
+
     const logLv = get('log_level');
     if (logLv !== '' && logLv != null) {
         const lvInt = parseInt(logLv);
@@ -3476,13 +3226,10 @@ async function updateStatus() {
     }
     setText('cur-migrations', (get('migration_count') !== '' && get('migration_count') != null) ? get('migration_count') : '--');
     setText('cur-decisions', (get('decision_count') !== '' && get('decision_count') != null) ? get('decision_count') : '--');
-    // #99: HTTP channel state on the control page. MUST match the top status bar
-    // (renderLinkStatus) because both derive from the same g_httpState/g_httpPort
-    // which are reconciled from system.json's http_state/http_port by
-    // ingestHttpChannelState(). No independent port probe here.
+
     renderCurHttpState();
     setText('mon-temp', (get('thermal_cpu_max') || '--') + '°C');
-    // ROUND-009a: show thermal source zone if backend provides it.
+
     try {
         const ts = await readFile(STATE_DIR + '/thermal_source');
         if (ts && ts.trim()) {
@@ -3490,23 +3237,18 @@ async function updateStatus() {
             if (el) el.textContent = ' (zone: ' + ts.trim() + ')';
         }
     } catch(e) {}
-    // cpuUsage/loadAvg are read from cached state S via get() (they belong to
-    // refreshSystem()). Falls back to system_load then 0.
+
     const cpuUsageVal = get('cpu_usage');
     const systemLoadVal = get('system_load');
     const displayLoadVal = (cpuUsageVal !== '' && cpuUsageVal != null) ? cpuUsageVal :
                             ((systemLoadVal !== '' && systemLoadVal != null) ? systemLoadVal : 0);
     setText('mon-load', displayLoadVal + '%');
-    // sf_latency_avg and layer_count — read from /state/all cache; if missing,
-    // fall back to direct state file read so they always refresh.
+
     let sfLat = get('sf_latency_avg');
     if (sfLat === '' || sfLat == null) {
         try { sfLat = await readFile(STATE_DIR + '/sf_latency_avg'); sfLat = (sfLat || '').trim(); } catch(e) {}
     }
-    // v4.1.2 hotfix: when SF latency is NOT measured (timestats disabled / no game
-    // layer / binder unavailable) the producer still writes a theoretical-period
-    // fallback into sf_latency_avg, but flags sf_latency_valid=0. Show that as '--'
-    // instead of presenting the fake value (e.g. 3000us) as a measured latency.
+
     let sfValid = get('sf_latency_valid');
     if (sfValid === '' || sfValid == null) {
         try { sfValid = await readFile(STATE_DIR + '/sf_latency_valid'); sfValid = (sfValid || '').trim(); } catch(e) {}
@@ -3518,13 +3260,11 @@ async function updateStatus() {
         try { layerCnt = await readFile(STATE_DIR + '/layer_count'); layerCnt = (layerCnt || '').trim(); } catch(e) {}
     }
     setText('mon-layers', (layerCnt && layerCnt !== '' ? layerCnt : '--'));
-    // v4.1: frame experience + thermal HAL rows
+
     const FRAME_SRC_LABELS = {timestats:'Timestats',latency_binder:'Binder延迟',latency_dumpsys:'Dumpsys延迟',gfxinfo:'GFXInfo',none:'无数据'};
     const fs = get('frame_source');
     setText('mon-frame-source', (fs && fs !== '') ? (FRAME_SRC_LABELS[fs] || fs) : '--');
-    // #103: game scene is the BACKEND's honest classification of the current
-    // foreground. When a non-game app (e.g. MT manager bin.mt.plus) is in front,
-    // the detector resets to "unknown" -- the UI MUST show that, not "combat".
+
     {
         let scene = get('current_game_scene');
         if (!scene || scene === '') {
@@ -3542,16 +3282,7 @@ async function updateStatus() {
             }
         }
     }
-    // v4.2.8: single-app frame panel is the authoritative source. These legacy
-    // keys (game_avg_fps/game_frame_miss) are now derived from the same
-    // per-app pipeline but kept for the global glance card; mark it clearly.
-    // rel12-fix: on SukiSU exec mode the global game_avg_fps state file is
-    // frequently absent (aatpeSetFrameJank early-returns when totalSamples<5, or
-    // the gfxinfo/timestats boundary leaves the file stale), which left the
-    // "前台应用渲染FPS" card stuck at "--" even though the per-app list right
-    // below it already shows a real FPS. Fall back to the CURRENT foreground
-    // app's fps/jank from _frameApps (same data source the per-app panel uses),
-    // so the global glance card and the per-app list never contradict.
+
     let gfps = parseFloat(get('game_avg_fps'));
     let fmiss = parseFloat(get('game_frame_miss'));
     let _fg = null;
@@ -3561,11 +3292,7 @@ async function updateStatus() {
             _fg = _frameApps.apps.find(a => (a && a.current === true) || (cur && a && a.pkg === cur)) || null;
         }
     } catch(e) { _fg = null; }
-    // #99: do NOT treat the WebUI's own foreground (or any non-game app) as the
-    // frame target. When frame_source is "none"/empty (or game_scene=unknown) the
-    // foreground is not a game surface -- presenting its fps=0 / jank=91% as the
-    // "前台应用渲染FPS" is misleading. Detect that state and show an explicit
-    // "非游戏/无帧率数据" instead of 0 FPS or a fake drop%.
+
     const _fs = get('frame_source');
     const _scene = get('current_game_scene');
     const _noGameTarget = (!_fs || _fs === '' || _fs === 'none') || (_scene === 'unknown');
@@ -3575,16 +3302,14 @@ async function updateStatus() {
         const missEl = document.getElementById('mon-frame-miss');
         if (missEl) { missEl.textContent = '--'; missEl.className = 'value'; }
     } else {
-        // rel12 Bug4: game_avg_fps can be a literal "0" (finite, not NaN) when the
-        // global state file is stale/absent. Treat a non-positive global value as
-        // MISSING and fall back to the current foreground app's own fps.
+
         if (!(isFinite(gfps) && gfps > 0) && _fg && Number(_fg.total_frames) > 0) {
             const f = Number(_fg.fps);
             if (isFinite(f) && f > 0) gfps = f;
         }
         setText('mon-game-fps', (isNaN(gfps) || !isFinite(gfps) || gfps <= 0) ? '--' : gfps.toFixed(0));
         if (!(isNaN(fmiss) || !isFinite(fmiss)) && fmiss > 0) {
-            // already a positive, credible global miss%
+
         } else if (_fg) {
             const tf = Number(_fg.total_frames) || 0;
             const jp = Number(_fg.jank) || 0;
@@ -3602,10 +3327,7 @@ async function updateStatus() {
     if (gref) gref.style.display = '';
     const fur = get('frame_unavailable_reason');
     const furEl = document.getElementById('frame-unavail-reason');
-    // v4.1.2: no_game_layer / no_valid_frames is the EXPECTED state when the
-    // foreground is not a game — show a plain-language note instead of the raw token.
-    // v4.2.1: refined reasons (no_fg / sf_list_empty / no_layer_for_pkg /
-    // engine_not_recognized). no_game_layer is kept as the no_layer_for_pkg alias.
+
     const FUR_LABELS = {
         no_game_layer:'前台包名无对应游戏渲染层(no_layer_for_pkg)',
         no_layer_for_pkg:'前台包名无对应游戏渲染层',
@@ -3617,15 +3339,14 @@ async function updateStatus() {
     if (furEl) {
         furEl.style.display = (fur && fur !== '') ? '' : 'none';
         let txt = '帧数据: ' + (FUR_LABELS[fur] || fur);
-        // v4.2.1 diagnosis: append actual fg pkg + candidate layer names so a
-        // user on a locked-down OEM build can see WHY FPS stays empty.
+
         const dfg = get('frame_debug_fg');
         const dcand = get('frame_debug_candidates');
         if (dfg && dfg !== '') txt += ' | 前台包=' + dfg;
         if (dcand && dcand !== '' && dcand !== 'none') txt += ' | 候选层=' + dcand;
         furEl.textContent = txt;
     }
-    // Thermal HAL
+
     const HAL_LABELS = {NONE:'正常',LIGHT:'轻微',MODERATE:'中等',SEVERE:'严重',CRITICAL:'紧急',EMERGENCY:'危急',SHUTDOWN:'关断',UNAVAILABLE:'不可用'};
     const hal = get('thermal_hal_status');
     const halEl = document.getElementById('mon-thermal-hal');
@@ -3633,20 +3354,14 @@ async function updateStatus() {
         halEl.textContent = HAL_LABELS[hal] || hal;
         halEl.className = 'value ' + (['SEVERE','CRITICAL','EMERGENCY','SHUTDOWN'].includes(hal) ? 'red' : ['MODERATE','LIGHT'].includes(hal) ? 'yellow' : 'green');
     } else halEl.textContent = '--';
-    // v4.1.2 hotfix: 系统状态 (placement health state machine) and 热HAL状态 (Android
-    // hardware thermal throttle) are independent signals. They legitimately coexist as
-    // green NORMAL + red 热限. Annotate that so it is not read as a contradiction.
+
     const halNote = document.getElementById('thermal-hal-note');
     if (halNote) {
         const halSevere = ['SEVERE','CRITICAL','EMERGENCY','SHUTDOWN'].includes(hal);
         halNote.style.display = (hal && halSevere) ? '' : 'none';
         if (halSevere) halNote.textContent = '注：上方“系统状态”为调度健康度，本行“热HAL”为硬件温控阈值，二者独立，可同时出现。';
     }
-    // v4.1.2 hotfix: the Android Thermal HAL often does not expose a skin / headroom
-    // zone (thermal_hal_skin / thermal_hal_headroom read as -1). On such devices the
-    // daemon still publishes composite estimates thermal_skin and thermal_headroom_pct.
-    // Fall back to those instead of a bare "--"; if even those are absent, say so
-    // explicitly ("无皮肤区") rather than implying a live but hidden reading.
+
     let hskin = parseFloat(get('thermal_hal_skin'));
     if (isNaN(hskin) || hskin < 0) {
         let cs = get('thermal_skin');
@@ -3667,7 +3382,7 @@ async function updateStatus() {
         hhead = (isNaN(cnv) || cnv < 0) ? NaN : cnv;
     }
     setText('mon-thermal-headroom', isNaN(hhead) ? '--' : hhead.toFixed(0) + '%');
-    // GPU throttle warn
+
     const gthr = get('gpu_hard_throttle');
     const gcap = get('gpu_thermal_cap');
     const gwEl = document.getElementById('gpu-throttle-warn');
@@ -3676,7 +3391,7 @@ async function updateStatus() {
         gwEl.style.display = show ? '' : 'none';
         if (show) gwEl.textContent = '⚠ GPU 限频: ' + (gthr === '1' ? 'hard_throttle ' : '') + (gcap === '1' ? 'thermal_cap' : '');
     }
-    // v4.1: mechanism & debug key-value display
+
     const mechEl = document.getElementById('mech-debug-body');
     if (mechEl) {
         const EBPF_LABELS = {event_driven:'事件驱动',degraded_ring:'环形缓冲降级',polling:'轮询',denied_selinux:'SELinux拒绝',no_cap:'无权限',kernel_unsupported:'内核不支持',unverified:'未验证'};
@@ -3688,11 +3403,7 @@ async function updateStatus() {
             ['task uclamp', get('task_uclamp') === '1' ? '✓' : '—'],
             ['eBPF', (function(){ const s=get('ebpf_state'); return s ? (EBPF_LABELS[s]||s) : '—'; })()],
             ['GPU boost', get('gpu_boost_active') || '—'],
-            // ROUND-014 hotfix: 'scan loop' (scan_loop_ms) and 'boost ROI'
-            // (boost_roi_recent_net_mean) have no producers in the daemon — they
-            // were permanent dead rows showing '—'. Removed.
-            // tick_mode is only written by the polling branch; under event_driven
-            // eBPF it stays absent. Infer "事件驱动" from ebpf_mode/ebpf_state.
+
             ['tick mode', (function(){
                 const tm = get('tick_mode');
                 if (tm) return tm;
@@ -3701,29 +3412,21 @@ async function updateStatus() {
                 return '—';
             })()],
             ['tmpfs', get('tmpfs_usage_kb') ? get('tmpfs_usage_kb')+'KB' : '—'],
-            // v4.1.2: this is the WATCHDOG's own independent latch, separate from the main
-            // placement 系统状态. It can stay latched (red here) while 系统状态 = NORMAL —
-            // that is a watchdog-side latch/recovery issue, NOT the whole system being
-            // degraded. We annotate it rather than relabel it as history (the watchdog is
-            // actively re-emitting it); clearing the latch is watchdog's state machine.
+
             ['watchdog', (function(){
                 const wd = get('watchdog_degraded');
                 if (!wd || wd === 'none' || wd === '') return '—';
                 return wd + ' (看门狗独立锁存)';
             })()],
             ['thermal source', get('thermal_source') || '—'],
-            // v4.1.1 final-round: timestats channel failure reason (disabled/
-            // selinux_denied/parse_empty/no_layer/unknown). Only set when the
-            // timestats path was attempted and failed.
+
             ['timestats', (function(){
                 const REASON_LABELS = {disabled:'未启用', selinux_denied:'SELinux拒绝', parse_empty:'解析为空', no_layer:'无该层', unknown:'未知'};
                 const v = get('frame_timestats_reason');
                 if (!v) return '—';
                 return (REASON_LABELS[v] || v);
             })()],
-            // v4.2 Batch C: cross-batch observability counters. get() returns '' when the
-            // STATE_DIR file is absent (A/B not yet written) -> graceful '—' display.
-            // autocal_ratio is stored ×1000 by batch A; restore to a 3-decimal ratio.
+
             ['冷启动拒绝', get('cold_start_rejected') || '—'],
             ['ML权重降级', get('ml_weight_degraded_count') || '—'],
             ['SF线程', get('sf_thread_count') || '—'],
@@ -3734,8 +3437,7 @@ async function updateStatus() {
                 const n = parseInt(v, 10);
                 return isNaN(n) ? '—' : (n / 1000).toFixed(3);
             })()],
-            // C3: thermal critical-wall headroom % (collected by thermal.cpp:1000-1001;
-            // display-only surface here). Distinct from the HAL headroom on the main monitor.
+
             ['热余量(critical)', (function(){
                 const v = get('thermal_headroom_pct');
                 if (v === '' || v === null || v === undefined) return '—';
@@ -3748,7 +3450,7 @@ async function updateStatus() {
             return '<div' + warn + '><span style="color:#666">' + escapeHtml(r[0]) + '</span>: ' + escapeHtml(String(r[1])) + '</div>';
         }).join('');
     }
-    // System state machine display
+
     try {
         const stateJson = await readFile(STATE_DIR + '/state.json');
         if (stateJson) {
@@ -3777,7 +3479,7 @@ async function updateStatus() {
                         reasonEl.style.display = 'none';
                     }
                 }
-                // Watchdog passive lock status display
+
                 const wdLockEl = getEl('watchdog-lock-status');
                 if (wdLockEl) {
                     const wdLocked = (ss.watchdog_passive_locked === true || ss.watchdog_passive_locked === 'true');
@@ -3806,7 +3508,7 @@ async function updateStatus() {
             }
         }
     } catch(e) {
-        // Fallback if state.json missing/corrupt — read individual state files.
+
         try {
             const ssFallback = (await readFile(STATE_DIR + '/system_state') || '').trim();
             if (ssFallback) {
@@ -3820,7 +3522,7 @@ async function updateStatus() {
             setText('mon-state-duration', sdFallback > 0 ? fmtUptime(sdFallback) : '--');
         } catch(e2) {}
     }
-    // Always attempt fallback for system_state/state_duration if state.json didn't set them.
+
     try {
         if (!getEl('mon-system-state').textContent || getEl('mon-system-state').textContent === '--') {
             const ssDirect = (await readFile(STATE_DIR + '/system_state') || '').trim();
@@ -3843,7 +3545,7 @@ async function updateLog() {
     if (!container) return;
     setupLogScrollPause();
     let lines = null;
-    // ROUND-007: prefer HTTP /logs endpoint (reliable multiline, no exec truncation).
+
     if (g_httpPort) {
         try {
             const tok = await getDaemonToken();
@@ -3857,7 +3559,7 @@ async function updateLog() {
             }
         } catch(e) {}
     }
-    // Fallback: exec tail + tr (ROUND-007g: preserve newlines through KSU exec).
+
     if (!lines && execFn) {
         try {
             const r = await smartExec('tail -n 200 ' + LOG_FILE + ' 2>/dev/null | tr \'\\n\' \'\\036\'');
@@ -3889,7 +3591,7 @@ async function updateLog() {
         container.textContent = apiAvailable ? '暂无日志' : '无法读取日志';
     }
 }
-// ROUND-009b: jank root cause diagnostic card.
+
 const JANK_CAUSE_LABELS = {
     NONE: '正常',
     GPU_BOUND: 'GPU瓶颈（提CPU无效）',
@@ -3906,7 +3608,7 @@ async function updateJankDiag() {
     if (!card || !body) return;
     let hasData = false;
     let html = '';
-    // 1. jank_root_cause
+
     try {
         const raw = await readFile(STATE_DIR + '/jank_root_cause');
         if (raw && raw.trim()) {
@@ -3925,34 +3627,27 @@ async function updateJankDiag() {
             }
         }
     } catch(e) {}
-    // 2. gpu_load
+
     try {
         const g = await readFile(STATE_DIR + '/gpu_load');
         if (g && g.trim()) {
             hasData = true;
             const p = {};
-            // ROUND-014 hotfix: state files are semicolon-separated (no spaces).
-            // Splitting on whitespace only kept the first kv and leaked the rest
-            // as a bare string into gpu_util. Split on whitespace OR ';'.
+
             g.trim().split(/[\s;]+/).forEach(function(kv) {
                 const i = kv.indexOf('=');
                 if (i > 0) p[kv.substring(0,i)] = kv.substring(i+1);
             });
             const avail = p.available !== '0';
-            // ctrl=1|0 (new daemon). Legacy daemons omit the field: fall back to
-            // the old frequency line rather than mislabeling a devfreq box.
+
             const hasCtrlField = (p.ctrl === '0' || p.ctrl === '1');
             const ctrl = (p.ctrl === '1');
-            // v4.1.1 final-round: freq_avail=1 means a current-frequency was read
-            // (monitoring) even when ctrl=0 (no writable node). Render read-only.
+
             const freqAvail = (p.freq_avail === '1');
             const freqUnit = p.freq_unit || 'khz';
-            // v4.2.8: MTK GED back-fill already returns MHz (836, not 836000).
-            // Treat unit=='mhz' as-is; khz still /1000.
+
             const toMhz = function(v){ return (freqUnit === 'mhz') ? v : (v/1000); };
-            // v4.1.2 hotfix: gpu_freq="0" is a non-empty JS string and so was truthy,
-            // which printed a fabricated "0/0MHz". Parse numerically and treat 0 /
-            // missing as NO usable frequency (never show a fake MHz).
+
             const freqKhz = parseInt(p.gpu_freq, 10);
             const maxKhz  = parseInt(p.gpu_max, 10);
             const haveFreqNum = !isNaN(freqKhz) && freqKhz > 0;
@@ -3962,16 +3657,16 @@ async function updateJankDiag() {
             if (!avail) {
                 gpuLine = '<span style="color:#666">不支持</span>' + srcStr;
             } else if (hasCtrlField && !ctrl && !freqAvail) {
-                // Utilization-only telemetry: no frequency node at all.
+
                 const u = (p.gpu_util !== undefined && p.gpu_util !== '') ? p.gpu_util : '--';
                 gpuLine = '<span style="color:#4ecdc4">' + escapeHtml(u) + '%</span>' +
                     ' <span style="color:#888;font-size:11px">（仅利用率，无调频节点）</span>' + srcStr;
             } else if (hasCtrlField && !ctrl && freqAvail) {
-                // Readable frequency but no writable control node: read-only monitoring.
+
                 const u = (p.gpu_util !== undefined && p.gpu_util !== '') ? p.gpu_util : '--';
                 let freqTxt;
                 if (freqUnit === 'level') {
-                    // Unit ambiguous -> show the honest OPP index, never a fake MHz.
+
                     freqTxt = 'OPP level ' + escapeHtml(p.freq_raw || '?');
                 } else {
                     freqTxt = haveFreqNum ? toMhz(freqKhz).toFixed(0) + 'MHz' : '--';
@@ -3980,9 +3675,7 @@ async function updateJankDiag() {
                   ' @ ' + freqTxt +
                   ' <span style="color:#888;font-size:11px">（只读监测）</span>' + srcStr;
             } else {
-                // ctrl=1 (writable control) or legacy daemon. v4.1.2: only render a
-                // MHz pair when a real frequency exists; otherwise degrade to
-                // utilization-only rather than printing a fabricated "0/0MHz".
+
                 const u = (p.gpu_util !== undefined && p.gpu_util !== '') ? p.gpu_util : '--';
                 if (!haveFreqNum) {
                     gpuLine = '<span style="color:#4ecdc4">' + escapeHtml(u) + '%</span>' +
@@ -3996,9 +3689,7 @@ async function updateJankDiag() {
             html += '<div style="margin-top:4px">GPU: ' + gpuLine + '</div>';
         }
     } catch(e) {}
-    // 2b. gpu_probe (v4.1.1): read-only per-node enumeration name=R/W/N[:value].
-    // Collapsed by default; one-line summary (R/W counts) so absent nodes don't
-    // flood the panel. R=readable, W=writable control, N=absent.
+
     try {
         const gp = await readFile(STATE_DIR + '/gpu_probe');
         if (gp && gp.trim()) {
@@ -4031,13 +3722,13 @@ async function updateJankDiag() {
                 '<div style="margin-top:4px">' + rows + '</div></details>';
         }
     } catch(e) {}
-    // 3. pressure (PSI)
+
     try {
         const pr = await readFile(STATE_DIR + '/pressure');
         if (pr && pr.trim()) {
             hasData = true;
             const p = {};
-            // ROUND-014 hotfix: semicolon-separated state file; split on ws OR ';'.
+
             pr.trim().split(/[\s;]+/).forEach(function(kv) {
                 const i = kv.indexOf('=');
                 if (i > 0) p[kv.substring(0,i)] = kv.substring(i+1);
@@ -4048,8 +3739,7 @@ async function updateJankDiag() {
                 const n = parseFloat(v);
                 return isNaN(n) ? '--' : n.toFixed(1) + '%';
             }
-            // v4.2.2 P3-1: three-tier PSI (avg10/avg60/avg300 per resource, "some" stall).
-            // cpu/io/mem; a resource/tier with no reading renders -- (never faked).
+
             function psiRow(name, k10, k60, k300) {
                 return '<div style="display:flex;justify-content:space-between;gap:6px">' +
                     '<span style="color:#9aa"> ' + name + '</span>' +
@@ -4067,13 +3757,13 @@ async function updateJankDiag() {
                 : '<span style="color:#666">不支持</span>') + '</div>';
         }
     } catch(e) {}
-    // 4. throttle_state
+
     try {
         const th = await readFile(STATE_DIR + '/throttle_state');
         if (th && th.trim()) {
             hasData = true;
             const p = {};
-            // ROUND-014 hotfix: semicolon-separated; split on ws OR ';'.
+
             th.trim().split(/[\s;]+/).forEach(function(kv) {
                 const i = kv.indexOf('=');
                 if (i > 0) p[kv.substring(0,i)] = kv.substring(i+1);
@@ -4088,7 +3778,7 @@ async function updateJankDiag() {
             }
         }
     } catch(e) {}
-    // 5. cluster_pressure (per-cluster pressure, multi-line, tr-bridged)
+
     try {
         const cp = await readFile(STATE_DIR + '/cluster_pressure');
         if (cp && cp.trim()) {
@@ -4101,7 +3791,7 @@ async function updateJankDiag() {
             });
         }
     } catch(e) {}
-    // 6. thermal_zones (sorted list of all temp sensors)
+
     try {
         const tz = await readFile(STATE_DIR + '/thermal_zones');
         if (tz && tz.trim()) {
@@ -4111,22 +3801,18 @@ async function updateJankDiag() {
                 entry = entry.trim();
                 if (!entry) return;
                 const parts = entry.split(':');
-                // Format: idx:type:temp:invalid  (thermal.cpp writes invalid as "1"/"0")
+
                 if (parts.length >= 3) {
                     const idx = parts[0];
                     const type = parts[1];
                     const temp = parts[2];
-                    // ROUND-014 hotfix: the writer emits "1"/"0", not the literal
-                    // "invalid". The old check parts[3]==='invalid' never matched,
-                    // so a frozen/invalid zone reading 0°C was indistinguishable
-                    // from a genuine 0°C sensor.
+
                     const invalid = parts[3] === '1';
                     const tempMilli = parseFloat(temp);
                     const tempValid = !invalid && !isNaN(tempMilli);
                     const tempC = tempValid ? (tempMilli / 1000).toFixed(0) : null;
                     if (invalid) {
-                        // Frozen/absent sensor: grey out and annotate, keep it
-                        // visually distinct from a real 0°C reading.
+
                         html += '<div style="color:#555">' +
                             'zone' + escapeHtml(idx) + ' <span style="color:#666">' + escapeHtml(type) + '</span> ' +
                             '<span style="color:#555">(恒定/无效)</span></div>';
@@ -4140,7 +3826,7 @@ async function updateJankDiag() {
             html += '</div></details>';
         }
     } catch(e) {}
-    // 7. capabilities (kernel/cgroup/uclamp/schedtune/PSI/GPU/loader/page_size)
+
     try {
         const cap = await readFile(STATE_DIR + '/capabilities');
         if (cap && cap.trim()) {
@@ -4176,21 +3862,14 @@ async function updateJankDiag() {
     }
 }
 async function updatePerCpu() {
-    // Define perfStart here for the performance measurement block at end of this
-    // function (previously only defined in refreshSystem(), causing a ReferenceError).
+
     const perfStart = performance.now();
     const container = document.getElementById('percpu-container');
     const summaryEl = document.getElementById('percpu-summary');
     if (!container) return;
-    // Read per-CPU data from module-generated JSON instead of fragile
-    // shell-loop command. The old `for i in 0..7; cat cpu$i/util ...` command
-    // was ~360 chars with command substitution; on some KSU builds it was
-    // truncated or only the last iteration (CPU7) was emitted.
+
     const data = await readJson(WEBUI_DIR + '/percpu.json');
-    // #98: the backend ALWAYS emits percpu.json now, and carries an explicit
-    // "degraded" reason code when cpus[] is empty. Render that reason instead of
-    // a generic "暂无数据" so the user can tell "topology not detected yet" from
-    // "metrics collector not sampling yet".
+
     if (!data) {
         container.innerHTML = '<div class="empty-state">percpu.json 不可用<br><span style="font-size:10px">守护进程运行后将自动生成状态文件</span></div>';
         if (summaryEl) summaryEl.textContent = '无数据';
@@ -4223,9 +3902,7 @@ async function updatePerCpu() {
         if (summaryEl) summaryEl.textContent = '无数据';
         return;
     }
-    // Use module-detected CPU type from percpu.json instead of
-    // hardcoded ID ranges (id>=7 big, id>=4 mid).  Falls back to topology
-    // map from system.json if type field is missing (older daemon versions).
+
     let topoMap = null;
     try {
         const sysData = await readJson(WEBUI_DIR + '/system.json');
@@ -4238,7 +3915,7 @@ async function updatePerCpu() {
             (t.prime || []).forEach(function(id) { topoMap[id] = 'prime'; });
         }
     } catch (e) { topoMap = null; }
-    // ROUND-007d/f: override with clusters (agg channel first, file fallback).
+
     try {
         let clustersText = readAgg('clusters');
         if (!clustersText || clustersText.trim() === '') {
@@ -4259,7 +3936,7 @@ async function updatePerCpu() {
             if (Object.keys(clusterMap).length > 0) topoMap = clusterMap;
         }
     } catch(e) {}
-    // ROUND-007h: prime_pool fallback (single-line file, G1 writes it).
+
     try {
         if (!topoMap || topoMap[7] === undefined) {
             const primePool = (await readFile(STATE_DIR + '/prime_pool')).trim();
@@ -4273,10 +3950,10 @@ async function updatePerCpu() {
         }
     } catch(e) {}
     function getCoreType(cpu) {
-        // topoMap (clusters/cpu_topology/prime_pool) is authoritative.
+
         if (topoMap && topoMap[cpu.id] !== undefined) return topoMap[cpu.id];
         if (cpu.type && cpu.type !== 'unknown') return cpu.type;
-        // ROUND-007g: no half-split guess. Mark unknown rather than misgrouping.
+
         return 'unknown';
     }
     function getCoreLabel(type) {
@@ -4317,8 +3994,7 @@ async function updatePerCpu() {
             const freqMhz = !isNaN(cpu.freqKhz) ? (cpu.freqKhz / 1000).toFixed(0) : '--';
             const freqPctStr = !isNaN(cpu.freqPct) ? cpu.freqPct + '%' : '--';
             const tempStr = !isNaN(cpu.temp) ? cpu.temp.toFixed(0) + '°C' : '';
-            // cpu `type` comes from daemon JSON; escape before placing
-            // into class attributes to prevent attribute-injection / XSS.
+
             html += '<div class="percpu-core ' + escapeHtml(type) + '">';
             html += '<div class="percpu-id">CPU' + cpu.id + ' <span class="percpu-type ' + escapeHtml(type) + '">' + getCoreLabel(type) + '</span></div>';
             if (utilValid) {
@@ -4336,15 +4012,14 @@ async function updatePerCpu() {
         html += '</div></div>';
     }
     if (!html) html = '<div class="empty-state">暂无per-CPU数据</div>';
-    // Change detection — skip full innerHTML rebuild if per-CPU data unchanged.
-    // Build a compact signature (cpu:util:freq) and compare to last render.
+
     let sig = '';
     for (const cpu of cpus) sig += cpu.id + ':' + (isNaN(cpu.util)?'n':cpu.util) + ':' + (isNaN(cpu.freqKhz)?'n':cpu.freqKhz) + ';';
     if (container._lastSig !== sig) {
         container._lastSig = sig;
         container.innerHTML = html;
     }
-    // Performance measurement — perfStart is defined locally in this function.
+
     const totalTime = performance.now() - perfStart;
     if (totalTime > 500) {
         console.warn('[perf] SLOW updatePerCpu: ' + totalTime.toFixed(1) + 'ms');
@@ -4357,42 +4032,31 @@ async function updateThreads() {
     if (el._lastHtml !== html) { el.innerHTML = html; el._lastHtml = html; }
 }
 
-// SSE (Server-Sent Events) client for true real-time push.
-// The backend /events endpoint pushes aggregate state JSON every ~500ms.
-// When SSE is active, CPU freq/temp/mode changes appear within 500ms instead
-// of waiting up to 3s for the next poll. Falls back to 1s polling if SSE fails.
 let g_sse = null;
 let g_sseActive = false;
 let g_sseReconnectTimer = null;
-let g_sseLastMsg = 0;   // [v4.3.1h] last time any SSE byte/frame arrived (liveness watchdog)
-let g_sseCycling = false; // [v4.3.1h] guard so the stall watchdog doesn't double-reconnect
-// ROUND-003: shortened from 3000ms to 1000ms. The SSE 429 (sse_limit) path now
-// returns immediately on slot exhaustion, and the server releases closed slots
-// within ~250ms (MSG_DONTWAIT EOF poll). A 1s reconnect absorbs the fast-refresh
-// race without hammering the server (each reconnect is a single TCP connection).
-// EventSource does not expose the HTTP status in onerror, so we cannot
-// distinguish 429 from other errors; 1s is safe for both.
+let g_sseLastMsg = 0;
+let g_sseCycling = false;
+
 const SSE_RECONNECT_BASE_MS = 1000;
 const SSE_RECONNECT_MAX_MS = 15000;
-let g_sseStarting = false;        // [P1-1] token 异步间隙的启动单飞标志
-let g_sseCycleResetTimer = null;  // [P1-2] cycling 兜底复位定时器
-let g_sseFailCount = 0;           // [P2] 指数退避计数
+let g_sseStarting = false;
+let g_sseCycleResetTimer = null;
+let g_sseFailCount = 0;
 function sseBackoffMs() {
-    const step = Math.min(g_sseFailCount, 4);   // 1,2,4,8,16ms 步长，封顶 MAX
+    const step = Math.min(g_sseFailCount, 4);
     return Math.min(SSE_RECONNECT_MAX_MS, SSE_RECONNECT_BASE_MS * (1 << step)) +
-           Math.floor(Math.random() * 250);      // +抖动，避免同步重连
+           Math.floor(Math.random() * 250);
 }
 function sseClearCycleReset() {
     if (g_sseCycleResetTimer) { clearTimeout(g_sseCycleResetTimer); g_sseCycleResetTimer = null; }
 }
 
 function startSse() {
-    // [P1-1] 同步单飞：visibility / watchdog / onerror / init 在 token 异步间隙并发调用时
-    // 复用同一条启动链，绝不 new 第二条 /events（否则第一路泄漏、占后端 slot 触发 429）。
+
     if (g_sseActive || g_sseStarting || !g_httpPort || g_httpDisabled) return;
     g_sseStarting = true;
-    // F-01[P1]: use short-lived stok (5-min session ticket) for SSE instead of
-    // the long-lived daemon_token, so the URL does not leak the master token.
+
     getSessionToken().then((stok) => {
     try {
         const qs = stok ? ('?stok=' + encodeURIComponent(stok)) : '';
@@ -4400,30 +4064,26 @@ function startSse() {
         g_sseActive = true;
         g_sseStarting = false;
         g_sse.onmessage = function(ev) {
-            // [P2] 任何已投递 data 帧先刷新时戳（含 {state_generation} 探针帧），再判探针早退——
-            // 保证看门狗以真实投递的 JSON 帧为存活信号；EventSource 不投递 ':' 注释帧。
+
             g_sseLastMsg = Date.now();
             try {
                 const data = JSON.parse(ev.data);
                 if (data && typeof data === 'object') {
-                    // [v4.3.1h] 后端在状态无变化时每 ~2s 推一个仅含 state_generation 的
-                    // 探针帧（liveness probe）。它不是完整状态：绝不能用它覆盖 stateCache
-                    // （否则最后一份完整状态被稀疏对象顶掉、页面渲染空白/冻在最后一帧），
-                    // 也不触发渲染。g_sseLastMsg 已在本函数开头更新，看门狗据此判活即可。
+
                     const _keys = Object.keys(data);
                     if (_keys.length === 1 && _keys[0] === 'state_generation') { return; }
-                    // Push to state cache so readAllState() serves fresh data
+
                     stateCache.data = data;
                     stateCache.timestamp = Date.now();
-                    // Update header status bar + control tab fields immediately
+
                     updateStatusFromData(data);
-                    // If on system tab, also refresh system fields from same data
+
                     const activeTab = document.querySelector('.tab-content.active');
                     if (activeTab && activeTab.id === 'tab-system') {
                         refreshSystemFromData(data);
                     }
                 }
-            } catch(e) { /* parse error, skip */ }
+            } catch(e) {   }
         };
         g_sse.onerror = function() {
             g_sseActive = false;
@@ -4431,8 +4091,8 @@ function startSse() {
             if (g_sse) { g_sse.close(); g_sse = null; }
             g_sseFailCount++;
             sseClearCycleReset();
-            g_sseCycling = false;   // [P1-2] onerror 也复位，看门狗不被卡死
-            // Schedule reconnect（[P2] 封顶指数退避+抖动；与 watchdog 共用 startSse 单飞路径）
+            g_sseCycling = false;
+
             if (g_pageVisible && !g_sseReconnectTimer) {
                 g_sseReconnectTimer = setTimeout(() => {
                     g_sseReconnectTimer = null;
@@ -4443,9 +4103,9 @@ function startSse() {
         g_sse.onopen = function() {
             g_sseLastMsg = Date.now();
             g_sseCycling = false;
-            g_sseFailCount = 0;   // [P2] 连接成功，重置退避
+            g_sseFailCount = 0;
             sseClearCycleReset();
-            // SSE connected — invalidate poll cache to get fresh data immediately
+
             try { invalidateStateCache(); } catch(e) {}
         };
     } catch(e) {
@@ -4461,21 +4121,14 @@ function stopSse() {
     if (g_sse) { try { g_sse.close(); } catch(e) {} g_sse = null; }
     if (g_sseReconnectTimer) { clearTimeout(g_sseReconnectTimer); g_sseReconnectTimer = null; }
 }
-// [v4.3.1h 临时热修] SSE 存活看门狗。EventSource 对"TCP 半开、连接还在但服务端
-// 不再推帧"这种静默断流不会触发 onerror，于是 g_sseActive 一直为 true、轮询 tick 又
-// 因 SSE active 而永久跳过 updateStatus()，页面就冻在最后一帧（约 1 秒）。这里每 3s
-// 检查：服务端正常约 500ms 推一帧、keepalive 约 2s，若连续 7s 收不到任何帧，判定
-// 僵死——先 stopSse() 让 g_sseActive 变 false（轮询立即接管，不再被压制），1.5s 后
-// 再重连。重连后若仍僵死会再次触发，形成"轮询兜底 + 周期重连"，页面不会再停刷。
+
 setInterval(function sseWatchdog() {
     try {
         if (!g_pageVisible || !g_httpPort || g_httpDisabled) return;
         if (g_sseActive && g_sseLastMsg && (Date.now() - g_sseLastMsg > 7000) && !g_sseCycling) {
             g_sseCycling = true;
             try { stopSse(); } catch (e) {}
-            // g_sseActive 现已为 false：下一拍轮询 tick 会真正 fetch /state/all 兜底。
-            // [P1-2] 兜底复位：无论重连 onopen/onerror 是否触发，5s 后必清 cycling，
-            // 否则半开重连会让看门狗永久放弃、轮询又被 g_sseActive 压制 → 再次停刷。
+
             sseClearCycleReset();
             g_sseCycleResetTimer = setTimeout(function () {
                 g_sseCycleResetTimer = null;
@@ -4488,17 +4141,14 @@ setInterval(function sseWatchdog() {
     } catch (e) {}
 }, 3000);
 
-// ================= h4 interim：主数据活性看门狗 + 常驻链路状态条 =================
-// 目标：无论 SSE 状态机 / 刷新锁 / token / HTTP / exec 桥哪条坏，都不再静默冻死；
-// 页面顶部常驻一条自报"哪条链路死"。铁律：任何单一 flag 都不永久压制全部刷新。
-let g_healthOk = null;        // null=未测 true/false
+let g_healthOk = null;
 let g_healthMs = 0;
 let g_tokenOk = null;
 let g_execOk = null;
 let g_activeChannel = 'none';
 let g_statusBar = null;
 let g_lastHealthProbe = 0;
-let g_lastForcedFallbackTs = 0;  // [P3] 强接管兜底节流：同死链状态下 ≥4s 才再拉一次
+let g_lastForcedFallbackTs = 0;
 function sseStateText() {
     if (g_sse && g_sse.readyState === 1) return 'open';
     if (g_sseReconnectTimer) return 'reconnecting';
@@ -4515,22 +4165,20 @@ function buildStatusBar() {
     g_statusBar = bar;
 }
 function linkCell(label, ok, detail) {
-    // ok: true=绿 false=红 null=灰(未知)。token 只显示成败，绝不显示值。
+
     const color = ok === null ? '#888' : (ok ? '#7fff9e' : '#ff6b6b');
     return '<span style="color:#555">' + label + '</span> ' +
         '<span style="color:' + color + '">' + (ok === null ? '—' : (ok ? '✓' : '✗')) + '</span>' +
         (detail ? ' <span style="color:#999">' + detail + '</span>' : '');
 }
 async function h4ProbeOnce() {
-    // exec 桥自检（复用 smartExec）；token 与 health 在主看门狗里节流探测。
+
     try {
         const r = await smartExec('echo aatpe_probe');
         g_execOk = (r && r.errno === 0 && r.stdout && r.stdout.indexOf('aatpe_probe') >= 0);
     } catch (e) { g_execOk = false; }
 }
-// #99: control-page HTTP state readout. Mirrors the top status bar's HTTP cell
-// exactly (same g_httpState/g_httpPort) so the two never disagree. Source of
-// truth is system.json http_state/http_port reconciled by ingestHttpChannelState().
+
 function renderCurHttpState() {
     const el = document.getElementById('cur-http-state');
     if (!el) return;
@@ -4558,9 +4206,7 @@ function renderLinkStatus() {
     buildStatusBar();
     const stale = stateCache.timestamp ? Math.round((Date.now() - stateCache.timestamp) / 1000) : -1;
     const sseTxt = sseStateText();
-    // W-1: three-state HTTP channel display. Green = really up (port); grey dash =
-    // deliberately closed by config (NOT a fault, no red alarm); red X = genuine
-    // startup failure with a log pointer. unknown keeps the legacy port-probe UX.
+
     let httpOk = g_httpPort > 0;
     let httpDetail = g_httpPort > 0 ? ('' + g_httpPort) : '未发现';
     if (g_httpState === 'on') {
@@ -4573,18 +4219,11 @@ function renderLinkStatus() {
         httpOk = false;
         httpDetail = (g_httpState === 'ports_busy' ? '8888-8899 被占用' : 'token 启动失败') + ' · 见 aatpe.log';
     } else if (g_httpState === 'webview_blocked') {
-        // rel12-perf: WebView origin cannot reach 127.0.0.1 (cleartext/CORS).
-        // exec bridge works; this is expected, not a fault. Grey.
+
         httpOk = null;
         httpDetail = 'WebView 禁止 HTTP';
     } else if (g_httpPort === 0 && g_execOk) {
-        // rel12-fix: SukiSU (and similar root) WebView runs the page from a
-        // file:///content:// origin that cannot fetch http://127.0.0.1 due to
-        // cleartext/CORS restrictions — yet the root exec bridge works perfectly
-        // (errno=0, state.json readable). Showing a red "HTTP 未发现" here is
-        // misleading: data IS flowing via exec. Render it grey as "exec 模式" so
-        // the top bar is honest instead of alarming. Only flip to red when exec
-        // is ALSO dead (genuinely no channel).
+
         httpOk = null;
         httpDetail = 'exec 模式';
     }
@@ -4599,11 +4238,11 @@ function renderLinkStatus() {
     ];
     g_statusBar.innerHTML = parts.join(' &nbsp;·&nbsp; ');
 }
-// 单例主看门狗：1s 巡检。数据停滞 >5s 即按代际戳强接管刷新锁并跑分级兜底。
+
 setInterval(function masterLiveness() {
     try {
-        renderLinkStatus();   // 每帧刷新链路状态条（首次会自动 buildStatusBar）
-        // 节流 health 探测：每 5s 一次，避免与 probeHttp 重复打请求
+        renderLinkStatus();
+
         if (g_pageVisible && g_httpPort > 0 && (Date.now() - g_lastHealthProbe > 5000)) {
             g_lastHealthProbe = Date.now();
             const t0 = Date.now();
@@ -4615,17 +4254,15 @@ setInterval(function masterLiveness() {
         const nowMs = Date.now();
         const stale = stateCache.timestamp ? (nowMs - stateCache.timestamp) : 0;
         if (stateCache.timestamp && stale < 5000) {
-            g_lastForcedFallbackTs = 0;  // 数据恢复，重置节流，不影响正常节拍
+            g_lastForcedFallbackTs = 0;
             if (g_activeChannel === 'none') g_activeChannel = (g_httpPort > 0 ? (sseStateText() === 'open' ? 'HTTP-SSE' : 'HTTP-poll') : (g_execOk ? 'exec' : 'none'));
-            return;  // 数据新鲜，正常
+            return;
         }
-        // [P3] 节流：状态条仍每秒刷新，但同死链状态下强接管兜底按 4s 节拍发起
-        // （最大间隔即 4s，本就不可能出现 15s 静默冻死）。数据一恢复即重置计时，
-        // 不影响正常节拍。
+
         const canForce = (nowMs - g_lastForcedFallbackTs >= 4000);
         if (!canForce) return;
         g_lastForcedFallbackTs = nowMs;
-        // 数据停滞：按代际戳强接管（复用 h3 g_tickSeq 思路），任何 flag 都不永久压制。
+
         g_tickSeq++; g_refreshLock = false; g_lockSetAt = 0;
         (async () => {
             try {
@@ -4633,7 +4270,7 @@ setInterval(function masterLiveness() {
                 if (g_httpPort > 0) {
                     try { await getDaemonToken().then(() => { g_tokenOk = true; }).catch(() => { g_tokenOk = false; }); } catch (e) { g_tokenOk = false; }
                 } else { g_tokenOk = null; }
-                const d = await readAllState();   // HTTP→exec cli→exec files 三级兜底
+                const d = await readAllState();
                 if (d && typeof d === 'object' && Object.keys(d).length > 0) {
                     g_activeChannel = (g_httpPort > 0) ? 'HTTP-poll' : (g_execOk ? 'exec-cli' : 'exec-files');
                     stateCache.timestamp = Date.now();
@@ -4641,22 +4278,17 @@ setInterval(function masterLiveness() {
                 } else { g_activeChannel = 'none'; }
             } catch (e) { g_activeChannel = 'none'; }
         })();
-    } catch (e) { /* 主看门狗自身绝不抛出 */ }
+    } catch (e) {   }
 }, 1000);
-// 页面加载后做一次 exec 自检
+
 if (typeof smartExec === 'function') h4ProbeOnce();
 
-// Update status bar + control tab fields from pre-fetched SSE data.
-// This avoids the HTTP fetch round-trip — the data is already in memory.
 async function updateStatusFromData(S) {
     if (!S || typeof S !== 'object') return;
-    // Fire-and-forget thermal button refresh (cheap, cached read).
+
     refreshThermalButton();
     const get = (key) => (S && S[key] !== undefined) ? S[key] : '';
-    // P0: 崩溃/被动面板 — 字段缺失则整块隐藏（07c 防御）。
-    // 自动恢复：boot_ok_at 为后端写的"本次干净启动 epoch"。当距 boot_ok_at
-    // >= 30s 且崩溃计数无新增，则隐藏历史 latch（不再永久挂）。boot_ok_at
-    // 缺失时退化为不自动隐藏（兼容旧后端）。
+
     try {
         const loop = parseInt(get('crash_loop_detected')) || 0;
         const crashes = parseInt(get('startup_crash_count')) || 0;
@@ -4664,15 +4296,15 @@ async function updateStatusFromData(S) {
         const passive = get('passive_mode') === '1' || get('passive_mode') === 'true';
         const cb = getEl('crash-banner');
         if (cb) {
-            // 计数是否较上次观察增长（新增崩溃 → 继续显示）
+
             if (window._crashSeen === undefined) window._crashSeen = {c: crashes, r: restarts, bumped: 0};
             if (crashes > window._crashSeen.c || restarts > window._crashSeen.r) window._crashSeen.bumped = Date.now();
             window._crashSeen.c = crashes; window._crashSeen.r = restarts;
-            const bootOk = parseInt(get('boot_ok_at')) || 0;  // epoch seconds
+            const bootOk = parseInt(get('boot_ok_at')) || 0;
             let healthyFor = -1;
             if (bootOk > 0) healthyFor = (Date.now()/1000) - bootOk;
             const noNewSince = window._crashSeen.bumped === 0 || (Date.now() - window._crashSeen.bumped) >= 30000;
-            const autoHidden = (healthyFor >= 30 && noNewSince);  // 干净启动满30s且无新增
+            const autoHidden = (healthyFor >= 30 && noNewSince);
             let show = (loop > 0 || crashes > 0 || passive) && !autoHidden;
             cb.style.display = show ? '' : 'none';
             if (show) {
@@ -4688,8 +4320,7 @@ async function updateStatusFromData(S) {
     const uptimeVal = parseInt(get('daemon_uptime')) || 0;
     const statusEl = getEl('daemonStatus');
     const startBtn = getEl('btn-start');
-    // P0: 三态文案——区分"HTTP 连不上"/"被动降级"/"在线正常"。
-    // token 401/403 在 readAllState fetch 处单独提示（见下）。
+
     const passiveNow = get('passive_mode') === '1' || get('passive_mode') === 'true';
     const loopNow = parseInt(get('crash_loop_detected')) || 0;
     if (pid > 0 || uptimeVal > 0) {
@@ -4702,7 +4333,7 @@ async function updateStatusFromData(S) {
         }
         if (startBtn) { startBtn.style.display = 'none'; startBtn.disabled = false; }
     } else if (g_httpPort > 0) {
-        // HTTP 已连但拿不到 pid/uptime = token/数据未就绪，非完全离线。
+
         setText('daemonStatus', '守护 HTTP 已连·数据加载中');
         if (statusEl) statusEl.className = 'status-pill info';
     } else {
@@ -4743,13 +4374,10 @@ async function updateStatusFromData(S) {
     }
     setText('cur-migrations', (get('migration_count') !== '' && get('migration_count') != null) ? get('migration_count') : '--');
     setText('cur-decisions', (get('decision_count') !== '' && get('decision_count') != null) ? get('decision_count') : '--');
-    // #99: HTTP channel state on the control page. MUST match the top status bar
-    // (renderLinkStatus) because both derive from the same g_httpState/g_httpPort
-    // which are reconciled from system.json's http_state/http_port by
-    // ingestHttpChannelState(). No independent port probe here.
+
     renderCurHttpState();
     setText('mon-temp', (get('thermal_cpu_max') || '--') + '°C');
-    // ROUND-009a: show thermal source zone if backend provides it.
+
     try {
         const ts = await readFile(STATE_DIR + '/thermal_source');
         if (ts && ts.trim()) {
@@ -4762,8 +4390,7 @@ async function updateStatusFromData(S) {
     const displayLoadVal = (cpuUsageVal !== '' && cpuUsageVal != null) ? cpuUsageVal :
                             ((systemLoadVal !== '' && systemLoadVal != null) ? systemLoadVal : 0);
     setText('mon-load', displayLoadVal + '%');
-    // v4.1.2: gate SF latency on sf_latency_valid; a non-measured theoretical
-    // fallback (e.g. 3000us when timestats is disabled) must show '--'.
+
     {
         const sLat = get('sf_latency_avg');
         const sValid = get('sf_latency_valid');
@@ -4771,7 +4398,7 @@ async function updateStatusFromData(S) {
         setText('mon-sf', sOk ? (sLat + 'us') : '--');
     }
     setText('mon-layers', (get('layer_count') && get('layer_count') !== '' ? get('layer_count') : '--'));
-    // System state from state.json (still read async, but only when SSE pushes)
+
     try {
         const stateJson = await readFile(STATE_DIR + '/state.json');
         if (stateJson) {
@@ -4800,7 +4427,7 @@ async function updateStatusFromData(S) {
                         reasonEl.style.display = 'none';
                     }
                 }
-                // Watchdog passive lock status display (SSE path)
+
                 const wdLockElSse = getEl('watchdog-lock-status');
                 if (wdLockElSse) {
                     const wdLockedSse = (ss.watchdog_passive_locked === true || ss.watchdog_passive_locked === 'true');
@@ -4817,7 +4444,6 @@ async function updateStatusFromData(S) {
     } catch(e) {}
 }
 
-// Refresh system tab fields from pre-fetched SSE data (no HTTP fetch).
 async function refreshSystemFromData(aggData) {
     if (!aggData || typeof aggData !== 'object') return;
     const S = STATE_DIR + '/';
@@ -4863,9 +4489,7 @@ async function refreshSystemFromData(aggData) {
         ['int','vsync_enabled'], ['int','vsync_refresh_rate'], ['int','vsync_frame_interval'],
         ['int','vsync_decisions'], ['int','vsync_migrations'], ['int','vsync_overruns'],
         ['float','prediction_mae'], ['float','prediction_confidence'], ['int','prediction_proactive_migrations'],
-        // S1: gate SF frame latency on sf_latency_valid, mirroring the monitoring
-        // page (mon-sf). A theoretical fallback (timestats disabled) must render
-        // "--" instead of a misleading "0 μs = perfect".
+
         ['str','sf_latency_valid']
     ];
     const allInAgg = fieldDefs.every(([_, name]) => aggData[name] !== undefined);
@@ -4899,9 +4523,7 @@ async function refreshSystemFromData(aggData) {
         sfLatValid
     ] = allResults;
     setText('sys-fps', (fps || 0) + ' Hz');
-    // S1: only show SF frame latency when it was actually measured (sf_latency_valid
-    // === '1'). A missing/invalid reading (timestats disabled -> theoretical 0) must
-    // render "--" instead of "0 μs", which previously looked like a perfect score.
+
     setText('sys-frame-latency', (sfLatValid === '1' && (frameLatency != null) && !isNaN(frameLatency)) ? (frameLatency + ' μs') : '--');
     setText('sys-target-frame', (targetFrame || 0) + ' μs');
     setText('sys-temp-cpu', (tempCpu != null && !isNaN(tempCpu)) ? tempCpu.toFixed(0) + '°C' : '--');
@@ -4951,12 +4573,10 @@ async function refreshSystemFromData(aggData) {
     setText('sys-pred-proactive', (predProactive !== null && predProactive !== undefined && predProactive !== '') ? predProactive : '0');
 }
 
-// Tab-aware adaptive refresh intervals using recursive setTimeout.
-// Replaces fixed 5s setInterval that over-refreshed light tabs and under-served heavy tabs.
 const REFRESH_INTERVALS = {
-    'tab-control': 1000,   // 首页 1s (SSE handles core status)
-    'tab-system':  1000,   // 系统状态 1s (SSE pushes at 500ms)
-    'tab-log':     0,      // 日志页不自动刷新
+    'tab-control': 1000,
+    'tab-system':  1000,
+    'tab-log':     0,
     'tab-threads': 2000,
     'tab-decisions': 2000,
     'tab-explain': 5000,
@@ -4971,38 +4591,28 @@ function getRefreshInterval() {
 
 function startRefresh() {
     if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
-    let _firstTick = true;   // rel12-perf: first tick runs immediately (0ms)
+    let _firstTick = true;
     function tick() {
         const interval = getRefreshInterval();
         if (interval <= 0) {
-            // Tab with no auto-refresh (e.g. log): check again in 3s
+
             refreshTimer = setTimeout(tick, 3000);
             return;
         }
-        // When hidden, skip ALL fetches and re-check on a slow 5s
-        // backoff instead of the fast tab interval (3-8s). The visibilitychange
-        // handler above wakes up immediately when the tab is shown again.
+
         if (!g_pageVisible) { refreshTimer = setTimeout(tick, 5000); return; }
         if (g_refreshLock) { refreshTimer = setTimeout(tick, 500); return; }
         g_refreshLock = true;
         g_lockSetAt = Date.now();
         PERF.tickCount++;
         const _tickT0 = perfNow();
-        const mySeq = ++g_tickSeq;   // [P1-3] 本代际
-        // W1-#3: keep the thermal toggle truthful on every poll cadence,
-        // independent of SSE (SSE push also refreshes it, but if SSE is down the
-        // button must not stay on the static "--" placeholder). Fire-and-forget;
-        // refreshThermalButton is cheap and self try/catch-guarded.
+        const mySeq = ++g_tickSeq;
+
         refreshThermalButton();
-        // P2-3: external-scheduler banner refreshes on the GLOBAL tick (not just
-        // tab-control) so users on the monitor/system tab still see it within ~5s.
-        // refreshExternalScheduler() self-throttles to 5s and is idempotent.
+
         refreshExternalScheduler();
         const activeTab = document.querySelector('.tab-content.active') ? document.querySelector('.tab-content.active').id : '';
-        // When SSE is active, skip the core status fetch (SSE already
-        // pushes /state/all every 500ms). Only do tab-specific data refreshes.
-        // [v4.3.1h] core/tab 两路都加超时兜底：任一路 fetch/exec 挂死都在 8s 后放行，
-        // 绝不把 g_refreshLock 永久占住（否则整页首帧后停刷）。
+
         const corePromise = g_sseActive ? Promise.resolve() : withWatchdog(updateStatus(), 8000);
         withWatchdog(corePromise, 8000).finally(() => {
             let tabPromise = Promise.resolve();
@@ -5013,15 +4623,10 @@ function startRefresh() {
             else if (activeTab === 'tab-explain') tabPromise = refreshExplain();
             else if (activeTab === 'tab-model') tabPromise = Promise.all([refreshModel(), refreshHybrid()]);
             else if (activeTab === 'tab-system' && !g_sseActive) tabPromise = refreshSystem();
-            // rel12-fix: tab-control had a 1s refresh interval but NO tabPromise branch,
-            // so on the 控制 page the C4 panel (c4-state/target/frozen/cgdir/action/audio/
-            // freezer/degraded) was never refreshed — it stayed at the static HTML "--"
-            // placeholders. refreshC4() reads webui/c4.json via the same readFile()
-            // three-tier fallback (HTTP→exec→file), so it works in SukiSU exec mode too.
+
             else if (activeTab === 'tab-control') tabPromise = refreshC4();
             withWatchdog(tabPromise, 8000).finally(() => {
-                // [P1-3] 若本拍已被 refreshLockWatchdog 强放并起了新链（代际自增），
-                // 旧链不得再放锁、不得覆盖 refreshTimer（否则双链并发/调度踩踏）。
+
                 if (mySeq !== g_tickSeq) return;
                 g_refreshLock = false;
                 g_lockSetAt = 0;
@@ -5030,39 +4635,29 @@ function startRefresh() {
             });
         });
     }
-    // rel12-perf: first tick runs immediately (0ms), not after interval.
-    // Previously startRefresh() ended with setTimeout(tick, getRefreshInterval())
-    // = 1000ms on control page, so the first user-visible data arrived ≥1s late
-    // on top of the already-blocked detectHttpPort().
+
     refreshTimer = setTimeout(tick, 0);
 }
 
-// P0: 常驻 HTTP 可达性——每 10s 重探一次 /health；端口未知时自动重扫
-// 8888-8899 并重读 http_port。从"连不上"到"连上"自动切换，无需手动刷新。
-// 不重置 detectHttpPort 退避（自带 10s 冷却 + 30 次上限），避免每 10s 盲扫
-// 12 端口造成新的 TIME_WAIT 风暴。
 setInterval(function probeHttp() {
-    if (!g_pageVisible) return;  // hidden: skip, don't probe while backgrounded
+    if (!g_pageVisible) return;
     (async function() {
         try {
             if (g_httpPort > 0) {
                 const r = await fetch('http://127.0.0.1:' + g_httpPort + '/health',
                     { signal: aatpeTimeoutSignal(1000) });
-                if (r.ok) return;  // still up
+                if (r.ok) return;
             }
             const p = await detectHttpPort();
             if (p > 0 && p !== g_httpPort) { g_httpPort = p; if (typeof updateStatus === 'function') updateStatus(); }
-        } catch(e) { /* still down; next tick retries with backoff */ }
+        } catch(e) {   }
     })();
 }, 10000);
 
-// [v4.3.1h 临时热修] 刷新锁看门狗：正常一拍最多数秒；若锁被占超过 15s（说明上面
-// 的超时兜底之外仍有异常路径卡住），强制释放。锁释放后，卡住期间一直在 500ms 自
-// 重排的 tick 下一拍即会跑真实刷新，调度器自愈，页面不会永久停在首帧。
 setInterval(function refreshLockWatchdog() {
     try {
         if (g_refreshLock && g_lockSetAt && (Date.now() - g_lockSetAt > 15000)) {
-            g_tickSeq++;   // [P1-3] 作废在跑的旧链，使其 finally 不再放锁/覆盖调度
+            g_tickSeq++;
             g_refreshLock = false;
             g_lockSetAt = 0;
         }
@@ -5070,24 +4665,14 @@ setInterval(function refreshLockWatchdog() {
 }, 4000);
 
 console.log('[AATPE] WebUI initialized, apiAvailable=' + apiAvailable + ', source=' + apiSource);
-// Detect daemon's HTTP server before first state read
-// Only call startRefresh once (avoids double setInterval and UI lag)
-// Start SSE push connection after HTTP port is known
-// Start SSE push connection after HTTP port is known
-// ===== v4.2.1 游戏管理（手动帧采样名单） =====
-let _gmApps = [];        // [{pkg,label}]
-let _gmManual = new Set();
-let _pkgLabelMap = {};   // pkg -> 中文 label（来自 /api/apps；空则回退 pkg）
 
-// ===================== W1-#2: 单应用帧数据视图 (GET /api/frame_apps) =====================
-// 契约（W2 后端冻结）:
-//   GET /api/frame_apps -> {"current":"<pkg>",
-//     "apps":[{"pkg","fps","ft_avg_ms","ft_p50","ft_p95","ft_p99","jank",
-//              "dropped","samples","active_ms","last_update_ms"}, ...]}
-// 前端先落地：后端未到 / 字段缺失时一律显示优雅空态与 '--'，绝不报错、不冒充 0。
+let _gmApps = [];
+let _gmManual = new Set();
+let _pkgLabelMap = {};
+
 let _frameApps = { current: '', apps: [] };
-let _frameAppsSel = null;          // 用户点选的包名
-let _frameAppsLoaded = false;      // 是否已拿到过一次成功响应
+let _frameAppsSel = null;
+let _frameAppsLoaded = false;
 function faNum(v, digits, suffix) {
     if (v === null || v === undefined || v === '') return '--';
     const n = Number(v);
@@ -5101,7 +4686,7 @@ function faInt(v) {
     return String(Math.round(n));
 }
 function faActive(v) {
-    // active_ms -> 人类可读
+
     if (v === null || v === undefined || v === '') return '--';
     const ms = Number(v);
     if (!isFinite(ms) || ms < 0) return '--';
@@ -5112,7 +4697,7 @@ function faActive(v) {
     return m + 'm' + Math.round(s % 60) + 's';
 }
 function faAge(v) {
-    // last_update_ms (epoch ms) -> "x秒前"
+
     if (v === null || v === undefined || v === '') return '--';
     const ms = Number(v);
     if (!isFinite(ms) || ms <= 0) return '--';
@@ -5123,17 +4708,15 @@ function faAge(v) {
     if (dt < 3600000) return Math.floor(dt / 60000) + '分前';
     return Math.floor(dt / 3600000) + '时前';
 }
-// 显示名：优先 /api/apps 给出的中文 label，读不到则回退 pkg（前端不自带映射表）。
+
 function faLabel(pkg) {
     if (!pkg) return '(未知)';
     const l = (_pkgLabelMap && _pkgLabelMap[pkg]) || '';
     return (l && String(l).trim()) ? String(l) : String(pkg);
 }
-// frame_unavailable_reason 枚举 -> 可读中文。
+
 function faReasonText(reason) {
-    // G-005 fix: undefined/null/'' must map to empty string, NOT fall through to
-    // `default: return String(reason)` which produced the literal "undefined" and
-    // rendered as "⏳ undefined" for manual-list pending rows that carry no reason.
+
     if (!reason) return '';
     switch (reason) {
         case 'no_fg':            return '无前台应用';
@@ -5151,10 +4734,7 @@ function faReasonText(reason) {
         default:                 return String(reason);
     }
 }
-// v4.3.0 Problem-2: 由前台包名 / 帧源 / 后端 reason 聚合出一个明确、有界的空态原因。
-// 旧泛化文案"等待守护进程首次采集…"无法区分以下三种真机常见空态，用户只能干等转圈：
-//   前台未识别 / 帧源全灭 / 应用未在前台渲染。后端给出的具体 reason 优先级最高；
-// 否则按"无前台包 -> 帧源全灭 -> 应用未在前台渲染"兜底。
+
 function faEmptyReason(cur, src, reason) {
     if (reason && reason !== 'none') {
         const t = faReasonText(reason);
@@ -5164,7 +4744,7 @@ function faEmptyReason(cur, src, reason) {
     if (!src || src === 'none') return '帧源全灭（SurfaceFlinger/GFXInfo 均无数据）';
     return '应用未在前台渲染（未找到对应 SurfaceFlinger 层）';
 }
-// frame_source 枚举 -> 可读中文。
+
 function faSourceText(src) {
     switch (src) {
         case 'gfxinfo':         return 'GFXInfo';
@@ -5176,26 +4756,16 @@ function faSourceText(src) {
         default:                return src ? String(src) : '无';
     }
 }
-// rel12 Bug5: when the foreground is explicitly NOT a game (frame_source=non_game)
-// but auto-profile still carries "gaming" (a leftover tier from the previous game
-// that has not yet dropped back), do NOT present gaming as the live config -- mark
-// it honestly. A user-locked gaming tier is left untouched (that is the user's
-// explicit choice).
+
 function rel12ProfileLabel(profile, frameSrc, locked, gameScene) {
-    // #103: game_scene=unknown is the backend's authoritative "foreground is not
-    // a game" signal (e.g. MT manager bin.mt.plus). Don't present a stale gaming
-    // tier as combat. frameSrc==='non_game' kept for older daemons.
+
     const nonGame = (gameScene === 'unknown') || (frameSrc === 'non_game');
     if (profile === 'gaming' && !locked && nonGame) {
         return 'gaming（前台非游戏·待回落）';
     }
     return profile || '--';
 }
-// VM 归因状态读取：vm_container_pkg / vm_inner_game 是后端写入 STATE_DIR、随
-// /state/all（或 ui-snapshot 兜底）聚合的状态键，缓存在模块级 stateCache.data。
-// G-004 fix: 旧实现里 typeof get === 'function' 引用的 get() 是 updateStatus()/
-// updateStatusFromData() 内的块级局部箭头函数，模块作用域恒为 undefined，于是
-// faVmState() 永远返回 ''，[VM·容器] 徽标成为死代码。改为读模块级 stateCache.data。
+
 function faVmState(key) {
     try {
         const S = stateCache && stateCache.data;
@@ -5203,7 +4773,7 @@ function faVmState(key) {
     } catch (e) {}
     return '';
 }
-// 懒加载 label 映射：面板先渲染时若还没有 /api/apps 数据，拉一次用于 join。
+
 let _labelsWarming = null;
 function ensureLabels() {
     if (Object.keys(_pkgLabelMap).length > 0) return;
@@ -5217,19 +4787,15 @@ function ensureLabels() {
         renderFrameApps();
     }).catch(() => { _labelsWarming = null; });
 }
-// [v4.3.1h 临时热修] 帧面板刷新整体 6s 超时兜底：HTTP / root 桥任一路永不返回时也
-// 必须 settle，避免监控页 Promise.all 挂死进而占住全局刷新锁。超时本拍保留上次数据。
+
 async function refreshFrameApps() {
     let timer = null;
     const timeout = new Promise(function (res) { timer = setTimeout(res, 6000); });
     try {
         await Promise.race([_refreshFrameAppsImpl(), timeout]);
-    } catch (e) { /* never let the frame panel break the scheduler */ }
+    } catch (e) {   }
     finally { if (timer) clearTimeout(timer); }
-    // v4.3.0 Problem-2: 有界超时兜底。若 _refreshFrameAppsImpl() 卡在 root exec 桥
-    // （getDaemonToken / readStateFileExec 永不 resolve），它就走不到结尾的
-    // renderFrameApps()，面板会永久停在静态"加载中..."。6s 竞速结束后，只要还没拿到
-    // 一次成功响应，就强制渲染一次确定的空态，绝不永久转圈。
+
     if (!_frameAppsLoaded) renderFrameApps();
 }
 async function _refreshFrameAppsImpl() {
@@ -5237,7 +4803,7 @@ async function _refreshFrameAppsImpl() {
     const curEl = document.getElementById('frame-apps-current');
     if (!body) return;
     if (!g_httpPort) {
-        // HTTP 通道未建立 —— 但 root 桥可读 STATE_DIR/frame_apps.json。
+
         try {
             const raw = await readStateFileExec('frame_apps.json');
             if (raw && raw.trim().startsWith('{')) {
@@ -5245,7 +4811,7 @@ async function _refreshFrameAppsImpl() {
                 if (Array.isArray(p.apps)) { _frameApps = { current: p.current||'', apps: p.apps }; _frameAppsLoaded = true; renderFrameApps(); return; }
             }
         } catch(e) {}
-        // 仍拿不到 —— 安静空态。
+
         if (!_frameAppsLoaded) {
             body.innerHTML = '<div class="empty-state">等待守护进程 HTTP 通道…</div>';
             if (curEl) curEl.textContent = '';
@@ -5265,13 +4831,12 @@ async function _refreshFrameAppsImpl() {
         const resp = await fetch('http://127.0.0.1:' + g_httpPort + '/api/frame_apps',
                                  { headers, signal: aatpeTimeoutSignal(2500) });
         if (resp.ok) j = await resp.json();
-        else if (resp.status === 404) j = null;   // W2 后端尚未挂载 -> 优雅空态
+        else if (resp.status === 404) j = null;
         else j = null;
     } catch(e) {
-        j = null;   // 网络/超时
+        j = null;
     }
-    // SukiSU WebView cannot reach 127.0.0.1 HTTP: fall back to the on-disk JSON
-    // the daemon atomically publishes to STATE_DIR/frame_apps.json (root bridge).
+
     if (!j) { try { j = await viaExecFile(); viaExec = !!j; } catch(e) {} }
     if (j && Array.isArray(j.apps)) {
         _frameApps = { current: j.current || '', apps: j.apps,
@@ -5288,7 +4853,7 @@ function renderFrameApps() {
     const cur = _frameApps.current || '';
     const reason = _frameApps.reason || '';
     const src = _frameApps.source || '';
-    // 当前应用区：label + 原始 pkg 同显，便于用户一眼核对归因是否正确。
+
     if (curEl) {
         if (!cur) {
             curEl.innerHTML = '当前前台：<span style="color:#888">未检测到前台应用</span>';
@@ -5298,8 +4863,7 @@ function renderFrameApps() {
                 (src ? ' <span style="color:#666;font-size:10px">[' + escapeHtml(faSourceText(src)) + ']</span>' : '');
         }
     }
-    // 渲染集合 = 后端 apps[] ∪ 手动名单：从未运行/后台的手动包也必须出现，并给出
-    // “为什么暂时没数据”的真实原因，而不是整行消失或泛化空态文案。
+
     const seen = {};
     const rows = [];
     for (const a of (_frameApps.apps || [])) {
@@ -5309,16 +4873,12 @@ function renderFrameApps() {
     for (const pkg of _gmManual) {
         if (!seen[pkg]) {
             seen[pkg] = true;
-            // G-005 fix: manual-list rows the daemon has never sampled carry an
-            // explicit reason so renderFrameApps shows a Chinese "等待首次采样"
-            // instead of an undefined reason (which used to render "⏳ undefined").
+
             rows.push({ pkg: pkg, _pending: true, reason: 'waiting_first_sample' });
         }
     }
     if (!_frameAppsLoaded || rows.length === 0) {
-        // v4.3.0 Problem-2: 空态必须有界、可读，绝不永久转圈。
-        //  - 从未拿到成功响应（exec 桥挂起 / HTTP 未建立）：明确"尚未收到帧数据"。
-        //  - 已加载但 apps 为空：用 faEmptyReason 给出前台未识别/帧源全灭/未渲染。
+
         const r = !_frameAppsLoaded
             ? '尚未收到守护进程帧数据（等待首次采样，已停止加载动画）'
             : faEmptyReason(cur, src, reason);
@@ -5328,14 +4888,7 @@ function renderFrameApps() {
             '</span></div>';
         return;
     }
-    // P0 perf: keyed incremental render. Rows are <div data-pkg>. Only rebuild a
-    // row's innerHTML when its content signature changed; append new rows; drop
-    // rows for apps no longer present. No full innerHTML rebuild per tick.
-    // rel12 Bug3: wipe the static "加载中..." placeholder (and any other transient
-    // non-[data-pkg] node) now that real rows are being rendered. The incremental
-    // renderer only manages [data-pkg] rows, so the static placeholder used to stay
-    // pinned ABOVE the data rows forever (screenshot: a grey "加载中..." block sitting
-    // between "当前前台" and the populated [前台] card even after data arrived).
+
     {
         const kids = body.children;
         for (let i = kids.length - 1; i >= 0; i--) {
@@ -5346,7 +4899,7 @@ function renderFrameApps() {
     }
     for (const a of rows) {
         const pkg = a.pkg || '(unknown)';
-        // 逐应用 current:true 为前台权威标记（后端 07b 输出）；回退外层 current 包名匹配。
+
         const isCur = (a.current === true) || (pkg === cur && cur !== '');
         const isSel = (pkg === _frameAppsSel);
         const bg = isCur ? 'background:#14301f;' : (isSel ? 'background:#1f1f2e;' : '');
@@ -5358,10 +4911,7 @@ function renderFrameApps() {
         const jankPct = (tf > 0) ? (100.0 * jp / tf) : null;
         const rowSrc = a.frame_source || src;
         const rowReason = a.reason || reason;
-        // v4.4.1 P0 (RC-2b): prefer the EPOCH age key. last_seen_epoch_ms is now the
-        // epoch of the LAST FRAME (backend converts monotonic->epoch). The legacy
-        // last_seen_ms/last_update_ms are monotonic (boot-relative) — feeding them to
-        // Date.now() produced "497725 hours ago". Sentinel -1 = never seen -> no age.
+
         let seenMs = Number(a.last_seen_epoch_ms);
         if (!isFinite(seenMs) || seenMs <= 0) seenMs = 0;
         const vmPkg = faVmState('vm_container_pkg') || '';
@@ -5392,7 +4942,7 @@ function renderFrameApps() {
                     (seenMs > 0 ? ' · 最近见到 ' + faAge(seenMs) : '') +
                 '</div>';
         } else if (rowReason === 'background') {
-            // 后台保活：已知包但当前无新鲜帧，给出具体原因与最后见到时间。
+
             inner =
                 '<div style="font-size:12px;margin-bottom:2px">' + nameHtml + '</div>' +
                 '<div style="font-size:11px;color:#9a9a9a">' +
@@ -5400,7 +4950,7 @@ function renderFrameApps() {
                     (seenMs > 0 ? ' ' + faAge(seenMs) : '（无历史采样）') +
                 '</div>';
         } else {
-            // 从未运行/等待首帧/无层/无权限：显示真实原因，替换泛化空态。
+
             const r = faReasonText(rowReason);
             inner =
                 '<div style="font-size:12px;margin-bottom:2px">' + nameHtml + '</div>' +
@@ -5413,9 +4963,7 @@ function renderFrameApps() {
         if (!row) {
             row = document.createElement('div');
             row.setAttribute('data-pkg', pkg);
-            // A7 ISSUE-009: bind via addEventListener closure instead of interpolating
-            // pkg into an inline onclick attribute (avoids XSS breakout from a hostile
-            // package name). pkg is captured directly by the closure — no string parse.
+
             row.addEventListener('click', () => faSelect(pkg));
             row.style.cursor = 'pointer';
             row.style.padding = '6px 4px';
@@ -5425,7 +4973,7 @@ function renderFrameApps() {
         row.style.background = isCur ? '#14301f' : (isSel ? '#1f1f2e;' : '');
         if (row._sig !== sig) { row.innerHTML = inner; row._sig = sig; }
     }
-    // drop rows for apps gone
+
     const present = {};
     for (const a of rows) present[a.pkg || '(unknown)'] = true;
     const stale = body.querySelectorAll('[data-pkg]');
@@ -5464,9 +5012,7 @@ function faRenderDetail(pkg) {
 }
 async function gmFetchApps() {
     const headers = {};
-    // v4.2.5: SukiSU Ultra WebView cannot reach http://127.0.0.1 even though root
-    // shell can. Try HTTP first; on noport/network/401/timeout, fall back to the
-    // root exec bridge running `aatpe-cli apps` (identical JSON, same source).
+
     async function viaExec() {
         if (!execFn) { const e=new Error('无 root 桥（KSU API 未注入）'); e.kind='noapi'; throw e; }
         const r = await smartExec('MD=""; for p in /data/adb/modules/aatpe /data/adb/ksu/modules/aatpe /data/adb/ap/modules/aatpe /data/adb/modules_update/aatpe; do [ -x "$p/system/bin/aatpe-cli" ] && MD="$p" && break; done; "$MD/system/bin/aatpe-cli" apps 2>/dev/null');
@@ -5485,7 +5031,7 @@ async function gmFetchApps() {
         resp = await fetch('http://127.0.0.1:' + g_httpPort + '/api/apps',
                                  { headers, signal: aatpeTimeoutSignal(5000) });
     } catch (e) {
-        // HTTP unreachable -> try root bridge before failing hard.
+
         try { return await viaExec(); } catch(_) {}
         const err = new Error(aatpeClassifyFetchError(e, '读取应用列表'));
         err.kind = (e && (e.name === 'AbortError')) ? 'timeout' : 'network';
@@ -5521,8 +5067,7 @@ function gmRenderManual() {
     if (_gmManual.size === 0) { box.innerHTML = '<span style="color:#888">(空 — 使用自动识别)</span>'; return; }
     let html = '';
     for (const pkg of _gmManual) {
-        // A7 ISSUE-008: store pkg in an HTML-escaped data attribute and bind via
-        // addEventListener, NOT an interpolated inline onclick (XSS-safe).
+
         html += '<div style="margin:2px 0">' + escapeHtml(pkg) +
                 ' <button class="gm-rm-btn" data-pkg="' + escapeHtml(pkg) + '" style="font-size:11px;padding:1px 6px;cursor:pointer;color:#ff8a8a">移除</button></div>';
     }
@@ -5541,8 +5086,7 @@ function gmRenderApps() {
         if (ql && a.pkg.toLowerCase().indexOf(ql) < 0) continue;
         shown++;
         const checked = _gmManual.has(a.pkg) ? 'checked' : '';
-        // A7 ISSUE-010: pkg in an escaped data attribute + addEventListener, NOT an
-        // interpolated inline onchange (XSS-safe).
+
         html += '<label style="display:block;font-size:12px;padding:2px;cursor:pointer">' +
                 '<input type="checkbox" class="gm-toggle-cb" ' + checked + ' data-pkg="' + escapeHtml(a.pkg) + '"> ' +
                 escapeHtml(a.pkg) + '</label>';
@@ -5599,23 +5143,16 @@ function gmInit() {
 window.gmToggle = gmToggle;
 window.gmRemove = gmRemove;
 window.gmInit = gmInit;
-// rel12-perf: do NOT block first paint on detectHttpPort(). The exec bridge
-// (window.ksu.exec → aatpe-cli ui-snapshot) works regardless of HTTP; waiting
-// for the port probe to finish delayed first data by ~2s on SukiSU (file://
-// origin, cleartext-blocked). Kick off data refresh immediately, and let the
-// HTTP probe run in the background. SSE only starts once/if HTTP comes up.
+
 (async function initBoot() {
   try {
-    // 1) First paint via exec immediately. This call goes straight to the
-    //    root-bridge snapshot; detectHttpPort() inside readAllState() runs in
-    //    parallel but its result doesn't block the exec path.
-    startRefresh();           // first tick = setTimeout(0), runs below
-    // 2) Background HTTP probe. On SukiSU it will quickly conclude webview_blocked
-    //    and stop scanning; on devices with working HTTP it will pick up the port.
+
+    startRefresh();
+
     detectHttpPort().then((p) => {
       if (p > 0) { try { startSse(); } catch(e) {} }
     }).catch(() => {});
-    // 3) One-shot init tasks that don't depend on HTTP.
+
     updateLog().catch(() => {});
     refreshHybrid().catch(() => {});
     gmInit();
@@ -5625,9 +5162,6 @@ window.gmInit = gmInit;
   }
 })();
 
-// Expose ALL functions to global scope for inline onclick handlers.
-// <script type="module"> does NOT expose top-level declarations to window,
-// which caused ALL onclick buttons to fail with "ReferenceError: xxx is not defined".
 window.switchTab = switchTab;
 window.startDaemon = startDaemon;
 window.sendCommand = sendCommand;
@@ -5641,7 +5175,7 @@ window.toggleAutoScroll = toggleAutoScroll;
 window.toggleBatteryAging = toggleBatteryAging;
 window.renderThreads = renderThreads;
 window.showThreadExplain = showThreadExplain;
-// ============== rel12-perf: report builder + panel controls ==============
+
 function buildPerfReport() {
   const sortedSamples = PERF.exec.samples.slice().sort((a,b)=>a-b);
   const p50 = percentile(sortedSamples, 50);
@@ -5703,7 +5237,7 @@ async function copyPerfReport() {
     await navigator.clipboard.writeText(text);
     showToast('✓ 性能报告已复制');
   } catch(e) {
-    // Fallback: select textarea
+
     const ta = document.createElement('textarea');
     ta.value = text; document.body.appendChild(ta); ta.select();
     try { document.execCommand('copy'); showToast('✓ 性能报告已复制'); } catch(_) { showToast('✗ 复制失败，请手动从面板复制', true); }
@@ -5711,10 +5245,7 @@ async function copyPerfReport() {
   }
   refreshPerfPanel();
 }
-// ============== rel12-perf: button immediate feedback helper ==============
-// Wrap toggle/send buttons so the user sees a loading state immediately,
-// before the (slow) root exec round-trip returns. Prevents "I clicked and
-// nothing happened" perception on exec-lag.
+
 function btnSetLoading(btn, loadingText) {
   if (!btn) return;
   btn._orig = btn._orig || { text: btn.textContent, disabled: btn.disabled };

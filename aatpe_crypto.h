@@ -1,6 +1,3 @@
-// AATPE Crypto Utilities - Shared SHA256 and HMAC-SHA256 implementation
-// Extracted from aatped.cpp and aatpe_federated.cpp to eliminate code duplication.
-// This header provides inline implementations for use across all AATPE modules.
 #ifndef AATPE_CRYPTO_H
 #define AATPE_CRYPTO_H
 
@@ -12,9 +9,6 @@
 
 namespace aatpe_crypto {
 
-// ============================================================================
-// SHA-256 Implementation (64 rounds, FIPS 180-4 compliant)
-// ============================================================================
 struct Sha256Context {
     uint32_t state[8];
     uint64_t bitCount;
@@ -33,9 +27,6 @@ static const uint32_t K[64] = {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
 
-// R8-020 / LED-127: guard n == 0. `x << (32 - n)` with n == 0 is a 32-bit shift
-// of a uint32_t, which is undefined behaviour. All real call sites use n != 0,
-// but the guard removes the landmine for future reuse.
 inline uint32_t rotr(uint32_t x, int n) {
     if (n == 0) return x;
     return (x >> n) | (x << (32 - n));
@@ -116,9 +107,6 @@ inline void sha256(const uint8_t* data, size_t len, uint8_t out[32]) {
     sha256Final(&ctx, out);
 }
 
-// ============================================================================
-// HMAC-SHA256 Implementation (RFC 2104 compliant)
-// ============================================================================
 inline void hmacSha256(const uint8_t* key, size_t keyLen,
                         const uint8_t* data, size_t dataLen,
                         uint8_t out[32]) {
@@ -143,8 +131,6 @@ inline void hmacSha256(const uint8_t* key, size_t keyLen,
     sha256Update(&ctx, opad, 64);
     sha256Update(&ctx, inner, 32);
     sha256Final(&ctx, out);
-    // Scrub key-derived material from the stack so the secret does not linger
-    // in the stack frame after return. Volatile writes are not optimized away.
     volatile uint8_t* vk = k;
     volatile uint8_t* vipad = ipad;
     volatile uint8_t* vopad = opad;
@@ -153,7 +139,6 @@ inline void hmacSha256(const uint8_t* key, size_t keyLen,
     for (int i = 0; i < 32; i++) vinner[i] = 0;
 }
 
-// Convert 32-byte hash to 64-char hex string
 inline std::string toHex(const uint8_t* hash, size_t len = 32) {
     static const char* hex = "0123456789abcdef";
     std::string result;
@@ -165,24 +150,10 @@ inline std::string toHex(const uint8_t* hash, size_t len = 32) {
     return result;
 }
 
-// Constant-time hex string comparison (prevents timing attacks).
-// Does NOT early-return on length mismatch; instead folds the length difference
-// into the diff accumulator so the work done is independent of where (or
-// whether) the two strings differ.
-//
-// v4.4.9 R3-F05: the old loop ran min(a.size(), b.size()) iterations, so its
-// wall time still leaked the length of the SHORTER string (a one-bit length
-// oracle). We now always iterate over a FIXED width — a SHA256 hex digest is
-// 64 chars, the only domain this helper is used for — padding short strings
-// with a fixed 0 byte. Length mismatch is folded into `diff` up front and still
-// gates the final result, so the loop bound no longer depends on input length.
 inline bool constantTimeHexEqual(const std::string& a, const std::string& b) {
-    constexpr size_t kHexWidth = 64;  // 32-byte SHA256 -> 64 lowercase hex chars
-    // Fold length mismatch into diff FIRST; stays non-zero for any size diff.
+    constexpr size_t kHexWidth = 64;
     uint8_t diff = (uint8_t)((a.size() ^ b.size()) != 0);
     for (size_t i = 0; i < kHexWidth; i++) {
-        // Select (not branch on match) the byte; out-of-range indices map to a
-        // fixed 0 so the iteration count is constant regardless of input length.
         uint8_t ca = (i < a.size()) ? static_cast<uint8_t>(a[i]) : static_cast<uint8_t>(0);
         uint8_t cb = (i < b.size()) ? static_cast<uint8_t>(b[i]) : static_cast<uint8_t>(0);
         diff = static_cast<uint8_t>(diff ^ (ca ^ cb));
@@ -190,6 +161,6 @@ inline bool constantTimeHexEqual(const std::string& a, const std::string& b) {
     return diff == 0;
 }
 
-} // namespace aatpe_crypto
+}
 
-#endif // AATPE_CRYPTO_H
+#endif

@@ -1,4 +1,4 @@
-/* Tiny dependency-free test harness. */
+
 #ifndef MECH_TEST_HARNESS_H
 #define MECH_TEST_HARNESS_H
 

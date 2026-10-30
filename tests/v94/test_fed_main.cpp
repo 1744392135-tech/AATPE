@@ -1,6 +1,3 @@
-// test_fed_main.cpp - v94 hermetic unit tests for aatpe_federated_main.cpp
-// Links all 4 federated TUs + log_stub. Focus: FederatedLearner ctor, init()
-// creating exchange/import dirs, setLocalModel.
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -46,7 +43,6 @@ int main() {
     CHECK(s.rounds == 0, "fresh learner: 0 rounds");
     CHECK(s.imports == 0 && s.exports == 0, "fresh learner: 0 imports/exports");
 
-    // ---- G7-001: opt-in gate. Default disabled => zero weight snapshot on disk. ----
     printf("=== FedMain G7-001: disabled by default -> zero export, zero aggregation ===\n");
     {
         const char* gdir = "/tmp/aatpe_fed_gate";
@@ -54,28 +50,22 @@ int main() {
         FederatedLearner g;
         g.init(gdir);
         CHECK(g.isEnabled() == false, "learner starts DISABLED (opt-in)");
-        // ML-06: init must not have created the dir yet.
         CHECK(stat(gdir, &st) != 0, "disabled init: exchange dir NOT created on disk");
         g.setLocalModel({0.1f, 0.2f}, 0.5f, 5000);
-        g.exportLocalModel();                 // must be a no-op
+        g.exportLocalModel();
         g.runAggregation();
         CHECK(stat((std::string(gdir)+"/local_model.bin").c_str(), &st) != 0,
               "DISABLED: no local_model.bin written to disk");
         CHECK(g.getStats().exports == 0, "DISABLED: export counter stays 0");
 
-        // Now opt in.
         g.setEnabled(true);
         CHECK(g.isEnabled() == true, "setEnabled(true) flips the gate");
-        // ML-06: opt-in should now create the dir.
         CHECK(stat(gdir, &st) == 0, "opt-in: exchange dir now created");
         g.exportLocalModel();
-        // ROUND-014 P3 Plan B: wire-exchange TU removed -> exportLocalModel/checkAndImportModels
-        // are dormant no-ops even when enabled (federation = local aggregation only).
         CHECK(stat((std::string(gdir)+"/local_model.bin").c_str(), &st) != 0,
               "ENABLED+exchange removed: no local_model.bin written (dormant)");
         CHECK(g.getStats().exports == 0, "dormant export: counter stays 0");
 
-        // Opt out again: must not produce further writes.
         long e0 = g.getStats().exports;
         g.setEnabled(false);
         g.exportLocalModel();

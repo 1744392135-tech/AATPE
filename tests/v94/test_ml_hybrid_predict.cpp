@@ -1,6 +1,3 @@
-// test_ml_hybrid_predict.cpp - v94 hermetic unit tests for aatpe_ml_hybrid_predict.cpp
-// Links all 5 hybrid TUs. Focus: getFineTuneAdjustment cold-start gate,
-// predict() [0,1] mapping, isPoolReady, disabled -> 0.
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -16,14 +13,13 @@ static int g_pass = 0, g_fail = 0;
 
 int main() {
     printf("=== HybridPredict: disabled/uninitialized -> neutral ===\n");
-    HybridLearner fresh;  // independent instance, not the singleton
+    HybridLearner fresh;
     float f[15] = {0}; f[0] = 1.0f;
     CHECK(fresh.predict(0, f) == 0.5f, "disabled learner -> predict 0.5");
     CHECK(fresh.getFineTuneAdjustment(0, f) == 0.0f, "disabled -> adjustment 0");
 
     printf("=== HybridPredict: cold-start gate before 50 samples ===\n");
     fresh.init(2); fresh.setEnabled(true);
-    // A couple of ticks do NOT reach the 50-sample cold-start threshold.
     std::vector<uint64_t> cpuRt(8, 0);
     uint64_t runNs = 1000, ts = 1000;
     for (int i = 0; i < 5; i++) {

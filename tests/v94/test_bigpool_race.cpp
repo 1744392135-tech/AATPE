@@ -1,19 +1,3 @@
-// test_bigpool_race.cpp — v4.4.8 MAJOR-3 / RCV M2 host regression.
-//
-// Bug: applyTierAffinityFallback() copied g_bigPool with NO lock (BIG branch)
-// while detectCpuTopology() rewrites g_bigPool under g_topologyRwMutex on the
-// hotplug/thermal thread. input_monitor (reader) vs main-loop topology refresh
-// (writer) -> unsynchronized vector read = data race (torn size/capacity ->
-// segfault / EINVAL).
-//
-// Fix: snapshot the pool under g_topologyRwMutex in applyTierAffinityFallback.
-//
-// This test drives the two production seams concurrently:
-//   writer: aatpePlacementRewriteBigPoolForTest() (under lock, mirrors detect)
-//   reader: aatpePlacementApplyTierFallbackForTest() (the fixed locked snapshot)
-// On a plain host build it proves no deadlock / no crash and deterministic
-// results. On TSan (C2 re-run) the OLD unlocked copy races the writer and is
-// reported; the fixed code is clean. ~200ms, hermetic, tid=0 (self).
 #include <cstdio>
 #include <vector>
 #include <thread>
@@ -24,19 +8,14 @@ extern "C" void aatpePlacementRewriteBigPoolForTest(const int* cpus, int n);
 extern "C" int  aatpePlacementApplyTierFallbackForTest(int tid, int targetTier);
 
 static std::atomic<bool> g_stop{false};
-// C2-TSan: this counter is incremented by TWO reader threads concurrently, so it
-// must itself be atomic — a plain int was a test-side data race TSan flagged
-// (the production g_bigPool fix is clean; only this test counter was racy).
 static std::atomic<int> g_readerCalls{0};
 
 int main() {
     printf("=== MAJOR-3: g_bigPool locked-snapshot race regression ===\n");
 
-    // Two alternate pools the writer toggles between (small ids = host cpus).
     const int setA[] = {0, 1};
     const int setB[] = {1};
 
-    // Writer thread: mirror hotplug/thermal rewrite of g_bigPool under the mutex.
     std::atomic<bool> writerDone{false};
     std::thread writer([&]() {
         bool toA = true;
@@ -48,21 +27,16 @@ int main() {
         writerDone = true;
     });
 
-    // Reader threads: drive the real fallback (fixed locked snapshot), BIG tier=2.
     std::vector<std::thread> readers;
     for (int r = 0; r < 2; ++r) {
         readers.emplace_back([&]() {
             while (!g_stop.load()) {
-                // Return value intentionally ignored: we only need the snapshot
-                // copy to race the writer under TSan; intersect with allowed cpus
-                // may reject the mask, but the pool copy already happened.
-                (void)aatpePlacementApplyTierFallbackForTest(0, 2 /*CpuTier::BIG*/);
+                (void)aatpePlacementApplyTierFallbackForTest(0, 2 );
                 ++g_readerCalls;
             }
         });
     }
 
-    // Let the concurrency run a short, bounded burst, then stop.
     writer.join();
     g_stop = true;
     for (auto& t : readers) t.join();
@@ -74,8 +48,6 @@ int main() {
         return 1;
     }
 
-    // Determinism check: pin the pool to a known set, the reader must run without
-    // crashing/deadlocking and the snapshot must reflect that exact set.
     const int known[] = {0, 1};
     aatpePlacementRewriteBigPoolForTest(known, 2);
     int rc = aatpePlacementApplyTierFallbackForTest(0, 2);

@@ -1,5 +1,3 @@
-// test_threadutil.cpp - v94 hermetic unit tests for aatped_threadutil.cpp
-// Truth table baseline: findings/ROUND-014-P1-THREADNAMES.md (38 samples).
 #include <cstdio>
 #include "aatped_threadutil.h"
 

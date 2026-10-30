@@ -1,6 +1,3 @@
-// fz_timestats.cpp - fuzz aatpe::frameaware::parseTimestatsBlock
-// (surface #1: `dumpsys SurfaceFlinger --timestats -dump` block parsing).
-// Heavier: line-by-line istringstream over a block; fgPkg selects the layer.
 #include <string>
 #include "aatped.h"
 #include "fuzz_engine.h"

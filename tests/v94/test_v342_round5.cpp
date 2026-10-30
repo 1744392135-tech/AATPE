@@ -1,18 +1,3 @@
-// test_v342_round5.cpp - round-5 (final convergence) hermetic unit tests.
-//
-// Covers the round-5 system-stability deliverables that are unit-testable on a
-// Linux host (real /proc/self, real eventfd):
-//
-//   #1  SubsystemState lifecycle + HealthState contract (INIT..FAILED, counters)
-//   #2  Registry aggregation -> JSON, failedCount/degradedCount
-//   #4  StopToken (eventfd) open/requestStop/shouldStop/drain/reset
-//   #5  Safe Mode: streak gating, hard triggers, recovery cooldown, predicates
-//   #8  self-observation: sampleSelf fills CPU/RSS/FD/thread without crashing
-//   #9  FD leak test: open/close cycles must NOT grow /proc/self/fd monotonically
-//   #10 thread leak test: thread count stable across start/join cycles
-//   #13 BPF failure injection: markError streak latches safe mode, degraded reason
-//
-// Links aatpe_subsystem.cpp standalone (see build.sh recipe 'v342_round5').
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -70,7 +55,6 @@ int main() {
         CHECK(reg.get("t_ebpf").getLastErrorReason() == "verifier reject",
               "last_error_reason recorded");
 
-        // JSON snapshot taken BEFORE markRecovery (which clears the reason).
         std::string j = Registry::instance().toJson();
         CHECK(j.find("\"t_ebpf\"") != std::string::npos, "JSON contains ebpf entry");
         CHECK(j.find("\"state\":\"DEGRADED\"") != std::string::npos, "JSON carries DEGRADED state");
@@ -102,14 +86,12 @@ int main() {
         CHECK(!tok.shouldStop(), "starts not-stopped");
         tok.requestStop();
         CHECK(tok.shouldStop(), "requestStop latches shouldStop");
-        // fd is readable (eventfd counter = 1)
         int fd = tok.fd();
         fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
-        struct timeval tv{0, 100000};  // 100ms
+        struct timeval tv{0, 100000};
         int sel = select(fd + 1, &rfds, nullptr, nullptr, &tv);
         CHECK(sel == 1, "eventfd becomes readable after requestStop (fast wakeup)");
         tok.drain();
-        // after drain the fd should not be readable
         FD_ZERO(&rfds); FD_SET(fd, &rfds);
         struct timeval tv2{0, 50000};
         sel = select(fd + 1, &rfds, nullptr, nullptr, &tv2);
@@ -120,10 +102,8 @@ int main() {
 
     printf("=== #5 Safe Mode: streak gating ===\n");
     {
-        // isolate: reset safe-mode latches via triggers
         safemode::setStreakThresholdForTest(3);
-        safemode::setRecoverCooldownSecForTest(0);  // immediate recovery allowed
-        // ensure a clean slate: trigger hard? easier: reset by describing
+        safemode::setRecoverCooldownSecForTest(0);
         safemode::gSafeModeActive.store(false);
         safemode::gSafeModeReason.store(0);
 
@@ -140,18 +120,12 @@ int main() {
                   .find("ebpf_streak") != std::string::npos,
               "reason string names ebpf_streak");
 
-        // recovery: backdate the entry time so the production cooldown (60s) has
-        // already elapsed, then maybeRecover clears the soft latch.
         safemode::gSafeModeEntered.store(std::time(nullptr) - 100,
                                          std::memory_order_relaxed);
         safemode::maybeRecover(std::time(nullptr));
         CHECK(!safemode::isActive(), "maybeRecover clears safe mode after cooldown");
     }
 
-    // G1-001: a healthy period must reset the failure streak. Two failures
-    // followed by a successful eBPF load (resetStreak) and then one more
-    // transient failure must NOT latch safe mode — "consecutive" means
-    // consecutive, not cumulative.
     printf("=== #5 G1-001: health resets the failure streak ===\n");
     {
         safemode::setStreakThresholdForTest(3);
@@ -160,7 +134,6 @@ int main() {
         safemode::trigger(safemode::EBPF_STREAK, "old1");
         safemode::trigger(safemode::EBPF_STREAK, "old2");
         CHECK(!safemode::isActive(), "2 failures, no latch");
-        // subsystem observed healthy (eBPF load OK).
         safemode::resetStreak(safemode::EBPF_STREAK);
         safemode::trigger(safemode::EBPF_STREAK, "new1");
         CHECK(!safemode::isActive(), "G1-001: streak reset on health, 1 new failure does NOT latch");
@@ -172,44 +145,37 @@ int main() {
         safemode::gSafeModeReason.store(0);
     }
 
-    // G1 ROUND-003: CRASH_LOOP conditional self-heal. After latch, a quiet
-    // observation window auto-clears the bit; re-trigger re-arms; after the
-    // max self-heal budget it stays latched until reboot.
     printf("=== #5 G1: CRASH_LOOP conditional self-heal ===\n");
     {
-        safemode::g_crashLoopObserveSecTestOverride = 1;  // 1s observation window
+        safemode::g_crashLoopObserveSecTestOverride = 1;
         safemode::gSafeModeActive.store(false);
         safemode::gSafeModeReason.store(0);
         safemode::gSafeModeEntered.store(0);
 
-        // latch crash loop
         safemode::trigger(safemode::CRASH_LOOP, "watchdog crash loop");
         CHECK(safemode::isActive(), "CRASH_LOOP latches safe mode");
         CHECK(safemode::gSafeModeReason.load() & safemode::CRASH_LOOP, "CRASH_LOOP bit set");
 
-        // immediately after trigger, before observation window: still latched.
         safemode::maybeRecover(std::time(nullptr));
         CHECK(safemode::gSafeModeReason.load() & safemode::CRASH_LOOP,
               "CRASH_LOOP still set before observation window elapses");
 
-        // wait out the 1s observation window
         std::this_thread::sleep_for(std::chrono::milliseconds(1200));
         safemode::maybeRecover(std::time(nullptr));
         CHECK(!(safemode::gSafeModeReason.load() & safemode::CRASH_LOOP),
               "CRASH_LOOP auto-clears after quiet observation window");
         CHECK(!safemode::isActive(), "safe mode releases after CRASH_LOOP heal");
 
-        // re-trigger twice; after maxHeal the latch persists.
         safemode::trigger(safemode::CRASH_LOOP, "again");
         std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-        safemode::maybeRecover(std::time(nullptr));  // heal attempt 1
+        safemode::maybeRecover(std::time(nullptr));
         safemode::trigger(safemode::CRASH_LOOP, "third");
         std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-        safemode::maybeRecover(std::time(nullptr));  // heal attempt 2 exhausted
+        safemode::maybeRecover(std::time(nullptr));
         CHECK(safemode::gSafeModeReason.load() & safemode::CRASH_LOOP,
               "CRASH_LOOP stays latched after max self-heal budget");
 
-        safemode::g_crashLoopObserveSecTestOverride = 0;  // restore default
+        safemode::g_crashLoopObserveSecTestOverride = 0;
         safemode::gSafeModeActive.store(false);
         safemode::gSafeModeReason.store(0);
     }
@@ -221,7 +187,6 @@ int main() {
         safemode::trigger(safemode::THERMAL_EMERG, "hot");
         CHECK(safemode::isActive(), "thermal emergency immediately latches safe mode");
         CHECK(!safemode::rtBoostAllowed(), "RT boost blocked by thermal safe mode");
-        // clean slate
         safemode::gSafeModeActive.store(false);
         safemode::gSafeModeReason.store(0);
     }
@@ -241,7 +206,6 @@ int main() {
         CHECK(baseline > 0, "baseline fd count measurable");
         int peak = baseline;
         for (int i = 0; i < 20; ++i) {
-            // simulate daemon restart of fd resources: open then close a temp file
             int fd = ::open("/dev/null", O_RDONLY);
             if (fd >= 0) ::close(fd);
             selfobs::sampleSelf();
@@ -249,8 +213,6 @@ int main() {
             if (now > peak) peak = now;
         }
         int after = countFds();
-        // Allow small slack for the test harness itself, but assert no monotonic
-        // growth: after 20 open/close cycles the fd count must be within +4 of baseline.
         CHECK(after <= baseline + 4,
               "FD count does not grow monotonically across open/close cycles");
         (void)peak;
@@ -269,8 +231,6 @@ int main() {
             for (auto& t : th) t.join();
         }
         int after = countThreads();
-        // All threads joined; count must return close to baseline (slack for
-        // stdio/internal threads the host runtime may spawn lazily).
         CHECK(after <= baseline + 4,
               "thread count stable across start/join cycles (no leak)");
     }
@@ -281,17 +241,12 @@ int main() {
         safemode::gSafeModeActive.store(false);
         safemode::gSafeModeReason.store(0);
         auto& reg = Registry::instance();
-        // simulate verifier reject / ring overflow / map failure / tracepoint
-        // unavailable — each surfaces as a markError on the ebpf subsystem.
         reg.markError("bpf_inject", "verifier reject");
         reg.markError("bpf_inject", "ring overflow");
         reg.markError("bpf_inject", "map failure");
         CHECK(reg.get("bpf_inject").errorCount.load() == 3, "3 injected errors counted");
         CHECK(reg.get("bpf_inject").getState() == SubsystemState::DEGRADED,
               "subsystem in DEGRADED after injection");
-        // The eBPF backoff (production) paces retries; here we assert the
-        // registry records the last reason and the daemon does NOT mark the
-        // subsystem ACTIVE on its own while errors accumulate.
         CHECK(reg.get("bpf_inject").getLastErrorReason() == "map failure",
               "last degraded reason captured");
     }

@@ -1,11 +1,3 @@
-// test_ebpf_event_parse.cpp - G2 host tests for eBPF ringbuf raw-event byte ->
-// thread-attribution parsing (EbpfScheduler::processRingData).
-//
-// Feeds SYNTHETIC raw ring-buffer byte blobs through the real parser (via the
-// AATPE_HOST_TEST host seam EbpfScheduler::hostTestParseRingBlob, which builds an
-// in-memory perf ring — no real perf fd / tracefs). Asserts field-level extraction,
-// per-type counters, delivery to the attached IEventConsumer, and the
-// truncation / unknown-type / malformed framing edge cases.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -14,10 +6,8 @@
 #include "aatpe_ebpf.h"
 using namespace aatpe_ebpf;
 
-// Host integrity gate shim (identical to test_ebpf.cpp): production aatpe_ebpf.cpp
-// calls aatpe::integrity::privilegedOpsAllowed(); default verdict = Ok.
 namespace aatpe { namespace integrity {
-static int g_testVerdict = 1;   // 1 == Ok
+static int g_testVerdict = 1;
 bool privilegedOpsAllowed() { return g_testVerdict == 1; }
 }}
 
@@ -29,12 +19,10 @@ static int g_pass = 0, g_fail = 0;
 
 static constexpr uint16_t kPERF_RECORD_SAMPLE = 9;
 
-// Builds on-wire records: [perf_event_header: u32 type | u16 misc | u16 size]
-//                       [u32 rawSize][EventHeader+payload].
 struct RecBuilder {
     std::vector<uint8_t> b;
     void add(const void* payload, size_t rawSize) {
-        size_t recSize = 8u + 4u + rawSize;   // 8-byte header + rawSize field + payload
+        size_t recSize = 8u + 4u + rawSize;
         size_t off = b.size();
         b.resize(off + recSize);
         uint8_t* p = b.data() + off;
@@ -46,7 +34,6 @@ struct RecBuilder {
     }
 };
 
-// Recording consumer: captures the last delivered event of each type.
 struct Cap : public IEventConsumer {
     int forks=0, exits=0, switches=0, execs=0, runqs=0;
     ForkEvent fk; ExitEvent ex; SwitchEvent sw; ExecEvent exx; RunqEvent rq;
@@ -58,7 +45,7 @@ struct Cap : public IEventConsumer {
 };
 
 static ForkEvent mkFork(uint32_t parent, uint32_t childPid, uint32_t childTid) {
-    ForkEvent e;  // default member initializers zero all fields
+    ForkEvent e;
     e.hdr.type = (uint32_t)EventType::FORK; e.hdr.cpu = 2; e.hdr.timestampNs = 12345;
     e.parentPid = parent; e.childPid = childPid; e.childTid = childTid;
     return e;
@@ -122,11 +109,10 @@ int main() {
         EbpfScheduler sched;
         Cap cap; sched.setEventConsumer(&cap);
         RecBuilder rb;
-        // a valid fork, then a fork whose raw payload is 4 bytes short of sizeof(ForkEvent)
         ForkEvent f = mkFork(1000, 2000, 2000);
         rb.add(&f, sizeof(f));
         ForkEvent bad = mkFork(9, 9, 9);
-        rb.add(&bad, sizeof(ForkEvent) - 4);   // undersized rawSize
+        rb.add(&bad, sizeof(ForkEvent) - 4);
         sched.hostTestParseRingBlob(rb.b.data(), rb.b.size());
         CHECK(cap.forks == 1, "truncated fork NOT delivered (only valid fork)");
         CHECK(sched.getForkEvents() == 1, "truncated fork NOT counted");
@@ -139,8 +125,7 @@ int main() {
         RecBuilder rb;
         ForkEvent f = mkFork(1000, 2000, 2000);
         rb.add(&f, sizeof(f));
-        // craft a record whose EventHeader.type = 7 (unknown). rawSize = sizeof(EventHeader).
-        EventHeader uh; uh.type = 7;  // cpu/timestampNs already default 0
+        EventHeader uh; uh.type = 7;
         rb.add(&uh, sizeof(uh));
         sched.hostTestParseRingBlob(rb.b.data(), rb.b.size());
         CHECK(cap.forks == 1, "valid fork still delivered after unknown-type record");
@@ -154,13 +139,12 @@ int main() {
         RecBuilder rb;
         ForkEvent f = mkFork(1000, 2000, 2000);
         rb.add(&f, sizeof(f));
-        // append a malformed record claiming size=0 (u16 size field at offset 6)
         size_t off = rb.b.size();
         rb.b.resize(off + 12);
         uint8_t* p = rb.b.data() + off;
         uint32_t t = kPERF_RECORD_SAMPLE; std::memcpy(p, &t, 4);
         uint16_t misc = 0; std::memcpy(p + 4, &misc, 2);
-        uint16_t z = 0; std::memcpy(p + 6, &z, 2);   // size == 0
+        uint16_t z = 0; std::memcpy(p + 6, &z, 2);
         uint32_t zr = 0; std::memcpy(p + 8, &zr, 4);
         int rc = sched.hostTestParseRingBlob(rb.b.data(), rb.b.size());
         CHECK(rc >= 0, "size==0 record breaks loop without crash");
@@ -173,10 +157,7 @@ int main() {
         Cap cap; sched.setEventConsumer(&cap);
         RecBuilder rb;
         ForkEvent f = mkFork(1000, 2000, 2000);
-        rb.add(&f, sizeof(f));                       // record 1: valid fork (delivered)
-        // record 2: perf header honest (8+4+payloadLen), but rawSize field over-declared
-        // by +64 bytes that are NOT present in the blob. Parser's
-        // rawOffset+rawSize > dataSize guard must skip it (no UB, no deliver).
+        rb.add(&f, sizeof(f));
         size_t rec2Off = rb.b.size();
         size_t payloadLen = sizeof(ForkEvent);
         size_t rec2Len = 8u + 4u + payloadLen;
@@ -200,13 +181,12 @@ int main() {
         RecBuilder rb;
         ForkEvent f = mkFork(1000, 2000, 2000);
         rb.add(&f, sizeof(f));
-        // append a record whose perf header size field claims way more than the buffer.
         size_t off = rb.b.size();
         rb.b.resize(off + 12);
         uint8_t* p = rb.b.data() + off;
         uint32_t t = kPERF_RECORD_SAMPLE; std::memcpy(p, &t, 4);
         uint16_t misc = 0; std::memcpy(p + 4, &misc, 2);
-        uint16_t huge = 0xFFF0; std::memcpy(p + 6, &huge, 2);   // size > dataSize
+        uint16_t huge = 0xFFF0; std::memcpy(p + 6, &huge, 2);
         uint32_t rs = (uint32_t)sizeof(ForkEvent); std::memcpy(p + 8, &rs, 4);
         int rc = sched.hostTestParseRingBlob(rb.b.data(), rb.b.size());
         CHECK(rc >= 0, "oversize size record breaks without crash");
@@ -231,14 +211,11 @@ int main() {
     {
         EbpfScheduler sched;
         Cap cap; sched.setEventConsumer(&cap);
-        // drain 1: single switch nextPid=777 -> seeds switchAgg_, first occurrence delivered
         RecBuilder rb1; SwitchEvent sw1 = mkSwitch(1, 777, "game");
         rb1.add(&sw1, sizeof(sw1));
         sched.hostTestParseRingBlob(rb1.b.data(), rb1.b.size());
         int afterDrain1 = cap.switches;
         CHECK(afterDrain1 >= 1, "first switch drain delivers (first occurrence)");
-        // drain 2: 10 more switches same nextPid=777 -> existing agg count crosses
-        // threshold (1+10>=10) -> second delivery.
         RecBuilder rb2;
         for (int i = 0; i < 10; ++i) { SwitchEvent sw = mkSwitch(1, 777, "game"); rb2.add(&sw, sizeof(sw)); }
         sched.hostTestParseRingBlob(rb2.b.data(), rb2.b.size());

@@ -1,12 +1,6 @@
 #!/bin/bash
-# =============================================================================
-# run_stress.sh — build + run the host stress/load test.
-# Stresses the lock-free SPSC ring (throughput, ring-full drop-newest, in-order
-# delivery) and an 8-producer/2-consumer thread storm. Runs under plain -O2.
-# =============================================================================
 set -u
 QA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
 source "$QA_DIR/common.sh"
 qa_set_mode stress
 ART="$QA_DIR/artifacts"; mkdir -p "$ART"

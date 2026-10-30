@@ -1,21 +1,3 @@
-/*
- * v4.3.6 directed regression for the thermal feedforward wiring.
- *
- * Compiles the VERIFIED core (thermal_ff.c, logic frozen) UNCHANGED plus the
- * host-testable adapter (thermal_ff_adapter.h) that thermal.cpp itself calls.
- * This exercises the REAL wiring contract -- not a replica:
- *
- *   A. heating      : ETA shortens -> gear escalates BEFORE the warning wall
- *   B. stable       : flat temp -> slope~0 -> ETA horizon -> gear NONE
- *   C. cooling      : negative slope -> ETA horizon -> gear relaxes
- *   D. noise/spike  : outlier rejected, EWMA uncorrupted, no spurious gear
- *   E. sensor fault : NaN / non-monotonic / out-of-range / stuck ->
- *                     sensor_ok=0, ff_gear=NONE (never blind pre-throttle)
- *   F. wall overlay : final = max(wall_gear, ff_gear); EMERGENCY always SEVERE
- *   G. hysteresis   : relax only after ETA past entry_threshold + band(2s)
- *   H. adapter map  : reactive wall -> ThermHardWall precedence
- *   I. TSan         : concurrent independent predictors, no shared state/races
- */
 #include "thermal_ff.h"
 #include "thermal_ff_adapter.h"
 
@@ -40,22 +22,21 @@ static int g_checks = 0, g_fails = 0;
 
 static ThermFfConfig mkcfg(void) {
     ThermFfConfig c; therm_ff_config_default(&c);
-    c.warning_temp_c = 75.0f;    // match normalized CPU warning wall
-    c.emergency_temp_c = 95.0f;  // match normalized CPU emergency wall
+    c.warning_temp_c = 75.0f;
+    c.emergency_temp_c = 95.0f;
     return c;
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_heating(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
     ThermFfOut o;
 
-    bool early_upshift = false;     // gear>NONE while temp still < warning wall
+    bool early_upshift = false;
     float eta_at65 = -1.0f, eta_at72 = -1.0f;
     float slope_seen = 0.0f;
     for (int i = 0; i < 40; i++) {
-        float t = 55.0f + 1.0f * (float)i;   // +1.0 C/s, 1s steps
+        float t = 55.0f + 1.0f * (float)i;
         therm_ff_update(&st, &cfg, (double)i * 1000.0, t, THERM_HW_NONE, &o);
         if (t < cfg.warning_temp_c && o.ff_gear != FF_GEAR_NONE) early_upshift = true;
         if (std::fabs(t - 65.0f) < 0.01f) eta_at65 = o.eta_warning_s;
@@ -64,12 +45,11 @@ static void test_heating(void) {
     }
     CHECK(o.sensor_ok == 1);
     CHECK_MSG(early_upshift, "heating must pre-throttle BEFORE reaching warning wall");
-    CHECK(slope_seen > 0.3f);                       // real positive slope
-    CHECK(eta_at72 >= 0.0f && eta_at72 < eta_at65); // ETA shrinks as wall nears
-    CHECK(o.ff_gear >= FF_GEAR_LIGHT);              // reached at least LIGHT
+    CHECK(slope_seen > 0.3f);
+    CHECK(eta_at72 >= 0.0f && eta_at72 < eta_at65);
+    CHECK(o.ff_gear >= FF_GEAR_LIGHT);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_stable(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -82,7 +62,6 @@ static void test_stable(void) {
     CHECK(o.eta_warning_s >= cfg.max_horizon_s);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_cooling(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -96,7 +75,6 @@ static void test_cooling(void) {
     CHECK(o.ff_gear == FF_GEAR_NONE);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_spike(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
@@ -104,26 +82,22 @@ static void test_spike(void) {
     for (int i = 0; i < 6; i++)
         therm_ff_update(&st, &cfg, (double)i * 1000.0, 55.0f, THERM_HW_NONE, &o);
     float ewma_before = st.ewma;
-    // single +25 C spike (outlier_delta_c=12) -> must be rejected
     therm_ff_update(&st, &cfg, 6000.0, 80.0f, THERM_HW_NONE, &o);
     CHECK(o.sensor_ok == 1);
     CHECK(std::fabs(st.ewma - ewma_before) < 1.0f);
-    CHECK(o.ff_gear != FF_GEAR_SEVERE);   // spike must not forge a severe pre-throttle
+    CHECK(o.ff_gear != FF_GEAR_SEVERE);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_sensor_fault(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
     ThermFfOut o;
 
-    // E1 NaN x6 -> fault, gear NONE
     for (int i = 0; i < 6; i++)
         therm_ff_update(&st, &cfg, (double)i * 1000.0, NAN, THERM_HW_NONE, &o);
     CHECK(o.sensor_ok == 0);
     CHECK(o.ff_gear == FF_GEAR_NONE);
 
-    // E2 non-monotonic timestamps (repeated equal now_ms) -> bad
     therm_ff_state_init(&st);
     therm_ff_update(&st, &cfg, 1000.0, 55.0f, THERM_HW_NONE, &o);
     for (int i = 0; i < 5; i++)
@@ -131,14 +105,12 @@ static void test_sensor_fault(void) {
     CHECK(o.sensor_ok == 0);
     CHECK(o.ff_gear == FF_GEAR_NONE);
 
-    // E3 out-of-range temp (>200) -> bad
     therm_ff_state_init(&st);
     for (int i = 0; i < 6; i++)
         therm_ff_update(&st, &cfg, (double)i * 1000.0, 250.0f, THERM_HW_NONE, &o);
     CHECK(o.sensor_ok == 0);
     CHECK(o.ff_gear == FF_GEAR_NONE);
 
-    // E4 stuck sensor (constant temp) -> slope~0 -> ETA horizon -> gear NONE
     therm_ff_state_init(&st);
     for (int i = 0; i < 40; i++)
         therm_ff_update(&st, &cfg, (double)i * 1000.0, 50.0f, THERM_HW_NONE, &o);
@@ -147,13 +119,11 @@ static void test_sensor_fault(void) {
     CHECK(o.eta_warning_s >= cfg.max_horizon_s);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_wall_overlay(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
     ThermFfOut o;
 
-    // For every reactive wall level, feed it and read back wall_gear.
     ThermHardWall walls[4] = {THERM_HW_NONE, THERM_HW_WARNING,
                               THERM_HW_CRITICAL, THERM_HW_EMERGENCY};
     FfGear ffs[4] = {FF_GEAR_NONE, FF_GEAR_LIGHT, FF_GEAR_MODERATE, FF_GEAR_SEVERE};
@@ -165,12 +135,11 @@ static void test_wall_overlay(void) {
         FfGear wg = o.wall_gear;
         for (int f = 0; f < 4; f++) {
             FfGear fin = aatpe_therm_ff_final_gear(wg, ffs[f]);
-            if (fin < wg) final_never_below_wall = false;  // wall must never be weakened
+            if (fin < wg) final_never_below_wall = false;
         }
     }
     CHECK(final_never_below_wall);
 
-    // EMERGENCY hard wall -> SEVERE even at 30 C (cold), ff cannot cancel it.
     therm_ff_state_init(&st);
     therm_ff_update(&st, &cfg, 99999.0, 30.0f, THERM_HW_EMERGENCY, &o);
     CHECK(o.wall_gear == FF_GEAR_SEVERE);
@@ -179,13 +148,11 @@ static void test_wall_overlay(void) {
               "no pre-throttle bit while a wall is already active");
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_hysteresis(void) {
     ThermFfConfig cfg = mkcfg();
     ThermFfState st; therm_ff_state_init(&st);
     ThermFfOut o;
 
-    // Phase 1: heat at 1.0 C/s until gear first reaches LIGHT.
     int i = 0;
     for (; i < 60; i++) {
         float t = 55.0f + 1.0f * (float)i;
@@ -193,13 +160,8 @@ static void test_hysteresis(void) {
         if (o.ff_gear >= FF_GEAR_LIGHT) break;
     }
     CHECK_MSG(o.ff_gear == FF_GEAR_LIGHT, "must enter LIGHT to test relax band");
-    // Entered at eta_w <= eta_light(8).
     CHECK(o.eta_warning_s <= cfg.eta_light_s + 0.5f);
 
-    // Phase 2: gentle warming lets ETA rise. While eta_w sits in the dead-zone
-    // (entry < eta < entry + gear_exit_band) the gear MUST stay LIGHT -- this is
-    // the +2s relax hysteresis. Only once eta_w grows past entry+band does it
-    // relax to NONE.
     float lastTemp = 55.0f + 1.0f * (float)i;
     bool held_in_band = false;
     bool relaxed_after_band = false;
@@ -219,20 +181,17 @@ static void test_hysteresis(void) {
     CHECK_MSG(relaxed_after_band, "gear must RELAX once eta_w exceeds entry+band(2s)");
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_adapter_map(void) {
     CHECK(aatpe_therm_ff_map_wall(true,  false, false) == THERM_HW_EMERGENCY);
-    CHECK(aatpe_therm_ff_map_wall(false, true,  true)  == THERM_HW_CRITICAL); // critical wins
+    CHECK(aatpe_therm_ff_map_wall(false, true,  true)  == THERM_HW_CRITICAL);
     CHECK(aatpe_therm_ff_map_wall(false, false, true)  == THERM_HW_WARNING);
     CHECK(aatpe_therm_ff_map_wall(false, false, false) == THERM_HW_NONE);
-    // final=max; pre-throttle only when ff leads wall
     CHECK(aatpe_therm_ff_final_gear(FF_GEAR_LIGHT, FF_GEAR_MODERATE) == FF_GEAR_MODERATE);
     CHECK(aatpe_therm_ff_final_gear(FF_GEAR_SEVERE, FF_GEAR_LIGHT) == FF_GEAR_SEVERE);
     CHECK(aatpe_therm_ff_pre_throttle(FF_GEAR_MODERATE, FF_GEAR_LIGHT) == true);
     CHECK(aatpe_therm_ff_pre_throttle(FF_GEAR_LIGHT, FF_GEAR_LIGHT) == false);
 }
 
-// ---- (disabled banner; was `/* ---- /dev/null` and swallowed the whole file)
 static void test_concurrent_racefree(void) {
     std::atomic<int> failures{0};
     auto worker = [&](int seed) {

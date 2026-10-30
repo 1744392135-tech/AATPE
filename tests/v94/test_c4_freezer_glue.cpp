@@ -1,23 +1,3 @@
-// test_c4_freezer_glue.cpp — v6.0.0 review regression tests for the C4 freezer
-// PRODUCTION glue (c4FreezerTick / c4FreezerStateJson), compiled in production
-// mode (WITHOUT -DAATPE_HOST_TEST, with -DC4_FREEZER_TEST_SEAM) so the real tick
-// body, the mutex and the statics are linked. All external deps of the glue are
-// stubbed here (test-only symbols; release nm never sees them).
-//
-// Covers the four review findings:
-//   T-A: the persisted state file and c4_last_action land under STATE_DIR, NOT
-//        relative to the daemon CWD (P1: bare-relative kStateFile).
-//   T-B: slow I/O (aatpeExec / readFile / writeFileAtomic) NEVER runs while
-//        s_stateMutex is held (P1: lock granularity). Probed directly via the
-//        C4_FREEZER_TEST_SEAM lock-depth counter.
-//   T-C: behavioral proof of T-B — the WebUI snapshot call must not block on a
-//        deliberately-slow (30 ms) exec call made concurrently by the tick
-//        thread. Under the old code the mutex was held across exec and every
-//        colliding c4FreezerStateJson() call stalled ~30 ms.
-//   T-D: NN restart recovery — a seeded STATE_DIR/c4_frozen_state is read on the
-//        first tick, restored bookkeeping is visible through c4FreezerStateJson(),
-//        and when the frozen game returns to foreground the tick releases it and
-//        clears the persisted record.
 
 #include <cstdio>
 #include <cstring>
@@ -38,11 +18,8 @@
 using namespace aatpe;
 using namespace aatpe::c4freezer;
 
-// ---- test-only state ----------------------------------------------------------
 const char* STATE_DIR = "/tmp/aatpe_c4freezer_glue_state";
 
-// The seam exported by c4_freezer.cpp under C4_FREEZER_TEST_SEAM: how many
-// critical sections the tick/reader are inside right now.
 namespace aatpe { namespace c4freezer {
 extern std::atomic<int> g_c4freezerLockDepth;
 }}
@@ -51,11 +28,10 @@ static std::string g_fg = "com.android.launcher";
 static bool        g_fgIsGame = false;
 
 struct IOEntry { std::string path; std::string content; };
-static std::vector<IOEntry> g_writes;          // every writeFileAtomic call
-static std::vector<std::string> g_reads;       // every readFile call
-static int g_slowCallsWhileLocked = 0;          // I/O observed with lock held
+static std::vector<IOEntry> g_writes;
+static std::vector<std::string> g_reads;
+static int g_slowCallsWhileLocked = 0;
 
-// ---- stubs for the production glue's external deps -----------------------------
 ForegroundManager& ForegroundManager::instance() {
     static ForegroundManager inst;
     return inst;
@@ -68,14 +44,8 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return g_fgIsGame; }
 }}
 
-// v6.0.1: C4 now also consults the config game list (global namespace).
-// These glue tests model the "manual list only" world; default it to empty.
 bool isPackageInGameList(const std::string&) { return false; }
 
-// Slow exec stub: 30 ms. Returns content that (a) contains no "uid:" so
-// resolveAppUid() yields 0, and (b) mentions a DIFFERENT package's playback
-// state=3 so mediaSessionMentionsPlaying() -> false (audio NOT active for our
-// target). The delay is what makes T-C meaningful.
 std::string aatpeExec(const std::string&, const char*) {
     if (g_c4freezerLockDepth.load(std::memory_order_relaxed) > 0)
         g_slowCallsWhileLocked++;
@@ -83,7 +53,6 @@ std::string aatpeExec(const std::string&, const char*) {
     return "Session #1:\n  package=com.music.app\n  playback state=3\n";
 }
 
-// Real file reads, but recorded. The path must already be absolute (STATE_DIR/...).
 std::string readFile(const char* path) {
     if (g_c4freezerLockDepth.load(std::memory_order_relaxed) > 0)
         g_slowCallsWhileLocked++;
@@ -93,7 +62,6 @@ std::string readFile(const char* path) {
     std::stringstream ss; ss << f.rdbuf(); return ss.str();
 }
 
-// Real atomic-ish write, but recorded.
 bool writeFileAtomic(const char* path, const std::string& content) {
     if (g_c4freezerLockDepth.load(std::memory_order_relaxed) > 0)
         g_slowCallsWhileLocked++;
@@ -111,7 +79,6 @@ bool writeFileAtomic(const char* path, const std::string& content) {
     return true;
 }
 
-// ---- tiny CHECK harness ---------------------------------------------------------
 static int s_pass = 0, s_fail = 0;
 #define CHECK(cond, msg) do { \
     if (cond) { s_pass++; printf("  [PASS] %s\n", msg); } \
@@ -142,16 +109,13 @@ static bool anyWriteHasContent(const std::string& suffix, const std::string& con
 int main() {
     printf("=== C4 freezer glue (production mode): path/lock/NN-restart ===\n");
 
-    // ---- fixture: fresh STATE_DIR + an empty CWD we chdir away from -------------
     mkdir(STATE_DIR, 0700);
     std::string cwdRoot = "/tmp/aatpe_c4freezer_glue_cwd";
     mkdir(cwdRoot.c_str(), 0700);
     chdir(cwdRoot.c_str());
-    // wipe previous contents (seed below uses O_TRUNC; this is just hygiene)
     setC4FreezerEnabled(true);
     CHECK(c4FreezerEnabled(), "freezer enabled");
 
-    // ---- T-D setup + T-A: seed a persisted frozen record BEFORE the first tick -
     const char* seededRecord =
         "cg=/sys/fs/cgroup/uid_10123/cg_42\npkg=com.game\nuid=10123\nlg=com.game\n";
     {
@@ -161,14 +125,12 @@ int main() {
         close(fd);
     }
 
-    // Foreground = launcher (non-game): restored game stays "frozen".
     g_fg = "com.android.launcher";
     g_fgIsGame = false;
 
     g_reads.clear(); g_writes.clear();
-    c4FreezerTick();   // first tick: NN restore loads the seeded record
+    c4FreezerTick();
 
-    // ---- T-A assertions ---------------------------------------------------------
     printf("--- T-A: state files live under STATE_DIR, not CWD ---\n");
     CHECK(!g_reads.empty(), "first tick performed a state-file read");
     bool readUnderStateDir = !g_reads.empty() &&
@@ -181,7 +143,6 @@ int main() {
           "T-A: c4_last_action written under STATE_DIR");
     CHECK(!barePathUsed("c4_last_action"),
           "T-A: no bare-relative \"c4_last_action\"");
-    // behavioral: CWD (the empty chdir'd dir) must contain nothing
     CHECK(access("c4_frozen_state", F_OK) != 0,
           "T-A: no c4_frozen_state created in bare CWD");
     CHECK(access("c4_last_action", F_OK) != 0,
@@ -189,7 +150,6 @@ int main() {
     CHECK(access(std::string(STATE_DIR).append("/c4_last_action").c_str(), F_OK) == 0,
           "T-A: STATE_DIR/c4_last_action exists on disk");
 
-    // ---- T-D part 1: restored bookkeeping visible through the snapshot -----------
     printf("--- T-D: NN restart recovery restores frozen bookkeeping ---\n");
     std::string j = c4FreezerStateJson();
     printf("  snapshot: %s\n", j.c_str());
@@ -198,12 +158,10 @@ int main() {
     CHECK(j.find("/sys/fs/cgroup/uid_10123/cg_42") != std::string::npos,
           "T-D: restored cgDir visible in JSON");
 
-    // ---- T-B: slow I/O never observed with the mutex held ------------------------
     printf("--- T-B: no slow I/O inside the locked section ---\n");
     CHECK(g_slowCallsWhileLocked == 0,
           "T-B: exec/read/write all observed with lock depth == 0");
 
-    // ---- T-C: the reader must not block on the tick's slow exec -------------------
     printf("--- T-C: c4FreezerStateJson latency while tick thread runs 30ms execs ---\n");
     {
         std::atomic<bool> stop{false};
@@ -225,15 +183,12 @@ int main() {
         ticker.join();
         (void)sink;
         printf("  max c4FreezerStateJson() latency: %.2f ms (exec stub sleeps 30 ms)\n", maxMs);
-        // Old code: mutex held across the 30 ms exec -> json collides and stalls
-        // ~30 ms. New code: critical sections are microsecond copies -> well under.
         CHECK(maxMs < 20.0,
               "T-C: snapshot call never blocks on the tick's slow exec (<20ms)");
     }
     CHECK(g_slowCallsWhileLocked == 0,
           "T-B: after contention run, still zero I/O calls under the lock");
 
-    // ---- T-D part 2: frozen game returns to foreground -> release + clear --------
     printf("--- T-D: frozen game returns to foreground -> unfreeze + clear record ---\n");
     g_fg = "com.game";
     g_fgIsGame = true;
@@ -245,7 +200,6 @@ int main() {
           "T-D: game foregrounded -> JSON frozen:false");
     CHECK(anyWriteHasContent("/c4_frozen_state", ""),
           "T-D: persisted record cleared (empty write) on release");
-    // c4_last_action must now record the unfreeze decision
     {
         std::string lastAction;
         for (auto it = g_writes.rbegin(); it != g_writes.rend(); ++it) {

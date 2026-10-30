@@ -1,25 +1,3 @@
-// test_battery.cpp - v94 hermetic unit tests for aatped_battery.cpp
-// Links aatped_battery.cpp + battery_deps (see build.sh recipe).
-//
-// v4.3.8 F2.1/F2.2/F2.3: scenario-driven. The runner (build.sh) bind-mounts a
-// fake /sys/class/power_supply/battery per scenario into a private mount
-// namespace; this TU reads AATPE_BATTERY_SCENARIO and asserts the resulting
-// snapshot (health/cycle/soh/aged/overheat) and getBatteryAgePenalty() output.
-//
-// Scenarios:
-//   power          (no namespace) — readBatteryPower zeros + computePowerPenalty
-//                   pool tiers, discharge-only 1.5x factor, important-thread halving.
-//   empty          — no power_supply nodes at all -> fail-safe fallback (-1/0/false).
-//   good_new       — health=Good, cycle=100, charge_full=design=4000000 -> SOH=100.
-//   aged_soh65     — charge_full=2600000/design=4000000 -> SOH=65, factor=0.25.
-//   aged_soh40     — charge_full=1600000/design=4000000 -> SOH=40, factor=0.667.
-//   aged_soh20     — charge_full=800000/design=4000000  -> SOH=20, factor=1.0.
-//   overheat       — health=Overheat, no charge_full -> overheat=true, aged=FALSE.
-//   dead           — health=Dead, no charge_full -> aged=true, factor=1.0.
-//   cycle_only_700 — health=Good, cycle=700, no charge_full -> factor=0.4.
-//   cycle_only_1k  — health=Good, cycle=1000, no charge_full -> factor=1.0.
-//   no_design      — charge_full present, charge_full_design absent -> SOH=-1,
-//                   falls back to cycle/health heuristic.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,7 +15,6 @@ int main() {
     const char* scen = getenv("AATPE_BATTERY_SCENARIO");
     std::string sc = scen ? scen : "power";
 
-    // ---- power / computePowerPenalty scenarios (pure math, no sysfs) ---------
     if (sc == "power") {
         printf("=== Battery[power]: readBatteryPower zeros on host ===\n");
         readBatteryPower();
@@ -70,13 +47,9 @@ int main() {
         return g_fail == 0 ? 0 : 1;
     }
 
-    // ---- health / aging scenarios (read bind-mocked /sys) -------------------
-    // Enable the protection gate for all health scenarios so getBatteryAgePenalty
-    // actually exercises the factor path.
     g_cfg.batteryAgingProtection = true;
     readBatteryHealth();
 
-    // Snapshot under the lock (mirrors production reader discipline).
     int health, cycles, soh; bool aged, overheat;
     {
         std::lock_guard<std::mutex> lk(g_batteryStateMutex);
@@ -109,7 +82,6 @@ int main() {
         CHECK(getBatteryAgePenalty(3) == 0, "good_new: MID penalty 0");
 
     } else if (sc == "aged_soh65") {
-        // SOH=65% -> factor=(80-65)/60=0.25 -> BIG=12, MID=5
         CHECK(soh == 65,      "aged_soh65: SOH=65");
         CHECK(aged == true,   "aged_soh65: aged=true (SOH<80)");
         CHECK(overheat == false, "aged_soh65: not overheat");
@@ -118,21 +90,18 @@ int main() {
         CHECK(getBatteryAgePenalty(0) == 0,  "aged_soh65: LITTLE=0");
 
     } else if (sc == "aged_soh40") {
-        // SOH=40% -> factor=(80-40)/60=0.6667 -> BIG=33, MID=13
         CHECK(soh == 40,      "aged_soh40: SOH=40");
         CHECK(aged == true,   "aged_soh40: aged=true");
         CHECK(getBatteryAgePenalty(6) == 33, "aged_soh40: BIG=50*0.667=33");
         CHECK(getBatteryAgePenalty(3) == 13, "aged_soh40: MID=20*0.667=13");
 
     } else if (sc == "aged_soh20") {
-        // SOH=20% -> factor=1.0 -> BIG=50, MID=20 (matches legacy max)
         CHECK(soh == 20,      "aged_soh20: SOH=20");
         CHECK(aged == true,   "aged_soh20: aged=true");
         CHECK(getBatteryAgePenalty(6) == 50, "aged_soh20: BIG=50 (max)");
         CHECK(getBatteryAgePenalty(3) == 20, "aged_soh20: MID=20 (max)");
 
     } else if (sc == "overheat") {
-        // F2.3: transient Overheat must NOT set aged, must NOT raise BIG penalty.
         CHECK(health == 60,   "overheat: health=Overheat -> 60");
         CHECK(overheat == true, "overheat: overheat=true");
         CHECK(soh == -1,      "overheat: no charge_full -> SOH=-1");
@@ -141,7 +110,6 @@ int main() {
         CHECK(getBatteryAgePenalty(3) == 0, "overheat: MID penalty 0");
 
     } else if (sc == "dead") {
-        // Dead is chronic hardware failure -> aged=true, factor=1.0.
         CHECK(health == 20,   "dead: health=Dead -> 20");
         CHECK(overheat == false, "dead: not overheat");
         CHECK(soh == -1,      "dead: no charge_full -> SOH=-1");
@@ -150,7 +118,6 @@ int main() {
         CHECK(getBatteryAgePenalty(3) == 20, "dead: MID=20");
 
     } else if (sc == "cycle_only_700") {
-        // SOH nodes absent; cycle=700 -> factor=(700-500)/500=0.4 -> BIG=20, MID=8
         CHECK(health == 100,  "cycle_only_700: health=Good -> 100");
         CHECK(cycles == 700,  "cycle_only_700: cycle_count=700");
         CHECK(soh == -1,      "cycle_only_700: no charge_full -> SOH=-1");
@@ -159,7 +126,6 @@ int main() {
         CHECK(getBatteryAgePenalty(3) == 8,  "cycle_only_700: MID=20*0.4=8");
 
     } else if (sc == "cycle_only_1k") {
-        // cycle=1000 -> factor=1.0 -> BIG=50, MID=20
         CHECK(cycles == 1000, "cycle_only_1k: cycle_count=1000");
         CHECK(soh == -1,      "cycle_only_1k: SOH=-1");
         CHECK(aged == true,   "cycle_only_1k: aged=true");
@@ -167,8 +133,6 @@ int main() {
         CHECK(getBatteryAgePenalty(3) == 20, "cycle_only_1k: MID=20");
 
     } else if (sc == "no_design") {
-        // charge_full present but charge_full_design missing -> SOH=-1, fall back.
-        // health=Good, cycle=100 -> no aging signal -> penalty 0.
         CHECK(soh == -1,      "no_design: SOH=-1 (design missing)");
         CHECK(health == 100, "no_design: health=Good");
         CHECK(cycles == 100, "no_design: cycle=100");
@@ -176,10 +140,6 @@ int main() {
         CHECK(getBatteryAgePenalty(6) == 0, "no_design: BIG penalty 0");
 
     } else if (sc == "fresh_spurious_soh") {
-        // Real-device bug: OEM health=Good(100), cycle_count=1, but an unlearned
-        // charge_full/charge_full_design gives SOH=70. A lone sub-80% derived SOH
-        // on a fresh battery must NOT declare aged (screenshot: "已老化" on a
-        // 100%-health, 1-cycle battery).
         CHECK(health == 100, "fresh_spurious_soh: health=Good -> 100");
         CHECK(cycles == 1,   "fresh_spurious_soh: cycle_count=1");
         CHECK(soh == 70,     "fresh_spurious_soh: SOH=70 (spurious low)");

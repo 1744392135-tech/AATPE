@@ -1,8 +1,3 @@
-// test_scene_wiring.cpp — host tests for the W5 slow-thread wiring layer.
-// Covers:  input -> SceneFeatures mapping,  Scene -> GameScene mapping,
-// gate routing (on=new engine / off=legacy byte-identical), and the W5 §6
-// LOADING->C1-preboost suppression. The production I/O glue is compiled out under
-// AATPE_HOST_TEST, so this links only the pure mapping layer.
 #include "scene_infer_wiring.h"
 #include "scene_infer.h"
 #include "c2_envelope.h"
@@ -10,8 +5,6 @@
 #include <cmath>
 #include <cstring>
 
-// Minimal boost bridge stubs (c2_envelope.o references them even though this test
-// does not drive c2Tick; keep the link hermetic). Match gpu_boost.h C++ mangled sig.
 namespace aatpe {
 void aatpeBoostSet(const char* source, int level) { (void)source; (void)level; }
 void aatpeBoostClear(const char* source) { (void)source; }
@@ -19,7 +12,7 @@ void aatpeBoostClear(const char* source) { (void)source; }
 
 using namespace aatpe;
 using namespace aatpe::scenefuse;
-using namespace aatpe::scenewire;   // RC6: TickSlopeState/TickSlopeOut pure slope types
+using namespace aatpe::scenewire;
 
 static int s_pass = 0;
 static int s_fail = 0;
@@ -32,7 +25,6 @@ static int s_fail = 0;
 int main() {
     printf("=== scene_infer wiring host tests ===\n");
 
-    // ---- 1. input -> SceneFeatures mapping ----
     printf("T1: buildFeatures maps raw inputs -> SceneFeatures\n");
     {
         scenewire::WiringInputs in;
@@ -74,7 +66,6 @@ int main() {
         CHECK(f.lowFpsStreak == 0, "T1: lowFpsStreak left to engine (0)");
     }
 
-    // fpsTarget clamp: 0 -> default 60 (no div by zero in engine).
     printf("T2: buildFeatures fpsTarget clamp + caps subset\n");
     {
         scenewire::WiringInputs in;
@@ -89,7 +80,6 @@ int main() {
         CHECK(f.gpuTag && std::strcmp(f.gpuTag, "none") == 0, "T2: gpuTag none");
     }
 
-    // ---- 2. Scene -> GameScene mapping ----
     printf("T3: mapSceneToGameScene\n");
     {
         CHECK((int)scenewire::mapSceneToGameScene(Scene::MENU)       == (int)GameScene::MENU,    "T3: MENU->MENU");
@@ -100,7 +90,6 @@ int main() {
         CHECK((int)scenewire::mapSceneToGameScene(Scene::UNKNOWN)    == (int)GameScene::UNKNOWN, "T3: UNKNOWN->UNKNOWN");
     }
 
-    // ---- 3. gate routing ----
     printf("T4: chooseRoute gate\n");
     {
         CHECK(scenewire::chooseRoute(false) == scenewire::SceneRoute::LEGACY_DETECTGAME,
@@ -109,15 +98,12 @@ int main() {
               "T4: switch on -> new scenefuse engine");
     }
 
-    // ---- 4. W5 §6 LOADING -> C1 preboost suppression ----
     printf("T5: shouldSuppressPreboost (LOADING must not arm C1 latency)\n");
     {
-        // Off path: never suppress, whatever the committed scene.
         CHECK(scenewire::shouldSuppressPreboost(false, Scene::LOADING) == false,
               "T5: off+LOADING -> no suppression (C1 untouched)");
         CHECK(scenewire::shouldSuppressPreboost(false, Scene::COMBAT) == false,
               "T5: off+COMBAT -> no suppression");
-        // On path: only LOADING suppresses.
         CHECK(scenewire::shouldSuppressPreboost(true, Scene::LOADING) == true,
               "T5: on+LOADING -> C1 latency held back");
         CHECK(scenewire::shouldSuppressPreboost(true, Scene::COMBAT) == false,
@@ -128,7 +114,6 @@ int main() {
               "T5: on+MENU -> no suppression");
     }
 
-    // ---- 5. end-to-end through the engine on a known flat load (smoke) ----
     printf("T6: buildFeatures -> inferScene produces a sane decision\n");
     {
         SceneState st; resetSceneStateForTest(st);
@@ -140,15 +125,13 @@ int main() {
         in.tapsPerSec = 2.0f;
         SceneFeatures f = scenewire::buildFeatures(in);
         SceneDecision d = inferScene(f, st, 1000);
-        // A stable game frame at 60fps on-target should not be UNKNOWN/BACKGROUND.
         CHECK(d.scene != Scene::BACKGROUND, "T6: foreground game not BACKGROUND");
         CHECK(d.confidence01 > 0.0f, "T6: confidence produced");
     }
 
-    // ---- 7. RC6 (A2/A3): pure slope computation over REAL wall time ----------
     printf("T7: computeTickSlopes first tick has no delta\n");
     {
-        TickSlopeState st;            // have=false
+        TickSlopeState st;
         TickSlopeState next;
         TickSlopeOut o = scenewire::computeTickSlopes(st, 50.0f, 100, 0.0f, 5.0f, next);
         CHECK(next.have == true, "T7: state marked have after first tick");
@@ -164,7 +147,6 @@ int main() {
         scenewire::computeTickSlopes(st, 40.0f, 100, 0.0f, 5.0f, n1);
         TickSlopeState n2;
         TickSlopeOut o = scenewire::computeTickSlopes(n1, 50.0f, 200, 0.0f, 5.0f, n2);
-        // gpu 40->50 over 5s => +2 %/s ; touch 100 events over 5s => 20 taps/s
         CHECK(std::fabs(o.dGpuBusy_dt - 2.0f) < 1e-3f, "T8: dGpuBusy_dt = +2 %/s over 5s");
         CHECK(std::fabs(o.tapsPerSec - 20.0f) < 1e-3f, "T8: tapsPerSec = 20 over 5s");
         TickSlopeState n3;
@@ -179,10 +161,8 @@ int main() {
         scenewire::computeTickSlopes(st, 40.0f, 100, 0.0f, 25.0f, m1);
         TickSlopeState m2;
         TickSlopeOut o = scenewire::computeTickSlopes(m1, 50.0f, 200, 0.0f, 25.0f, m2);
-        // gpu 40->50 over 25s => +0.4 %/s (old hardcoded-5s code would report +2.0).
         CHECK(std::fabs(o.dGpuBusy_dt - (10.0f/25.0f)) < 1e-3f, "T9: dGpuBusy_dt uses 25s not 5s");
         CHECK(std::fabs(o.tapsPerSec - (100.0f/25.0f)) < 1e-3f, "T9: tapsPerSec uses 25s not 5s");
-        // The 5s computation reported +2.0 %/s; the 25s must be ~5x smaller.
         CHECK(o.dGpuBusy_dt < 1.0f, "T9: 25s slope far below the old inflated 5s value");
     }
 
@@ -191,29 +171,24 @@ int main() {
         TickSlopeState st; TickSlopeState r1;
         scenewire::computeTickSlopes(st, 40.0f, 100, 0.0f, 5.0f, r1);
         TickSlopeState r2;
-        // run-delay 0.0 -> 0.1 over 5s => dRunDelay_dt = 0.02 /s
         TickSlopeOut o = scenewire::computeTickSlopes(r1, 40.0f, 100, 0.1f, 5.0f, r2);
         CHECK(std::fabs(o.dRunDelay_dt - 0.02f) < 1e-3f, "T10: dRunDelay_dt = +0.02 /s");
     }
 
-    // ---- 11. RC6 (M3): TEAMFIGHT fires on >=2 rising slopes even WITHOUT GPU ----
     printf("T11: TEAMFIGHT hits on >=2 slopes with no GPU present\n");
     {
         SceneState st; resetSceneStateForTest(st);
-        st.enterMs = 1000 - 120000;   // past the 60s warm-up so requiredHits=2
+        st.enterMs = 1000 - 120000;
         scenewire::WiringInputs in;
         in.fpsNow = 60.0f; in.fpsTarget = 60.0f; in.missRate = 0.005f;
         in.cpuUtilFg = 30.0f; in.psiCpuSome = 5.0f;
-        // No GPU at all: no cap bit, "none" tag, gpuBusy=0.
         in.gpuBusyPct = 0.0f; in.gpuAvail = false; in.gpuTag = "none";
         in.psiAvail = true; in.schedAvail = true; in.fgIsGame = true;
-        // Two rising slopes: taps AND run-delay (no GPU slope available).
         in.tapsPerSec = 3.0f; in.dTaps_dt = 1.0f;
         in.runDelayPerMs = 0.02f; in.dRunDelay_dt = 0.05f;
         in.dGpuBusy_dt = 0.0f;
         SceneFeatures f = scenewire::buildFeatures(in);
         CHECK((f.capsMask & kCapGPU) == 0, "T11: GPU cap absent");
-        // A couple of ticks to settle, then assert TEAMFIGHT (>=2 hits: taps+runDelay).
         inferScene(f, st, 1000);
         SceneDecision d2 = inferScene(f, st, 2000);
         CHECK(d2.scene == Scene::TEAMFIGHT, "T11: TEAMFIGHT reached on 2 slopes w/o GPU");
@@ -231,13 +206,11 @@ int main() {
 
     printf("T13: detectExternalSchedulers flags the audit processes, ignores normal ones\n");
     {
-        // Quiet system: only ordinary processes.
         scenewire::ExternalSchedReport quiet = scenewire::detectExternalSchedulers(
             {"surfaceflinger", "system_server", "com.android.systemui", "mt_manager"});
         CHECK(quiet.detected == false, "T13: ordinary processes -> no detection");
         CHECK(quiet.matchCount == 0, "T13: matchCount 0 on quiet system");
 
-        // The exact two audit processes running.
         scenewire::ExternalSchedReport hit = scenewire::detectExternalSchedulers(
             {"surfaceflinger", "scene_fas_ft_provider", "system_server", "scene_swap_controller"});
         CHECK(hit.detected == true, "T13: Scene工具箱 processes detected");
@@ -247,7 +220,6 @@ int main() {
         CHECK(hit.matchedNames.find("scene_swap_controller") != std::string::npos,
               "T13: second name reported");
 
-        // Substring match on a module directory name, not just exact process basename.
         scenewire::ExternalSchedReport mod = scenewire::detectExternalSchedulers(
             {"some_scenetoolbox_module"});
         CHECK(mod.detected == true, "T13: module-dir substring match detects Scene工具箱");
@@ -255,12 +227,6 @@ int main() {
 
     printf("T14: state-file contract for the WebUI external-scheduler banner (#102)\n");
     {
-        // The publish path (externalSchedulerScanOnce, daemon-only) writes two files:
-        //   external_scheduler_detected <- rep.detected ? "1" : "0"
-        //   external_scheduler_names    <- rep.matchedNames  (comma-joined)
-        // The WebUI banner (webui/index.html refreshExternalScheduler) reads exactly
-        // these bytes. Pin the contract here so a future change to the report shape
-        // cannot silently break the JS banner.
         scenewire::ExternalSchedReport clean = scenewire::detectExternalSchedulers(
             {"surfaceflinger", "system_ui"});
         CHECK(clean.detected == false, "T14: clean system -> detected=false (file would be '0')");
@@ -269,7 +235,6 @@ int main() {
         scenewire::ExternalSchedReport hit = scenewire::detectExternalSchedulers(
             {"scene_fas_ft_provider", "scene_swap_controller"});
         CHECK(hit.detected == true, "T14: competing schedulers -> detected=true (file would be '1')");
-        // matchedNames must be comma-separated so the JS can split/display it.
         CHECK(hit.matchedNames.find(',') != std::string::npos,
               "T14: two matches -> names contain a comma separator");
         CHECK(hit.matchedNames.find("scene_fas_ft_provider") != std::string::npos,

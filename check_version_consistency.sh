@@ -1,13 +1,4 @@
 #!/bin/bash
-# #101 / release-convergence item 21: AATPE version + artifact consistency CI.
-# Single source of truth = ./VERSION (VERSION_NAME / VERSION_CODE).
-# Derives expected values from VERSION (no hard-coded copy) and verifies:
-#   - VERSION / module.prop / aatpe-version.h / shell banners / WebUI footer
-#   - the 4 built binaries in ./ (strings version, arch, PIE)
-#   - the 4 binaries packaged under system/bin/ embed the version (no stale prebuilt)
-#   - WebUI three copies are byte-identical
-#   - aatpe.conf two copies are byte-identical
-# Any drift -> FAIL (exit 1). Missing packaged binaries -> FAIL (no more warn-and-pass).
 set -e
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -46,7 +37,6 @@ check_contains "uninstall.sh"    "$EXPECTED_VERSION" "uninstall.sh banner"
 check_contains "webroot/index.html" "$EXPECTED_VERSION" "WebUI (webroot)"
 check_contains "webui/index.html"     "$EXPECTED_VERSION" "WebUI (webui)"
 
-# --- RELEASE_ID / BUILD_DATE four-way consistency (SCR-02 fix) --------------
 EXPECTED_REL="$(grep -m1 '^RELEASE_ID=' "$SRC_DIR/VERSION" | cut -d= -f2 | tr -d ' \r')"
 EXPECTED_DATE="$(grep -m1 '^BUILD_DATE=' "$SRC_DIR/VERSION" | cut -d= -f2 | tr -d ' \r')"
 [ -z "$EXPECTED_REL" ]   && { echo "FATAL: cannot read RELEASE_ID from VERSION"; exit 2; }
@@ -54,20 +44,15 @@ EXPECTED_DATE="$(grep -m1 '^BUILD_DATE=' "$SRC_DIR/VERSION" | cut -d= -f2 | tr -
 echo ""
 echo "--- RELEASE_ID / BUILD_DATE (derived from VERSION) ---"
 echo "Expected: $EXPECTED_REL / $EXPECTED_DATE"
-# module.prop: version line must contain "(relXX)" and description must too
 check_contains "module.prop" "version=$EXPECTED_VERSION ($EXPECTED_REL)" "module.prop version (rel)"
-check_contains "module.prop" "($EXPECTED_REL, versionCode $EXPECTED_CODE)" "module.prop description (rel)"
-# aatpe-version.h: macros must match
 check_contains "aatpe-version.h" "\"$EXPECTED_REL\""  "aatpe-version.h AATPE_RELEASE_ID"
 check_contains "aatpe-version.h" "\"$EXPECTED_DATE\"" "aatpe-version.h AATPE_BUILD_DATE"
-# WebUI footer: the visible "relXX · 构建于 YYYY-MM-DD" marker
 if grep -q "$EXPECTED_REL · 构建于 $EXPECTED_DATE" "$SRC_DIR/webui/index.html"; then
     echo "[ok]   WebUI footer marker ($EXPECTED_REL · 构建于 $EXPECTED_DATE)"
 else
     echo "[FAIL] WebUI footer missing '$EXPECTED_REL · 构建于 $EXPECTED_DATE' in webui/index.html"; ERRORS=$((ERRORS+1))
 fi
 
-# --- WebUI three copies byte-identical (item 4) -----------------------------
 echo ""
 echo "--- WebUI three copies ---"
 if cmp -s "$SRC_DIR/webui/index.html" "$SRC_DIR/webroot/index.html" && \
@@ -78,7 +63,6 @@ else
     ERRORS=$((ERRORS+1))
 fi
 
-# --- aatpe.conf two copies byte-identical (item 5) --------------------------
 echo ""
 echo "--- aatpe.conf two copies ---"
 if cmp -s "$SRC_DIR/aatpe.conf" "$SRC_DIR/system/etc/aatpe/aatpe.conf"; then
@@ -88,7 +72,6 @@ else
     ERRORS=$((ERRORS+1))
 fi
 
-# --- built binaries: strings version + arch (item 21) -----------------------
 echo ""
 echo "--- built binaries (./) ---"
 BINS="aatped aatpe-cli aatpe-watchdog aatpe-probe"
@@ -108,7 +91,6 @@ for b in $BINS; do
     fi
 done
 
-# --- packaged binaries under system/bin/ must exist + embed the version ------
 echo ""
 echo "--- packaged binaries (system/bin/) ---"
 for b in $BINS; do
@@ -125,12 +107,6 @@ for b in $BINS; do
     fi
 done
 
-# --- P2-32: each binary must support a --version / -v / version --------------
-# On this x86_64 cross-build host the aarch64 ELFs cannot be executed directly,
-# so we (a) audit each source to confirm the --version branch exists and prints
-# AATPE_VERSION, and (b) re-confirm the built ./ binary embeds the version
-# string that branch prints. If qemu-aarch64 happens to be installed we also
-# execute `./binary --version` and match its stdout.
 echo ""
 echo "--- --version support (P2-32) ---"
 declare -A BIN_SRC=( [aatped]=aatped_main.cpp [aatpe-cli]=aatpe-cli.cpp \
@@ -143,7 +119,6 @@ for b in $BINS; do
         echo "[FAIL] $b ($src) has NO --version branch"
         ERRORS=$((ERRORS+1))
     fi
-    # Best-effort runtime check when an aarch64 emulator is present.
     if command -v qemu-aarch64 >/dev/null 2>&1; then
         out=$(qemu-aarch64 "$SRC_DIR/$b" --version 2>/dev/null || true)
         if echo "$out" | grep -q "$EXPECTED_VERSION"; then

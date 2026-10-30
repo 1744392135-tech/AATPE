@@ -1,5 +1,3 @@
-// fz_gfxinfo.cpp - fuzz aatpe::frameaware::parseGfxinfoFramestats
-// (surface #2: `dumpsys gfxinfo <pkg> framestats` parsing). Heavier parser.
 #include <string>
 #include <vector>
 #include "aatped.h"
@@ -7,7 +5,6 @@
 
 using namespace aatpe::frameaware;
 
-// parseGfxinfoFramestats is a global (non-namespaced) function in frame.cpp.
 std::vector<double> parseGfxinfoFramestats(const std::string& out);
 
 int main(int argc, char** argv) {
@@ -16,7 +13,7 @@ int main(int argc, char** argv) {
   fz::Options opt;
   opt.name = logTag;
   opt.crashDir = crashDir;
-  opt.minIter = 1000000ULL;    // heavier parser gate
+  opt.minIter = 1000000ULL;
   opt.minSeconds = 1500.0;
   opt.seed = 0xC0FFEE ^ 0x19;
   opt.maxLen = 65536;

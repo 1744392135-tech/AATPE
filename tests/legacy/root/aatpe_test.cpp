@@ -1,6 +1,3 @@
-// aatpe_test.cpp - Core unit tests for AATPE // [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Real tests: RFC 4231 HMAC-SHA256 vectors, LearningModel init/predict/update/save/load
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -57,7 +54,6 @@ static void test_hmac_rfc4231_case2() {
 
 static void test_hmac_large_data() {
     printf("\n=== Test: HMAC-SHA256 Large Data (>1024 bytes, regression-fix #12) ===\n");
-    // 2560 bytes: 2048 * 0xAB + 512 * 0xCD (exercises multi-block SHA256 path)
     const char* keyStr = "aatpe_large_hmac_test_key_v66_regression";
     std::vector<unsigned char> data;
     data.reserve(2560);
@@ -69,11 +65,9 @@ static void test_hmac_large_data() {
                               data.data(), data.size(), out);
     std::string hex = aatpe_crypto::toHex(out, 32);
     TEST_ASSERT(hex.size() == 64, "HMAC output is 64 hex chars (not truncated)");
-    // Precomputed with Python hmaclib (HMAC-SHA256, same key+data)
     const char* expected = "9cd6626b2b06a7caa45ea0c59acb21712a25c19a24807f2026a22e05f51c4f02";
     TEST_ASSERT(hex == expected, "large-data HMAC matches precomputed value");
     if (hex != expected) printf("    got: %s\n    exp: %s\n", hex.c_str(), expected);
-    // Determinism: second computation must match
     unsigned char out2[32];
     aatpe_crypto::hmacSha256((const unsigned char*)keyStr, strlen(keyStr),
                               data.data(), data.size(), out2);
@@ -223,8 +217,6 @@ static void test_extract_features() {
     TEST_ASSERT(f.capacity > 0.0f, "capacity > 0");
 }
 
-// P0-fix: Independent thread-rule colon-format parser (mirrors thread_scan.cpp:loadThreadRules)
-// Tests the 5-field colon split logic and S0-S5 role mapping without global g_rules dependency.
 enum TestThreadRole {
     TROLE_S0_SYSTEM = 0,
     TROLE_S1_UI = 1,
@@ -289,33 +281,27 @@ static void test_thread_rules_parse() {
         if (ok) rules.push_back(r);
     }
     TEST_ASSERT(rules.size() == 3, "g_rules.size()==3 after parsing 3 rules");
-    // Rule 0: *:UnityMain:S3:GAME_MAIN:88
     TEST_ASSERT(rules[0].procPattern == "*", "rule0 procPattern=='*'");
     TEST_ASSERT(rules[0].threadPattern == "UnityMain", "rule0 threadPattern=='UnityMain'");
     TEST_ASSERT(rules[0].role == TROLE_S3_GAME, "rule0 role==ROLE_S3_GAME");
     TEST_ASSERT(rules[0].subtype == "GAME_MAIN", "rule0 subtype=='GAME_MAIN'");
     TEST_ASSERT(rules[0].priority == 88, "rule0 priority==88");
-    // Rule 1: *:RenderThread:S2:RENDER:88
     TEST_ASSERT(rules[1].procPattern == "*", "rule1 procPattern=='*'");
     TEST_ASSERT(rules[1].threadPattern == "RenderThread", "rule1 threadPattern=='RenderThread'");
     TEST_ASSERT(rules[1].role == TROLE_S2_RENDER, "rule1 role==ROLE_S2_RENDER");
     TEST_ASSERT(rules[1].subtype == "RENDER", "rule1 subtype=='RENDER'");
     TEST_ASSERT(rules[1].priority == 88, "rule1 priority==88");
-    // Rule 2: surfaceflinger:*:S0:SYSTEM:99
     TEST_ASSERT(rules[2].procPattern == "surfaceflinger", "rule2 procPattern=='surfaceflinger'");
     TEST_ASSERT(rules[2].threadPattern == "*", "rule2 threadPattern=='*'");
     TEST_ASSERT(rules[2].role == TROLE_S0_SYSTEM, "rule2 role==ROLE_S0_SYSTEM");
     TEST_ASSERT(rules[2].subtype == "SYSTEM", "rule2 subtype=='SYSTEM'");
     TEST_ASSERT(rules[2].priority == 99, "rule2 priority==99");
-    // Negative: old equals-format line must be rejected
     TestThreadRule bad;
     bool badOk = parseThreadRuleLine("GameThread=UnityMain,RenderThread", bad);
     TEST_ASSERT(!badOk, "old equals-format line is rejected (not parsed)");
-    // Negative: malformed colon line (only 2 fields) must be rejected
     TestThreadRule bad2;
     bool bad2Ok = parseThreadRuleLine("proc:thread", bad2);
     TEST_ASSERT(!bad2Ok, "malformed 2-field colon line is rejected");
-    // Comment and empty lines skipped
     TestThreadRule cmt;
     TEST_ASSERT(!parseThreadRuleLine("# this is a comment", cmt), "comment line skipped");
     TEST_ASSERT(!parseThreadRuleLine("   ", cmt), "empty/whitespace line skipped");

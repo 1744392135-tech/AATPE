@@ -1,4 +1,3 @@
-// AATPE - App launch preloading sub-header
 #ifndef AATPED_APPLAUNCH_H
 #define AATPED_APPLAUNCH_H
 
@@ -6,7 +5,6 @@
 #include <unordered_map>
 #include <mutex>
 
-// Predictive preloading
 struct AppLaunchRecord {
     std::string packageName;
     int mainThreadTid = 0;
@@ -20,4 +18,4 @@ void recordAppLaunch(const char* packageName, int mainTid, int renderTid);
 void checkAndPreloadNewApps(void);
 int getPreloadedPreferredCpu(const char* packageName);
 
-#endif // AATPED_APPLAUNCH_H
+#endif

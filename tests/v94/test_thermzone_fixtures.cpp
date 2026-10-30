@@ -1,17 +1,3 @@
-// test_fixtures.cpp — hermetic /sys/class/thermal fixtures for the integrated
-// CPU thermal-zone selector (shared/cpu_zone_selector.h).
-//
-// Exercises the SAME root-injectable reader loop that ships in aatpe-watchdog.cpp
-// (wdReadMaxTempCelsiusUnder) against fake thermal_zone*/{type,temp} trees, and
-// asserts the five required on-device scenarios for Dimensity 1200:
-//   F1  MTK rogue zone (intermittent -1, drifts to 87) does NOT cause a false
-//       WARNING throttle (trusted stays at the healthy cluster ~71C).
-//   F2  A real, clean big core at 85C DOES trigger WARNING (trusted >= 80C).
-//   F3  ANY CPU zone reaching 110C still latches emergency (anyCpu >= 110C);
-//       the rogue filter must never swallow real overheat.
-//   F4  Single CPU zone fail-safe (lone zone is trusted, not dropped to 0).
-//   F5  badStreak recovery: a flaky zone that comes back to valid reads rejoins
-//       the trusted set.
 #include "cpu_zone_selector.h"
 
 #include <cstdio>
@@ -28,14 +14,9 @@
 
 using namespace thermzone;
 
-// Per-fixture cross-scan history (reset between fixtures).
 static std::map<std::string, ZoneHist> g_hist;
 static void resetHist() { g_hist.clear(); }
 
-// One scan: read the fake tree, run the selector EXACTLY ONCE (as production does),
-// and return both trustedCpuTempC (WARNING/90C wall) and anyCpuTempC (emergency wall).
-// Mirrors the production watchdog reader loop (type + temp, three-tier unit normalize,
-// -1/out-of-range => invalid).
 struct ScanOut { long long trustedC; long long anyC; };
 static ScanOut scanOnce(const char* root) {
     DIR* base = opendir(root);
@@ -72,20 +53,19 @@ static ScanOut scanOnce(const char* root) {
             if (raw > 1500)     c = (int)(raw / 1000);
             else if (raw > 150) c = (int)(raw / 10);
             else                c = (int)raw;
-            r.valid = (c > 0 && c < 150);   // -1/0 sentinel => invalid
+            r.valid = (c > 0 && c < 150);
             r.tempC = r.valid ? c : INT_MIN;
         } else { r.valid = false; r.tempC = INT_MIN; }
         tz.push_back(r);
     }
     closedir(base);
 
-    SelectResult sel = select(tz, g_hist);   // exactly one select per scan
+    SelectResult sel = select(tz, g_hist);
     out.trustedC = sel.trustedCpuTempC > 0 ? sel.trustedCpuTempC : -1;
     out.anyC     = sel.anyCpuTempC;
     return out;
 }
 
-// ---- fake sysfs helpers ----
 static void writeFile(const std::string& p, const std::string& content) {
     FILE* f = fopen(p.c_str(), "w"); if (!f) { perror(p.c_str()); exit(2); }
     fputs(content.c_str(), f); fclose(f);
@@ -107,7 +87,6 @@ static int g_pass = 0, g_fail = 0;
 int main() {
     const std::string root = "/tmp/tz_fixture_root";
 
-    // ---- F1: MTK rogue zone4 (-1 intermittent, drifts to 87); zone1 stable 71.
     printf("=== F1: Dimensity rogue zone4 -> no false WARNING (trusted~71, anyCpu=87) ===\n");
     {
         rmrf(root); resetHist();
@@ -117,14 +96,13 @@ int main() {
             rmrf(root);
             makeZone(root, "thermal_zone1", "mtktsap", s.z1);
             makeZone(root, "thermal_zone4", "mtktscpu", s.z4);
-            makeZone(root, "thermal_zone26", "battery", 30);   // denylist, ignored
+            makeZone(root, "thermal_zone26", "battery", 30);
             o = scanOnce(root.c_str());
         }
         CK(o.trustedC <= 75, "F1: trusted~71 (rogue z4=87 removed; no false 80C throttle)");
         CK(o.anyC == 87, "F1: anyCpu still 87 (rogue zone not hidden from global CPU max)");
     }
 
-    // ---- F2: clean big core ramps to 85C (LITTLE 65) -> WARNING fires.
     printf("\n=== F2: clean big core 85C -> WARNING DOES fire (trusted>=80) ===\n");
     {
         rmrf(root); resetHist();
@@ -139,7 +117,6 @@ int main() {
         CK(o.trustedC >= 80, "F2: trusted=85 (real big-core heat triggers WARNING)");
     }
 
-    // ---- F3: any CPU zone hits 112C -> emergency latches (anyCpu>=110).
     printf("\n=== F3: any CPU zone 112C -> emergency MUST latch (anyCpu>=110) ===\n");
     {
         rmrf(root); resetHist();
@@ -153,7 +130,6 @@ int main() {
         CK(o.anyC >= 110, "F3: anyCpu>=110 -> emergency hard wall latches (no overheat swallowed)");
     }
 
-    // ---- F4: single CPU zone fail-safe.
     printf("\n=== F4: lone CPU zone is trusted (fail-safe) ===\n");
     {
         rmrf(root); resetHist();
@@ -162,7 +138,6 @@ int main() {
         CK(o.trustedC == 80, "F4: lone zone trusted=80 (not dropped to 0 / -1)");
     }
 
-    // ---- F5: badStreak recovery -> flaky zone rejoins trusted set.
     printf("\n=== F5: badStreak recovery -> z4 returns to trusted set ===\n");
     {
         rmrf(root); resetHist();

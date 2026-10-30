@@ -1,7 +1,3 @@
-// test_ebpf_agg.cpp - v94 hermetic unit tests for aatped_ebpf_agg.cpp
-// Links aatped_ebpf_agg.cpp + ebpf_agg_deps (see build.sh recipe).
-// Covers: getCachedForegroundApp TTL cache, AatpeEventConsumer onFork/onExit/
-// onSwitch/onExec counters + thread bookkeeping, pending counts, clearPending.
 #include <cstdio>
 #include <cstring>
 #include <atomic>
@@ -15,10 +11,6 @@
 
 using namespace aatpe_ebpf;
 
-// ---- N4 (v4.4.0) helpers: foreground-cache concurrency contract -----------
-// g_cachedForegroundApp / g_foregroundCacheTimeMs / g_foregroundMutex are owned
-// by aatped_ebpf_agg.cpp and exported via aatped_ebpf_agg.h. We seed/clear them
-// the same way production code does (under g_foregroundMutex).
 static long long nowMsNow() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -33,17 +25,12 @@ static void clearCache() {
     g_cachedForegroundApp.clear();
     g_foregroundCacheTimeMs = 0;
 }
-// A thread that grabs g_foregroundMutex and keeps it held for holdMs, exactly
-// like an in-flight on-device foreground detection that blocks on the same mutex
-// (and could wait out a ~3s `dumpsys`). getCachedForegroundApp() must NEVER wait
-// for this thread: it must serve from cache (or "unknown") in milliseconds.
 static std::atomic<bool> s_holderReady{false};
 static void holderHoldsLock(long long holdMs) {
     std::lock_guard<std::mutex> lk(g_foregroundMutex);
     s_holderReady.store(true, std::memory_order_release);
     std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
 }
-// Calls getCachedForegroundApp(), returns the value and wall-clock elapsed (ms).
 static std::string callTimed(long long& elapsedMsOut) {
     auto t0 = std::chrono::steady_clock::now();
     std::string v = getCachedForegroundApp();
@@ -123,12 +110,6 @@ int main() {
         CHECK(g_threads.count(3001) == 1, "duplicate fork does not create 2 entries");
     }
 
-    // ---- N4: getCachedForegroundApp must never block on a held mutex -------
-    // The host stub for aatpeDetectForegroundApp() returns "unknown" instantly, so
-    // on host the discriminating signal for the lock-held branch is the RETURNED
-    // VALUE: the fixed code hands back the cached package (even slightly stale)
-    // instead of falling into the slow path ("unknown"). The wall-clock bound
-    // additionally proves we do NOT wait for the holder to release the mutex.
     printf("=== N4-1: fresh cache + lock free -> returns cached value ===\n");
     seedCache("com.example.game");
     {
@@ -142,13 +123,11 @@ int main() {
     seedCache("com.example.game");
     {
         s_holderReady.store(false, std::memory_order_release);
-        std::thread h(holderHoldsLock, 1000LL);            // holds the mutex for 1000ms
+        std::thread h(holderHoldsLock, 1000LL);
         while (!s_holderReady.load(std::memory_order_acquire))
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         long long dt = 0;
         std::string fg = callTimed(dt);
-        // Fixed: try_lock failed -> returns the cached pkg WITHOUT touching the slow
-        // path. Pre-fix code fell through to aatpeDetectForegroundApp() -> "unknown".
         CHECK(fg == "com.example.game", "lock held + cache non-empty -> returns cached pkg (NOT slow-path unknown)");
         CHECK(dt < 200, "lock held -> returns in <200ms (never waits out the 1000ms holder / dumpsys)");
         h.join();

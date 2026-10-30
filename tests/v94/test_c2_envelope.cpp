@@ -1,7 +1,3 @@
-// test_c2_envelope.cpp — host tests for c2Tick() decision branches not covered
-// by test_scene_infer.cpp's T1-T13: rate-limit arm blocking, COMBAT->COMBAT_BOOST,
-// MENU->IDLE, and the thermal gate (emergency / halLevel>=1 / headroom<0.15).
-// gpu_boost actuator (aatpeBoostSet/Clear) is stubbed no-op.
 #include <cstdio>
 #include <cstdint>
 #include "c2_envelope.h"
@@ -9,7 +5,6 @@
 using namespace aatpe;
 using namespace aatpe::c2env;
 
-// stub the only actuator C2 touches (declared in namespace aatpe by gpu_boost.h)
 namespace aatpe {
 void aatpeBoostSet(const char*, int) {}
 void aatpeBoostClear(const char*) {}
@@ -37,17 +32,17 @@ int main() {
         resetC2ForTest();
         c2Tick(0, loadingD(), 0.8f, 0, false);
         CHECK(currentStateForTest() == C2State::LOADING_BOOST, "armed LOADING boost");
-        bool active = c2Tick(1000, loadingD(), 0.10f, 0, false);  // headroom < 0.15
+        bool active = c2Tick(1000, loadingD(), 0.10f, 0, false);
         CHECK(active == false && currentStateForTest() == C2State::IDLE,
               "headroom<0.15 clears boost -> IDLE");
         resetC2ForTest();
         c2Tick(0, loadingD(), 0.8f, 0, false);
-        bool a2 = c2Tick(1000, loadingD(), 0.8f, 1, false);  // halLevel>=1
+        bool a2 = c2Tick(1000, loadingD(), 0.8f, 1, false);
         CHECK(a2 == false && currentStateForTest() == C2State::IDLE,
               "halLevel>=1 clears boost -> IDLE");
         resetC2ForTest();
         c2Tick(0, loadingD(), 0.8f, 0, false);
-        bool a3 = c2Tick(1000, loadingD(), 0.8f, 0, true);  // emergency
+        bool a3 = c2Tick(1000, loadingD(), 0.8f, 0, true);
         CHECK(a3 == false && currentStateForTest() == C2State::IDLE,
               "emergency clears boost -> IDLE");
     }
@@ -73,14 +68,14 @@ int main() {
     printf("=== c2: per-minute rate limit blocks 4th arm ===\n");
     {
         resetC2ForTest();
-        c2Tick(0,    loadingD(), 0.8f, 0, false);   // arm 1
-        c2Tick(1000, menuD(),    0.8f, 0, false);  // clear
-        c2Tick(2000, loadingD(), 0.8f, 0, false);  // arm 2
-        c2Tick(3000, menuD(),    0.8f, 0, false);  // clear
-        c2Tick(4000, loadingD(), 0.8f, 0, false);  // arm 3
+        c2Tick(0,    loadingD(), 0.8f, 0, false);
+        c2Tick(1000, menuD(),    0.8f, 0, false);
+        c2Tick(2000, loadingD(), 0.8f, 0, false);
+        c2Tick(3000, menuD(),    0.8f, 0, false);
+        c2Tick(4000, loadingD(), 0.8f, 0, false);
         CHECK(currentStateForTest() == C2State::LOADING_BOOST, "3rd arm within budget OK");
-        c2Tick(5000, menuD(),    0.8f, 0, false);  // clear
-        c2Tick(6000, loadingD(), 0.8f, 0, false);   // 4th arm attempt -> blocked
+        c2Tick(5000, menuD(),    0.8f, 0, false);
+        c2Tick(6000, loadingD(), 0.8f, 0, false);
         CHECK(currentStateForTest() == C2State::IDLE,
               "4th arm within 1-min window blocked (rate limit)");
     }

@@ -1,7 +1,3 @@
-// tests/test_http_server.cpp - Built-in HTTP server endpoint tests
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// v94 fix / 问题34: 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Compile: g++ -std=c++17 -I.. test_http_server.cpp -o test_http_server
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -13,7 +9,6 @@ static int g_pass = 0, g_fail = 0;
     else { g_fail++; printf("  [FAIL] %s\n", msg); } \
 } while(0)
 
-// P1-7: HTTP server port range 8888-8899
 static bool isValidPort(int port) {
     return port >= 8888 && port <= 8899;
 }
@@ -28,7 +23,6 @@ static void test_port_range() {
     CHECK(!isValidPort(80), "port 80 is not in range");
 }
 
-// P1-7: HTTP request routing
 static std::string routeRequest(const std::string& method, const std::string& path) {
     if (method != "GET") return "405";
     if (path == "/health" || path == "/healthz") return "200 health";
@@ -48,7 +42,6 @@ static void test_http_routing() {
     CHECK(routeRequest("POST", "/health") == "405", "POST /health → 405");
 }
 
-// P1-7: Health endpoint response format
 static std::string buildHealthJson(int uptimeSec, int port, int pid) {
     char buf[256];
     snprintf(buf, sizeof(buf),
@@ -66,7 +59,6 @@ static void test_health_response() {
     CHECK(json.find("\"pid\":5432") != std::string::npos, "contains pid");
 }
 
-// P1-7: State aggregation JSON building
 static std::string buildAggregateJson(const std::vector<std::string>& keys,
                                        const std::vector<std::string>& values) {
     std::string json = "{";
@@ -89,7 +81,6 @@ static void test_state_aggregation() {
     CHECK(json[0] == '{' && json.back() == '}', "valid JSON object braces");
 }
 
-// P1-7: Bind to 127.0.0.1 only (security)
 static bool isLoopbackOnly(const std::string& bindAddr) {
     return bindAddr == "127.0.0.1" || bindAddr == "INADDR_LOOPBACK";
 }
@@ -102,7 +93,6 @@ static void test_loopback_only() {
     CHECK(!isLoopbackOnly("*"), "does NOT bind to all interfaces");
 }
 
-// P2: Thermal cache 1s TTL
 static unsigned long long g_lastRead = 0;
 static bool shouldSkipRead(unsigned long long nowMs) {
     return g_lastRead > 0 && (nowMs - g_lastRead) < 1000;
@@ -117,7 +107,6 @@ static void test_thermal_cache() {
     CHECK(!shouldSkipRead(2001), "read after 1001ms: not skipped (TTL expired)");
 }
 
-// P2: inotify watch limit 256
 static int g_watchCount = 0;
 static constexpr int kMaxWatches = 256;
 static bool addWatch() {

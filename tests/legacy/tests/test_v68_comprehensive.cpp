@@ -1,8 +1,3 @@
-// AATPE v68 Comprehensive Test Suite
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// v94 fix / 问题34: 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Unit tests (20+), Integration tests (10+), AB tests (5+)
-// Compiled with host g++ for logic verification.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,9 +14,6 @@
 #include <fstream>
 #include <sstream>
 
-// ============================================================================
-// Minimal type definitions matching AATPE headers (for host compilation)
-// ============================================================================
 namespace aatpe {
 enum class SystemState { NORMAL=0, DEGRADED=1, PASSIVE=2, EMERGENCY=3 };
 enum ThreadRole { ROLE_S0_SYSTEM=0, ROLE_S1_UI=1, ROLE_S2_RENDER=2, ROLE_S3_GAME=3,
@@ -42,15 +34,11 @@ struct DecisionFusion {
 struct DynamicScoreWeights { bool valid=false; };
 }
 
-// Mock globals
 static std::map<int, aatpe::CpuMetrics> g_cpuMetrics;
 static std::shared_mutex g_cpuMetricsMutex;
 static aatpe::DynamicScoreWeights g_dynamicScoreWeights;
 static std::vector<int> g_allCpus = {0,1,2,3,4,5,6,7};
 
-// ============================================================================
-// HMAC-SHA256 (from aatpe_crypto.h, inlined for test)
-// ============================================================================
 namespace aatpe_crypto {
 struct Sha256Context { uint32_t state[8]; uint64_t bitCount; uint8_t buffer[64]; size_t bufferLen; };
 static const uint32_t K[64] = {
@@ -93,9 +81,6 @@ static bool verifyTestHmac(const std::string& data, const std::string& sig, bool
     return expected == sig;
 }
 
-// ============================================================================
-// Hybrid Learner (minimal reimplementation matching aatpe_ml_hybrid.cpp)
-// ============================================================================
 namespace aatpe_ml_hybrid {
 struct HybridPoolDelta { float weights[15]={0}; int updateCount=0; };
 class HybridLearner {
@@ -152,9 +137,6 @@ static HybridLearner g_hybrid;
 inline HybridLearner& instance(){return g_hybrid;}
 }
 
-// ============================================================================
-// fuseDecisions (matching placement.cpp implementation)
-// ============================================================================
 static aatpe::DecisionFusion fuseDecisions(float heuristicScore, float mlScore,
     float hybridScore, float historyScore, aatpe::SystemState state, bool mlColdStart) {
     aatpe::DecisionFusion f;
@@ -179,9 +161,6 @@ static aatpe::DecisionFusion fuseDecisions(float heuristicScore, float mlScore,
     return f;
 }
 
-// ============================================================================
-// Package whitelist logic (matching thread_scan.cpp)
-// ============================================================================
 static bool isPackageWhitelisted(const std::string& pname, const std::string& wl) {
     if (wl.empty()) return true;
     if (pname.empty()) return false;
@@ -198,9 +177,6 @@ static bool isPackageWhitelisted(const std::string& pname, const std::string& wl
     return false;
 }
 
-// ============================================================================
-// State machine (minimal)
-// ============================================================================
 namespace aatpe_sm {
 struct StateMachine {
     aatpe::SystemState state = aatpe::SystemState::NORMAL;
@@ -209,7 +185,6 @@ struct StateMachine {
     bool transitionTo(aatpe::SystemState target, const std::string& reason) {
         (void)reason;
         if (state == target) return false;
-        // Priority: EMERGENCY > DEGRADED > NORMAL > PASSIVE
         if (state == aatpe::SystemState::EMERGENCY && target != aatpe::SystemState::EMERGENCY) return false;
         history.push_back(state);
         if (history.size() > 50) history.erase(history.begin());
@@ -220,19 +195,11 @@ struct StateMachine {
 };
 }
 
-// ============================================================================
-// Test Framework
-// ============================================================================
 static int g_testsPassed = 0, g_testsFailed = 0;
 static std::vector<std::string> g_failures;
 #define TEST_ASSERT(cond, msg) do { if (!(cond)) { g_testsFailed++; g_failures.push_back(std::string(__func__) + ": " + msg); printf("  FAIL: %s\n", msg); return; } } while(0)
 #define TEST_PASS() do { g_testsPassed++; printf("  PASS\n"); } while(0)
 
-// ============================================================================
-// UNIT TESTS (20+)
-// ============================================================================
-
-// UT1: Hybrid score returns 0 when disabled
 void test_hybrid_score_disabled() {
     printf("[UT1] hybridScore returns 0 when disabled: ");
     aatpe_ml_hybrid::instance().setEnabled(false);
@@ -242,7 +209,6 @@ void test_hybrid_score_disabled() {
     TEST_PASS();
 }
 
-// UT2: Hybrid score returns [0,1] when enabled
 void test_hybrid_score_range() {
     printf("[UT2] hybridScore returns [0,1] when enabled: ");
     aatpe_ml_hybrid::instance().init(3);
@@ -254,7 +220,6 @@ void test_hybrid_score_range() {
     TEST_PASS();
 }
 
-// UT3: Hybrid feature extraction produces valid features
 void test_hybrid_feature_extraction() {
     printf("[UT3] Hybrid feature extraction valid: ");
     aatpe::ThreadInfo ti; ti.nrSwitches = 500; ti.runTime = 50000000ULL; ti.currentCpu = 2;
@@ -267,7 +232,6 @@ void test_hybrid_feature_extraction() {
     TEST_PASS();
 }
 
-// UT4: Hybrid model save/load
 void test_hybrid_save_load() {
     printf("[UT4] Hybrid model save/load: ");
     aatpe_ml_hybrid::instance().init(3);
@@ -284,7 +248,6 @@ void test_hybrid_save_load() {
     TEST_PASS();
 }
 
-// UT5: HMAC signature generation produces 64-char hex
 void test_hmac_generation() {
     printf("[UT5] HMAC signature generation: ");
     std::string sig = computeTestHmac("set_mode=assist");
@@ -295,7 +258,6 @@ void test_hmac_generation() {
     TEST_PASS();
 }
 
-// UT6: HMAC verification accepts valid signature
 void test_hmac_verify_valid() {
     printf("[UT6] HMAC verify valid signature: ");
     std::string cmd = "set_profile=gaming";
@@ -304,46 +266,40 @@ void test_hmac_verify_valid() {
     TEST_PASS();
 }
 
-// UT7: HMAC verification rejects invalid signature
 void test_hmac_verify_invalid() {
     printf("[UT7] HMAC verify invalid signature: ");
     TEST_ASSERT(!verifyTestHmac("set_mode=assist", "00000000000000000000000000000000000000000000000000000000000000", true), "invalid signature accepted");
     TEST_PASS();
 }
 
-// UT8: HMAC empty signature rejected when required
 void test_hmac_empty_sig_required() {
     printf("[UT8] HMAC empty sig rejected when required: ");
     TEST_ASSERT(!verifyTestHmac("cmd", "", true), "empty signature accepted when required");
     TEST_PASS();
 }
 
-// UT9: HMAC empty signature accepted when not required
 void test_hmac_empty_sig_optional() {
     printf("[UT9] HMAC empty sig accepted when optional: ");
     TEST_ASSERT(verifyTestHmac("cmd", "", false), "empty signature rejected when optional");
     TEST_PASS();
 }
 
-// UT10: HMAC replay protection (timestamp > 30s rejected)
 void test_hmac_replay_protection() {
     printf("[UT10] HMAC replay protection: ");
     int64_t now = (int64_t)time(nullptr);
-    int64_t oldTs = now - 31;  // 31 seconds ago
-    int64_t validTs = now - 5;  // 5 seconds ago
-    int64_t futureTs = now + 10; // 10s in future (exceeds 5s skew)
+    int64_t oldTs = now - 31;
+    int64_t validTs = now - 5;
+    int64_t futureTs = now + 10;
     TEST_ASSERT((now - oldTs) > 30, "old timestamp not detected as expired");
     TEST_ASSERT((now - validTs) <= 30, "valid timestamp incorrectly expired");
     TEST_ASSERT((now - futureTs) < -5, "future timestamp not detected as skew");
     TEST_PASS();
 }
 
-// UT11: CPU metrics concurrent read/write consistency
 void test_cpu_metrics_lock() {
     printf("[UT11] CPU metrics concurrent read/write: ");
     std::atomic<bool> stop{false};
     std::atomic<int> readErrors{0};
-    // Writer thread
     std::thread writer([&]() {
         while (!stop.load()) {
             std::unique_lock<std::shared_mutex> wlock(g_cpuMetricsMutex);
@@ -353,7 +309,6 @@ void test_cpu_metrics_lock() {
             }
         }
     });
-    // Reader threads
     std::vector<std::thread> readers;
     for (int r=0;r<4;r++) {
         readers.emplace_back([&]() {
@@ -376,7 +331,6 @@ void test_cpu_metrics_lock() {
     TEST_PASS();
 }
 
-// UT12: Package whitelist - exact match
 void test_whitelist_exact() {
     printf("[UT12] Package whitelist exact match: ");
     std::string wl = "com.android.settings,com.miHoYo.GenshinImpact,com.tencent.tmgp.pubgmhd";
@@ -385,7 +339,6 @@ void test_whitelist_exact() {
     TEST_PASS();
 }
 
-// UT13: Package whitelist - empty allows all
 void test_whitelist_empty() {
     printf("[UT13] Package whitelist empty allows all: ");
     TEST_ASSERT(isPackageWhitelisted("any.package.name", ""), "empty whitelist should allow all");
@@ -393,7 +346,6 @@ void test_whitelist_empty() {
     TEST_PASS();
 }
 
-// UT14: Package whitelist - invalid package name rejected
 void test_whitelist_invalid() {
     printf("[UT14] Package whitelist invalid name: ");
     std::string wl = "com.valid.app";
@@ -402,7 +354,6 @@ void test_whitelist_invalid() {
     TEST_PASS();
 }
 
-// UT15: Package whitelist - whitespace trimming
 void test_whitelist_whitespace() {
     printf("[UT15] Package whitelist whitespace trimming: ");
     std::string wl = " com.android.settings , com.miHoYo.GenshinImpact ";
@@ -411,21 +362,18 @@ void test_whitelist_whitespace() {
     TEST_PASS();
 }
 
-// UT16: setaffinity rollback - failure restores original
 void test_affinity_rollback() {
     printf("[UT16] setaffinity rollback logic: ");
-    // Simulate: save original, attempt setaffinity (fails), rollback
     cpu_set_t originalMask, targetMask;
     CPU_ZERO(&originalMask); CPU_SET(0, &originalMask); CPU_SET(1, &originalMask);
     CPU_ZERO(&targetMask); CPU_SET(2, &targetMask); CPU_SET(3, &targetMask);
     bool affinityModified = true;
-    bool setaffinitySucceeded = false; // simulate failure
+    bool setaffinitySucceeded = false;
     cpu_set_t restoredMask = originalMask;
     if (!setaffinitySucceeded && affinityModified) {
-        restoredMask = originalMask; // rollback
+        restoredMask = originalMask;
     }
     TEST_ASSERT(CPU_EQUAL(&restoredMask, &originalMask), "rollback didn't restore original mask");
-    // Success case: no rollback
     setaffinitySucceeded = true;
     cpu_set_t noRollback = targetMask;
     if (!setaffinitySucceeded) noRollback = originalMask;
@@ -433,7 +381,6 @@ void test_affinity_rollback() {
     TEST_PASS();
 }
 
-// UT17: Decision fusion - four-way weights sum to 1
 void test_fusion_weights_sum() {
     printf("[UT17] Decision fusion four-way weights: ");
     auto f = fuseDecisions(0.8f, 0.6f, 0.5f, 0.7f, aatpe::SystemState::NORMAL, false);
@@ -443,7 +390,6 @@ void test_fusion_weights_sum() {
     TEST_PASS();
 }
 
-// UT18: Decision fusion - ML cold start zeros ML weight
 void test_fusion_cold_start() {
     printf("[UT18] Decision fusion ML cold start: ");
     auto f = fuseDecisions(0.8f, 0.6f, 0.5f, 0.7f, aatpe::SystemState::NORMAL, true);
@@ -453,7 +399,6 @@ void test_fusion_cold_start() {
     TEST_PASS();
 }
 
-// UT19: Decision fusion - divide by zero protection
 void test_fusion_div_zero() {
     printf("[UT19] Decision fusion div-zero protection: ");
     auto f = fuseDecisions(0.5f, 0.0f, 0.0f, 0.0f, aatpe::SystemState::PASSIVE, false);
@@ -462,7 +407,6 @@ void test_fusion_div_zero() {
     TEST_PASS();
 }
 
-// UT20: Decision fusion - state-dependent weights
 void test_fusion_state_dependent() {
     printf("[UT20] Decision fusion state-dependent: ");
     auto fNorm = fuseDecisions(0.5f, 0.5f, 0.5f, 0.5f, aatpe::SystemState::NORMAL, false);
@@ -473,21 +417,18 @@ void test_fusion_state_dependent() {
     TEST_PASS();
 }
 
-// UT21: Frame time outcome formula
 void test_frame_time_outcome() {
     printf("[UT21] Frame time outcome formula: ");
-    float beforeAvg = 16.67f, afterAvg = 12.5f; // improvement
+    float beforeAvg = 16.67f, afterAvg = 12.5f;
     float outcome = (beforeAvg - afterAvg) / beforeAvg;
     TEST_ASSERT(outcome > 0.0f, "improvement should have positive outcome");
     TEST_ASSERT(fabs(outcome - 0.25f) < 0.01f, "outcome formula incorrect");
-    // Degradation
     afterAvg = 20.0f;
     outcome = (beforeAvg - afterAvg) / beforeAvg;
     TEST_ASSERT(outcome < 0.0f, "degradation should have negative outcome");
     TEST_PASS();
 }
 
-// UT22: gfxinfo parsing
 void test_gfxinfo_parse() {
     printf("[UT22] gfxinfo parsing: ");
     std::string mockOutput = "Applications Graphics Acceleration Info:\n"
@@ -495,18 +436,15 @@ void test_gfxinfo_parse() {
         "com.miHoYo.GenshinImpact/\n"
         "Frame stats: Number of frames=100\n"
         "Histogram: 0ms=10 1ms=20 2ms=30 3ms=25 4ms=10 5ms=5\n";
-    // Parse frame count
     size_t pos = mockOutput.find("Number of frames=");
     TEST_ASSERT(pos != std::string::npos, "frame count not found");
     int frameCount = std::stoi(mockOutput.substr(pos + 17));
     TEST_ASSERT(frameCount == 100, "frame count parse incorrect");
-    // Parse histogram
     int totalHist = 10+20+30+25+10+5;
     TEST_ASSERT(totalHist == 100, "histogram sum incorrect");
     TEST_PASS();
 }
 
-// UT23: TTL cache expiration
 void test_ttl_cache() {
     printf("[UT23] TTL cache expiration: ");
     struct CacheEntry { std::string data; long long expireTime; };
@@ -514,16 +452,15 @@ void test_ttl_cache() {
     long long now = 1000;
     bool expired = (entry.expireTime > 0 && now > entry.expireTime);
     TEST_ASSERT(!expired, "entry with expireTime=0 should not be expired");
-    entry.expireTime = 900; // expired 100ms ago
+    entry.expireTime = 900;
     expired = (entry.expireTime > 0 && now > entry.expireTime);
     TEST_ASSERT(expired, "entry should be expired");
-    entry.expireTime = 1100; // valid for 100ms more
+    entry.expireTime = 1100;
     expired = (entry.expireTime > 0 && now > entry.expireTime);
     TEST_ASSERT(!expired, "entry should not be expired");
     TEST_PASS();
 }
 
-// UT24: State machine transitions
 void test_state_machine() {
     printf("[UT24] State machine transitions: ");
     aatpe_sm::StateMachine sm;
@@ -535,7 +472,6 @@ void test_state_machine() {
     TEST_PASS();
 }
 
-// UT25: State machine priority (EMERGENCY blocks downgrade)
 void test_state_machine_priority() {
     printf("[UT25] State machine priority: ");
     aatpe_sm::StateMachine sm;
@@ -545,7 +481,6 @@ void test_state_machine_priority() {
     TEST_PASS();
 }
 
-// UT26: State machine history
 void test_state_machine_history() {
     printf("[UT26] State machine history: ");
     aatpe_sm::StateMachine sm;
@@ -558,50 +493,38 @@ void test_state_machine_history() {
     TEST_PASS();
 }
 
-// ============================================================================
-// INTEGRATION TESTS (10+)
-// ============================================================================
-
-// IT1: Daemon startup to stable (simulated)
 void test_daemon_startup() {
     printf("[IT1] Daemon startup to stable: ");
-    // Simulate: init config, init hybrid, init ML, start HTTP, enter loop
     bool configLoaded = true;
     bool hybridInit = false, mlInit = false, httpStarted = false;
     aatpe_ml_hybrid::instance().init(3);
     aatpe_ml_hybrid::instance().setEnabled(true);
     hybridInit = aatpe_ml_hybrid::instance().getPoolCount() == 3;
-    mlInit = true; // simulated
-    httpStarted = true; // simulated
+    mlInit = true;
+    httpStarted = true;
     TEST_ASSERT(configLoaded && hybridInit && mlInit && httpStarted, "startup incomplete");
     TEST_PASS();
 }
 
-// IT2: Hybrid learning -> decision fusion end-to-end
 void test_hybrid_fusion_e2e() {
     printf("[IT2] Hybrid->fusion end-to-end: ");
     aatpe_ml_hybrid::instance().init(3);
     aatpe_ml_hybrid::instance().setEnabled(true);
-    // Train
     float f[15]={1,0.5f,0.3f,0.2f,0.5f,0.5f,1.0f,0.5f,1.0f,0,0,0,0,0,0};
     for (int i=0;i<200;i++) aatpe_ml_hybrid::instance().sgdUpdate(2, f, 0.9f);
-    // Predict
     float hybridScore = aatpe_ml_hybrid::instance().predict(2, f);
     TEST_ASSERT(hybridScore > 0.0f, "hybrid score is zero after training");
-    // Fuse
     auto fusion = fuseDecisions(0.7f, 0.6f, hybridScore, 0.5f, aatpe::SystemState::NORMAL, false);
     TEST_ASSERT(fusion.final_score > 0.0f, "fused score is zero");
     TEST_ASSERT(fusion.contrib_hybrid > 0.0f, "hybrid contribution is zero");
     TEST_PASS();
 }
 
-// IT3: HMAC control command end-to-end
 void test_hmac_control_e2e() {
     printf("[IT3] HMAC control command end-to-end: ");
     std::string cmd = "set_mode=assist";
     int64_t ts = (int64_t)time(nullptr);
     std::string signedCmd = cmd + ".ts=" + std::to_string(ts) + ".sig=" + computeTestHmac(cmd);
-    // Parse
     size_t sigPos = signedCmd.rfind(".sig=");
     TEST_ASSERT(sigPos != std::string::npos, "sig not found");
     std::string sig = signedCmd.substr(sigPos + 5);
@@ -616,7 +539,6 @@ void test_hmac_control_e2e() {
     TEST_PASS();
 }
 
-// IT4: CPU metrics concurrent read/write integration
 void test_cpu_metrics_integration() {
     printf("[IT4] CPU metrics concurrent integration: ");
     std::atomic<bool> stop{false};
@@ -653,7 +575,6 @@ void test_cpu_metrics_integration() {
     TEST_PASS();
 }
 
-// IT5: Package whitelist scan filtering integration
 void test_whitelist_scan_integration() {
     printf("[IT5] Package whitelist scan integration: ");
     std::string wl = "com.miHoYo.GenshinImpact,com.tencent.tmgp.pubgmhd";
@@ -665,18 +586,15 @@ void test_whitelist_scan_integration() {
     }
     TEST_ASSERT(scanned == 2, "should scan 2 whitelisted packages");
     TEST_ASSERT(skipped == 4, "should skip 4 non-whitelisted packages");
-    // Empty whitelist scans all
     scanned = 0;
     for (const auto& p : allProcs) if (isPackageWhitelisted(p, "")) scanned++;
     TEST_ASSERT(scanned == 6, "empty whitelist should scan all");
     TEST_PASS();
 }
 
-// IT6: State machine + thermal driver integration
 void test_state_thermal_integration() {
     printf("[IT6] State machine + thermal integration: ");
     aatpe_sm::StateMachine sm;
-    // Simulate thermal escalation
     int temp = 40;
     if (temp > 70) sm.transitionTo(aatpe::SystemState::DEGRADED, "thermal_high");
     TEST_ASSERT(sm.state == aatpe::SystemState::NORMAL, "should be NORMAL at 40C");
@@ -689,16 +607,13 @@ void test_state_thermal_integration() {
     TEST_PASS();
 }
 
-// IT7: Decision fusion + frame time outcome integration
 void test_fusion_frame_outcome() {
     printf("[IT7] Fusion + frame-time outcome integration: ");
-    // Simulate: placement decision, measure frame time before/after, update ML
     float beforeFrame = 16.67f, afterFrame = 14.0f;
-    float outcome = (beforeFrame - afterFrame) / beforeFrame; // 0.16 = 16% improvement
+    float outcome = (beforeFrame - afterFrame) / beforeFrame;
     aatpe_ml_hybrid::instance().init(3);
     aatpe_ml_hybrid::instance().setEnabled(true);
     float f[15]={1,0.4f,0.2f,0.3f,0.5f,0.5f,1,0.5f,0.6f,0,0,0,0,0,0};
-    // Use outcome as training target
     float target = std::clamp(0.5f + outcome * 0.5f, 0.0f, 1.0f);
     for (int i=0;i<100;i++) aatpe_ml_hybrid::instance().sgdUpdate(1, f, target);
     float pred = aatpe_ml_hybrid::instance().predict(1, f);
@@ -708,34 +623,28 @@ void test_fusion_frame_outcome() {
     TEST_PASS();
 }
 
-// IT8: eBPF load fallback integration
 void test_ebpf_fallback() {
     printf("[IT8] eBPF load fallback integration: ");
-    // Simulate: try syscall precompiled (fail), try precompiled (fail), try embedded (fail), fallback
     bool syscallOk = false, precompiledOk = false, embeddedOk = false;
     std::string state = "LOADING";
     if (syscallOk) state = "ACTIVE";
     else if (precompiledOk) state = "ACTIVE";
     else if (embeddedOk) state = "ACTIVE";
-    else state = "DEGRADED"; // fallback to /proc/schedstat
+    else state = "DEGRADED";
     TEST_ASSERT(state == "DEGRADED", "should fall back to DEGRADED");
-    // Simulate timeout
     state = "LOAD_TIMEOUT";
     bool preservedTimeout = (state == "LOAD_TIMEOUT");
     TEST_ASSERT(preservedTimeout, "LOAD_TIMEOUT state should be preserved");
     TEST_PASS();
 }
 
-// IT9: WebUI data refresh integration
 void test_webui_refresh() {
     printf("[IT9] WebUI data refresh integration: ");
-    // Simulate: read state files, build JSON, serve via HTTP
     std::map<std::string,std::string> stateFiles;
     stateFiles["control_mode"] = "assist";
     stateFiles["tracked_threads"] = "42";
     stateFiles["cpu_temp"] = "45";
     stateFiles["ml_hybrid_enabled"] = "1";
-    // Build JSON
     std::ostringstream json;
     json << "{";
     bool first = true;
@@ -752,16 +661,12 @@ void test_webui_refresh() {
     TEST_PASS();
 }
 
-// IT10: Config hot reload integration
 void test_config_hot_reload() {
     printf("[IT10] Config hot reload integration: ");
-    // Simulate: load config, change file, reload, verify update
     struct Config { bool hmacRequired=false; bool hybridEnabled=false; int thermalLimit=120; std::string whitelist=""; };
     Config cfg;
-    // Initial load
     cfg.hmacRequired = false; cfg.hybridEnabled = false; cfg.thermalLimit = 120;
     TEST_ASSERT(!cfg.hmacRequired, "initial hmac should be false");
-    // Hot reload with new values
     cfg.hmacRequired = true; cfg.hybridEnabled = true; cfg.thermalLimit = 110; cfg.whitelist = "com.test.app";
     TEST_ASSERT(cfg.hmacRequired, "reloaded hmac should be true");
     TEST_ASSERT(cfg.hybridEnabled, "reloaded hybrid should be true");
@@ -770,16 +675,10 @@ void test_config_hot_reload() {
     TEST_PASS();
 }
 
-// ============================================================================
-// AB TESTS (5 groups)
-// ============================================================================
-
 struct ABResult { std::string name; float groupA; float groupB; float deltaPct; std::string winner; };
 
-// AB1: Hybrid learning on vs off - migration count, frame time, temp
 void test_ab_hybrid() {
     printf("[AB1] Hybrid ON vs OFF: ");
-    // Simulate 1000 placement decisions with and without hybrid
     srand(42);
     int migrationsOn = 0, migrationsOff = 0;
     float frameTimeOn = 0, frameTimeOff = 0;
@@ -790,13 +689,11 @@ void test_ab_hybrid() {
     for (int i=0;i<500;i++) aatpe_ml_hybrid::instance().sgdUpdate(2, f, 0.85f);
     for (int i=0;i<1000;i++) {
         float heuristic = 0.3f + (rand()%100)/200.0f;
-        // With hybrid
         float hybrid = aatpe_ml_hybrid::instance().predict(2, f);
         auto fOn = fuseDecisions(heuristic, 0.5f, hybrid, 0.4f, aatpe::SystemState::NORMAL, false);
         if (fOn.final_score > 0.55f) migrationsOn++;
         frameTimeOn += 16.67f * (1.0f - fOn.final_score * 0.1f);
         tempOn += 40.0f + fOn.final_score * 10.0f;
-        // Without hybrid
         auto fOff = fuseDecisions(heuristic, 0.5f, 0.0f, 0.4f, aatpe::SystemState::NORMAL, false);
         if (fOff.final_score > 0.55f) migrationsOff++;
         frameTimeOff += 16.67f * (1.0f - fOff.final_score * 0.1f);
@@ -810,7 +707,6 @@ void test_ab_hybrid() {
     TEST_PASS();
 }
 
-// AB2: HMAC on vs off - control command success rate
 void test_ab_hmac() {
     printf("[AB2] HMAC ON vs OFF: ");
     int totalCmds = 1000;
@@ -818,11 +714,9 @@ void test_ab_hmac() {
     srand(123);
     for (int i=0;i<totalCmds;i++) {
         std::string cmd = "set_mode=assist";
-        bool validSig = (rand() % 100) < 90; // 90% valid signatures
+        bool validSig = (rand() % 100) < 90;
         std::string sig = validSig ? computeTestHmac(cmd) : "invalid";
-        // HMAC ON: only valid sigs succeed
         if (verifyTestHmac(cmd, sig, true)) successOn++;
-        // HMAC OFF: all commands succeed (signature optional, backward compat)
         successOff++;
     }
     float rateOn = (float)successOn / totalCmds * 100;
@@ -834,7 +728,6 @@ void test_ab_hmac() {
     TEST_PASS();
 }
 
-// AB3: Package whitelist vs no whitelist - scan count, CPU usage
 void test_ab_whitelist() {
     printf("[AB3] Whitelist vs none: ");
     std::vector<std::string> allProcs;
@@ -859,18 +752,15 @@ void test_ab_whitelist() {
     TEST_PASS();
 }
 
-// AB4: CPU metrics locked vs unlocked - data consistency
 void test_ab_cpu_lock() {
     printf("[AB4] CPU metrics locked vs unlocked: ");
     std::atomic<bool> stop{false};
     std::atomic<int> errorsLocked{0}, errorsUnlocked{0};
-    // Locked test
     std::map<int,aatpe::CpuMetrics> lockedMetrics;
     std::thread wLock([&](){ while(!stop){std::unique_lock<std::shared_mutex> l(g_cpuMetricsMutex);for(int c=0;c<8;c++){aatpe::CpuMetrics m;m.util=c*10;lockedMetrics[c]=m;}}});
     std::thread rLock([&](){ while(!stop){std::shared_lock<std::shared_mutex> l(g_cpuMetricsMutex);for(int c=0;c<8;c++){auto it=lockedMetrics.find(c);if(it!=lockedMetrics.end()&&(it->second.util<0||it->second.util>100))errorsLocked++;}}});
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
     stop.store(true); wLock.join(); rLock.join();
-    // Unlocked test (simulated - just verify the concept)
     stop.store(false);
     std::map<int,aatpe::CpuMetrics> unlockedMetrics;
     std::thread wNoLock([&](){ while(!stop){for(int c=0;c<8;c++){aatpe::CpuMetrics m;m.util=c*10;unlockedMetrics[c]=m;}}});
@@ -882,7 +772,6 @@ void test_ab_cpu_lock() {
     TEST_PASS();
 }
 
-// AB5: Decision fusion vs old softmax - migration decision quality
 void test_ab_fusion_vs_softmax() {
     printf("[AB5] Fusion vs softmax: ");
     srand(999);
@@ -893,15 +782,12 @@ void test_ab_fusion_vs_softmax() {
         float ml = 0.3f + (rand()%100)/200.0f;
         float hybrid = 0.4f + (rand()%100)/250.0f;
         float history = 0.3f + (rand()%100)/200.0f;
-        // Four-way fusion
         auto f = fuseDecisions(heuristic, ml, hybrid, history, aatpe::SystemState::NORMAL, false);
         totalScoreFusion += f.final_score;
-        // Old softmax (heuristic + ML only, temperature=1.0)
         float temp = 1.0f;
         float eh = std::exp(heuristic / temp), em = std::exp(ml / temp);
         float softmaxScore = (heuristic * eh + ml * em) / (eh + em);
         totalScoreSoftmax += softmaxScore;
-        // "Better" decision = higher score (simulated ground truth)
         float groundTruth = (heuristic + ml + hybrid + history) / 4.0f;
         if (fabs(f.final_score - groundTruth) < fabs(softmaxScore - groundTruth)) betterDecisionsFusion++;
         else betterDecisionsSoftmax++;
@@ -913,9 +799,6 @@ void test_ab_fusion_vs_softmax() {
     TEST_PASS();
 }
 
-// ============================================================================
-// Main
-// ============================================================================
 int main() {
     printf("================================================================\n");
     printf("AATPE v68 Comprehensive Test Suite\n");

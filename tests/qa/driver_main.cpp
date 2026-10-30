@@ -1,10 +1,3 @@
-// driver_main.cpp — standalone fallback "fuzzer" main for hosts without
-// -fsanitize=fuzzer. Iterates a seed corpus directory and feeds every file
-// (plus /dev/stdin) into LLVMFuzzerTestOneInput(). This is NOT coverage-guided
-// fuzzing, but it actually runs the production parser over a curated corpus
-// under ASan+UBSan — it is a real regression sweep, not a no-op.
-//
-// Usage: fuzz_<name> <corpus-dir> [extra files...]
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -36,7 +29,6 @@ static void run_file(const char* path) {
 }
 
 int main(int argc, char** argv) {
-    // No args: read stdin once.
     if (argc < 2) {
         std::string all;
         char tmp[4096];

@@ -1,4 +1,3 @@
-// AATPE v94 Integration Test runner
 #include "it_common.h"
 
 extern void scenario1_daemon_loop();
@@ -69,23 +68,18 @@ int main() {
 
     g_it.mockRoot = getenv("AATPE_IT_ROOT") ? getenv("AATPE_IT_ROOT") : "/tmp/aatpe_it_root";
 
-    // the integration harness drives the documented direct recovery
-    // path (EMERGENCY->DEGRADED->NORMAL) back-to-back across scenarios. Disable
-    // the 5s state-transition dwell here; the dwell itself is covered by the
-    // v94 hermetic test_state.cpp suite.
     aatpe_state_setDwellMsForTest(0);
 
     int ran = 0;
     const char* only = getenv("AATPE_ONLY");
     for (const auto& s : kScenarios) {
-        // Filter by AATPE_ONLY env var (comma-separated prefixes)
         if (only && *only) {
             std::string o(only);
             if (o.find(s.name) == std::string::npos) continue;
         }
         printf("\n>>> Running %s\n", s.name);
-        itResetToFreshState();   // issue #17: isolate scenarios from prior global state
-        itTeardownScenario();    // v4.2.9 E7: isolate on-disk state/control leftovers
+        itResetToFreshState();
+        itTeardownScenario();
         size_t before = g_it.points.size();
         try {
             s.fn();
@@ -105,7 +99,6 @@ int main() {
         ran++;
     }
 
-    // ---- coverage table ----
     printf("\n\n================ INTEGRATION COVERAGE TABLE ================\n");
     printf("%-26s %6s %6s %6s %8s\n", "Scenario", "Total", "Pass", "Fail", "Cov%");
     int grandTotal = 0, grandPass = 0;
@@ -126,7 +119,6 @@ int main() {
            grandTotal - grandPass, grandCov);
     printf("===========================================================\n");
 
-    // ---- machine-readable dump for the report generator ----
     FILE* rep = fopen((g_it.mockRoot + "/it_result.txt").c_str(), "w");
     if (rep) {
         fprintf(rep, "TOTAL_POINTS=%d\nPASSED=%d\nFAILED=%d\nCOV=%.2f\n",
@@ -137,7 +129,6 @@ int main() {
         }
         fclose(rep);
     }
-    // thermal timeline
     FILE* tl = fopen((g_it.mockRoot + "/it_timeline.txt").c_str(), "w");
     if (tl) {
         for (auto& e : g_it.timeline) fprintf(tl, "%lld %s\n", e.first, e.second.c_str());

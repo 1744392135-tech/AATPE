@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Host regression for v4.3.6 touch per-thread uclamp wiring.
-# Builds ONLY the pure decision core + controller (no production daemon deps)
-# and runs under normal / ASan+UBSan / TSan.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"

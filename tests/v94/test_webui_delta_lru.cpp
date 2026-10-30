@@ -1,11 +1,3 @@
-// test_webui_delta_lru.cpp — HTTP-01 regression: delta baseline LRU eviction.
-//
-// Before the fix, g_deltaBaselines.erase(begin()) removed the lexicographically
-// smallest cid (std::map key order), NOT the least-recently-used client. This
-// test proves that after the table fills and a new cid arrives, the LRU client
-// (not the lexicographically smallest) is evicted.
-//
-// Build: linked into the webui_http recipe.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -57,7 +49,6 @@ static std::string httpOnce(int port, const std::string& req) {
     return out;
 }
 
-// Extract the body (after \r\n\r\n).
 static std::string bodyOf(const std::string& resp) {
     size_t p = resp.find("\r\n\r\n");
     return (p == std::string::npos) ? "" : resp.substr(p + 4);
@@ -77,12 +68,9 @@ int main() {
     int port = aatpe::webui_http::getHttpPort();
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // Read daemon token.
     std::string tok;
     {
         std::string r = httpOnce(port, "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
-        // We need the token; read it via the file (the test runs as root in CI,
-        // or the stub STATE_DIR is readable).
         FILE* f = fopen("/tmp/aatpe_v94_state/daemon_token", "r");
         if (f) { char buf[256]; if (fgets(buf, sizeof(buf), f)) tok = buf; tok.erase(tok.find_last_not_of("\r\n")+1); fclose(f); }
     }
@@ -94,32 +82,20 @@ int main() {
         return bodyOf(httpOnce(port, req));
     };
 
-    // Step 1: Prime cid "aaa" (first request → baseline established).
     std::string r1 = deltaReq("aaa");
     CHECK(r1.find("\"changed_keys\":[") != std::string::npos, "prime cid=aaa returns changed_keys array");
 
-    // Step 2: Fill 31 more cids (total 32 = kMaxDeltaClients).
-    // Use cids "n00".."n30" — lexicographically these are all AFTER "aaa" (since 'n' > 'a').
     for (int i = 0; i < 31; i++) {
         char cid[8]; snprintf(cid, sizeof(cid), "n%02d", i);
         deltaReq(cid);
     }
 
-    // Step 3: Re-access "aaa" to make it the MOST recently used (MRU).
     std::string r2 = deltaReq("aaa");
-    // Since nothing changed, changed_keys should be empty (baseline still alive).
     bool aaaHasBaseline = (r2.find("\"changed_keys\":[]") != std::string::npos);
     CHECK(aaaHasBaseline, "cid=aaa baseline survives (empty changed_keys after re-access)");
 
-    // Step 4: Add a 33rd cid "zzz" → triggers eviction.
-    // Under lexicographic eviction, "aaa" would survive (it's not the smallest —
-    // "n00" is smaller than "aaa"? No: 'n' > 'a', so "aaa" < "n00". So "aaa" IS
-    // the lexicographically smallest and WOULD be evicted by the old bug).
-    // Under LRU eviction, "aaa" was just accessed (MRU) and should survive.
     deltaReq("zzz");
 
-    // Step 5: Re-access "aaa". If LRU works, baseline survives → empty changed_keys.
-    // If old lex bug: "aaa" was evicted → full resync (non-empty changed_keys).
     std::string r3 = deltaReq("aaa");
     bool aaaSurvived = (r3.find("\"changed_keys\":[]") != std::string::npos);
     CHECK(aaaSurvived, "LRU: MRU cid=aaa survives eviction (empty changed_keys, got: " +

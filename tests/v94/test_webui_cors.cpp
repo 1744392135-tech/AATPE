@@ -1,17 +1,3 @@
-// test_webui_cors.cpp — CORS isolation fix regression (v4.3.0 pre-research).
-//
-// Pins the Problem-1 fix on webui_http.cpp:
-//   - Trusted manager origins (KernelSU/Magisk/APatch webview asset origins) and
-//     the sandboxed "null" origin (file:// / WebViewAssetLoader) get a byte-for-byte
-//     Access-Control-Allow-Origin echo + Vary: Origin.
-//   - OPTIONS preflight returns Allow-Methods / Allow-Headers (X-Daemon-Token,
-//     Content-Type) / Max-Age.
-//   - NON-whitelist origins get NO Access-Control-Allow-* headers at all.
-//   - No "Access-Control-Allow-Origin: *" naked release; credentialed flag is NOT
-//     paired with the spoofable literal "null" origin.
-//   - daemon token / HMAC / command whitelist / fail-closed do NOT regress:
-//     a null-origin unsigned POST to /control is still rejected, /state/all still
-//     requires the daemon token, CSP/XFO/nosniff are unchanged.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -61,7 +47,6 @@ static int statusOf(const std::string& resp) {
     size_t sp = resp.find(' '); if (sp == std::string::npos) return -1;
     return atoi(resp.c_str() + sp + 1);
 }
-// Return the trimmed value of a response header, or "" if absent.
 static std::string headerVal(const std::string& resp, const char* name) {
     std::string lowerName; for (const char* c = name; *c; ++c) lowerName += (char)((*c>='A'&&*c<='Z')?*c+32:*c);
     size_t pos = 0;
@@ -111,7 +96,6 @@ int main() {
     std::string tok = readDaemonToken();
     CHECK(!tok.empty(), "daemon_token readable");
 
-    // Fail-closed defaults: HMAC required, read-only gate off for the write probe.
     { std::lock_guard<std::mutex> lk(g_cfgMutex); g_cfg.hmacRequired = true; }
     { extern bool g_hmacReadonlyFlag; g_hmacReadonlyFlag = false; }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -142,12 +126,10 @@ int main() {
         CHECK(headerVal(r,"Access-Control-Allow-Origin") == "null",
               ("[C3] ACAO:null served for sandboxed webview (got: '" + headerVal(r,"Access-Control-Allow-Origin") + "')").c_str());
         CHECK(hasHeader(r,"Vary"), "[C3] Vary present for null origin");
-        // SECURITY: the spoofable literal "null" must NOT be paired with credentials.
         CHECK(!hasHeader(r,"Access-Control-Allow-Credentials"),
               "[C3] null origin does NOT get Access-Control-Allow-Credentials:true");
     }
     {
-        // A trusted explicit manager origin DOES keep the credentials flag.
         std::string r = httpOnce(port,
             "GET /health HTTP/1.1\r\nHost: x\r\nOrigin: https://appassets.androidplatform.net\r\nConnection: close\r\n\r\n");
         CHECK(hasHeader(r,"Access-Control-Allow-Credentials"),
@@ -185,7 +167,6 @@ int main() {
               "[C6] Allow-Methods = GET, POST, OPTIONS");
         {
             std::string ah = headerVal(r,"Access-Control-Allow-Headers");
-            // case-insensitive contains check
             std::string ahl = ah; for (auto& c: ahl) c=(c>='A'&&c<='Z')?c+32:c;
             CHECK(ahl.find("x-daemon-token") != std::string::npos &&
                   ahl.find("content-type") != std::string::npos,
@@ -212,10 +193,6 @@ int main() {
             "GET /state/all HTTP/1.1\r\nHost: x\r\nX-Daemon-Token: " + tok +
             "\r\nConnection: close\r\n\r\n");
         int stC8 = statusOf(r);
-        // SO_RCVTIMEO widened to 15s (httpOnce, below): under TSan-instrumented
-        // builds the first authenticated /state/all triggers a full aggregate
-        // JSON serialization that exceeded the old 3s client recv timeout and
-        // returned an empty body (status -1). The assertion still requires 200.
         CHECK(stC8 == 200, ("[C8] /state/all with daemon token -> 200 (got " + std::to_string(stC8) + ")").c_str());
     }
     {
@@ -234,7 +211,7 @@ int main() {
 
     printf("=== C: null-origin unsigned /control write still rejected (no CSRF widening) ===\n");
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(600)); // drain rate-limit
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
         std::string r = httpOnce(port,
             "POST /control HTTP/1.1\r\nHost: x\r\nOrigin: null\r\nContent-Type: text/plain\r\n"
             "Connection: close\r\n\r\nset_mode=active");
@@ -243,7 +220,6 @@ int main() {
     }
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(600));
-        // whitelisted command but no credentials -> still 403, never silently applied.
         std::string r = httpOnce(port,
             "GET /control?cmd=set_mode=active HTTP/1.1\r\nHost: x\r\nOrigin: https://appassets.androidplatform.net\r\nConnection: close\r\n\r\n");
         int st = statusOf(r);

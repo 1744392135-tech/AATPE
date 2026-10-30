@@ -1,7 +1,3 @@
-// test_gpu.cpp - v94 hermetic unit tests for aatped_gpu.cpp
-// Links aatped_gpu.cpp + gpu_deps (see build.sh recipe).
-// Covers: readGpuUtilization (no sysfs on host -> unavailable via g_gpuState),
-// isGpuBottleneck (gpu>80 & cpu<50 gate), getGpuBottleneckDecisionInterval.
 #include <cstdio>
 #include "aatped.h"
 #include "aatped_gpu.h"
@@ -25,10 +21,10 @@ int main() {
 
     printf("=== GPU: bottleneck gate (busy>80 && cpu<50) ===\n");
     g_gpuBusyPercent = 95;
-    bool b1 = isGpuBottleneck(30.0f);  // high gpu, low cpu -> bottleneck
+    bool b1 = isGpuBottleneck(30.0f);
     CHECK(b1 == true, "gpu busy 95 + cpu 30 -> bottleneck");
     CHECK(g_gpuBottleneck == true, "g_gpuBottleneck flag set");
-    bool b2 = isGpuBottleneck(70.0f); // high gpu but also high cpu -> not
+    bool b2 = isGpuBottleneck(70.0f);
     CHECK(b2 == false, "gpu busy 95 + cpu 70 -> not bottleneck");
 
     printf("=== GPU: decision interval doubles on bottleneck ===\n");

@@ -1,10 +1,3 @@
-// fz_daemon_stub.cpp - minimal host globals for fz_control (and any fuzz target
-// that pulls the real aatped_control call graph). Provides ONLY the daemon-wide
-// globals/sinks that live in aatped_main.cpp on device. It DELIBERATELY does NOT
-// redefine any utility function (trim/atomicWriteFile/mkdirIfNotExist/readFile/
-// writeFile/aatpeExec/logMsg/verifyCommandHmac...) because the fuzz build links
-// the REAL aatped_utils.o / aatped_logging.o / aatped_hmac.o, which already
-// define those -- duplicating them would be a multiple-definition link error.
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
@@ -40,7 +33,6 @@ std::mutex g_mlMutex;
 std::mutex g_hybridMutex;
 std::atomic<unsigned long> g_mlSaveSuccess{0}, g_mlSaveFail{0};
 
-// frame.cpp closure globals (fz_pkglist inlines frame.cpp)
 PerAppConfig g_currentAppConfig{};
 std::mutex g_perAppMutex;
 RefreshRateMode g_refreshRateModeEnum{};

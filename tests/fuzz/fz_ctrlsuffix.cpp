@@ -1,17 +1,3 @@
-// fz_ctrlsuffix.cpp - R-W3 strengthened: fuzz /control suffix parsing with REAL
-// auth-semantic assertions (not just "no crash").
-//
-// On host, g_cfg.hmacRequired=true (Config default), verifyCommandHmac stub is
-// always true, and no session auth. So the production flow requires:
-//   1. .sig= present and non-empty   -> else 403
-//   2. .ts= parseable by stoll       -> else 403
-//   3. .nonce= present and non-empty  -> else 403 (LED-154)
-//   4. ts within ±300s wall clock     -> else 403
-// Only then does it reach commandQueueEnqueue -> "HTTP/1.1 200" + "ok":true.
-//
-// ASSERTION: if the response contains "HTTP/1.1 200" (queued), the input MUST
-// have had all three security fields present and ts in-window. Any 200 from
-// a malformed input = auth bypass = semantic failure (abort + dump).
 #include <string>
 #include <cstdio>
 #include <cstring>
@@ -22,7 +8,6 @@
 
 #include "webui_http.cpp"
 
-// Mirror the production suffix parser (webui_http.cpp:877-904) for reference.
 struct SuffixRef {
   bool hasSig = false, hasTs = false, hasNonce = false;
   std::string sig, nonce;
@@ -62,7 +47,7 @@ int main(int argc, char** argv) {
   opt.name = logTag;
   opt.crashDir = crashDir;
   opt.minIter = 20000000ULL;
-  opt.minSeconds = 900.0;   // strengthened: ≥900s per user spec
+  opt.minSeconds = 900.0;
   opt.seed = 0xC0FFEE ^ 0x41;
   opt.maxLen = 512;
   opt.seeds = {
@@ -77,9 +62,8 @@ int main(int argc, char** argv) {
   fz::run(opt, [&](const std::string& in) {
     std::string resp = handleControl(in, false, false);
     bool got200 = resp.find("HTTP/1.1 200") != std::string::npos;
-    if (!got200) return;   // fail-closed: no assertion needed
+    if (!got200) return;
 
-    // Got a 200 (queued). Verify the input was security-complete.
     SuffixRef ref = refParse(in);
     int64_t now = (int64_t)time(nullptr);
     int64_t age = now - ref.ts;
@@ -103,7 +87,7 @@ int main(int argc, char** argv) {
         (int)ref.nonce.empty(), (int)tsInWindow,
         (long long)ref.ts, (long long)age, path);
       fflush(stderr);
-      abort();   // stop campaign immediately on auth bypass
+      abort();
     }
   });
   fprintf(stderr, "[%s] DONE: semantic_fails=%llu\n",

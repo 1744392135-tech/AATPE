@@ -1,5 +1,4 @@
 #!/bin/bash
-# batch fz build: compile common prod TUs once, link each fz + stubs.
 set -u
 FZ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$FZ_DIR/../.." && pwd)"
@@ -9,7 +8,6 @@ CXX=g++
 SAN="-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1"
 INC="-I$SRC -I$SRC/shared -I$STUB -D__clang_version__=\"host\""
 
-# directory stubs
 cat > "$OUT/dirs.cpp" <<'EOF'
 const char* STATE_DIR="/tmp/aatpe_state";
 const char* CONF_DIR="/tmp/aatpe_conf";
@@ -18,8 +16,7 @@ int stateCacheIsSeeded(){return 1;}
 EOF
 $CXX -std=c++17 -w -fPIC -pthread $SAN $INC -c "$OUT/dirs.cpp" -o "$OUT/p/dirs.o" || exit 1
 
-# prod objects (function-sections for the heavy webui_json so only jsonEscape survives)
-compile() { # $1=tuple  $2=extra
+compile() {
   $CXX -std=c++17 -O1 -w -fPIC -pthread $SAN $INC ${2:-} -c "$SRC/$1.cpp" -o "$OUT/p/$1.o" 2>"$OUT/p/$1.err" \
     && echo "cc $1" || { echo "CCFAIL $1"; head -3 "$OUT/p/$1.err"; }
 }
@@ -28,7 +25,6 @@ compile aatped_control ""
 compile aatped_utils ""
 compile aatped_hmac ""
 compile aatped_logging ""
-# webui_json gc
 $CXX -std=c++17 -O1 -w -fPIC -pthread $SAN -ffunction-sections -fdata-sections $INC -c "$SRC/webui_json.cpp" -o "$OUT/p/webui_json.o" 2>/dev/null && echo "cc webui_json"
 
 PASS=0; FAIL=0; BF=0

@@ -1,4 +1,3 @@
-// aatpe_interfaces.cpp - 接口实现 (P3接口接入)
 #include "aatpe_interfaces.h"
 #include "aatped.h"
 #include "aatpe_ml.h"
@@ -27,9 +26,6 @@ Decision DefaultPlacementDecider::decidePlacement(const ThreadInfo& ti, const Co
 }
 
 int DefaultCpuMonitor::getCpuCount() {
-    // MON-01 fix: g_cpuCount is written by detectCpuTopology() under
-    // g_topologyRwMutex; reading it without the lock is a data race.
-    // Mirror event_monitor.cpp:103's locking discipline.
     std::lock_guard<std::mutex> lk(g_topologyRwMutex);
     return g_cpuCount;
 }
@@ -49,22 +45,12 @@ int DefaultCpuMonitor::getCpuFrequency(int cpuId) {
     return 2000000;
 }
 
-// A5: sysfs thermal_zone temp is normally millidegrees (50000 = 50C), but some
-// zones report centidegrees (5025 = 50.25C) or even whole degrees (50). The old
-// `temp/1000` assumed millidegrees and returned 0 for centi/whole-degree sensors.
-// Mirror the hwmon magnitude test in thermal.cpp: >1500 already milli, >150 centi,
-// else whole-degrees. Normalize to millidegrees then divide by 1000.
 static int normalizeTempToC(int raw) {
     int a = raw < 0 ? -raw : raw;
     int milli = (a > 1500) ? raw : (a > 150 ? raw * 100 : raw * 1000);
     return milli / 1000;
 }
 
-// F04[P3]: classify a thermal_zone type string as a plausible SoC/CPU temperature
-// source. Factored out (a) so it can be unit-tested on host without /sys and (b) so
-// the fallback below does not blindly read zone0, which on many devices is the
-// battery/skin/charger zone. Battery/skin/charger/gpu/pch names that would
-// otherwise substring-match ("ap"/"soc") are explicitly rejected.
 static bool thermalZoneLooksLikeCpu(const char* type) {
     if (!type || !*type) return false;
     if (strcasestr(type, "battery") || strcasestr(type, "skin") ||
@@ -80,9 +66,6 @@ static bool thermalZoneLooksLikeCpu(const char* type) {
 }
 
 int DefaultCpuMonitor::getTemperature() {
-    // P1-fix (issue 32): previously hardcoded thermal_zone0, which on many
-    // devices is battery/skin/GPU, not CPU. Scan thermal zones looking for one
-    // whose type string is a CPU/SoC zone.
     for (int z = 0; z < 16; z++) {
         char tpath[128];
         char npath[128];
@@ -93,7 +76,6 @@ int DefaultCpuMonitor::getTemperature() {
         char type[64] = {0};
         if (fgets(type, sizeof(type), nf) == nullptr) { fclose(nf); continue; }
         fclose(nf);
-        // Trim newline
         size_t L = strlen(type);
         while (L > 0 && (type[L-1]=='\n'||type[L-1]=='\r')) type[--L] = '\0';
         if (!thermalZoneLooksLikeCpu(type)) continue;
@@ -103,11 +85,6 @@ int DefaultCpuMonitor::getTemperature() {
         if (fscanf(f, "%d", &temp) == 1) { fclose(f); return normalizeTempToC(temp); }
         fclose(f);
     }
-    // F04[P3]: do NOT blindly fall back to zone0. On many devices zone0 is the
-    // battery/skin/charger zone; reading it as "CPU temp" injected noise into the
-    // ML ThreadFeatures.thermal feature. Only adopt zone0 if its OWN type passes
-    // the CPU/SoC classifier; otherwise return the unknown sentinel (40) so the ML
-    // feature treats the reading as missing rather than as battery temperature.
     {
         char npath[128];
         snprintf(npath, sizeof(npath), "/sys/class/thermal/thermal_zone0/type");
@@ -133,12 +110,9 @@ int DefaultCpuMonitor::getTemperature() {
 }
 
 #ifdef AATPE_HOST_TEST
-// Test seam: expose the zone classifier for host unit tests (no /sys needed).
 bool aatpeThermalZoneLooksLikeCpuForTest(const char* type) { return thermalZoneLooksLikeCpu(type); }
 #endif
 
-// P2-7: Explicit placeholder. Production daemon uses inotify-based
-// EventMonitor. This poll()-based fallback always returns false (no event).
 bool PollingEventSource::poll(int timeoutMs) {
     (void)timeoutMs;
     return false;
@@ -163,7 +137,6 @@ static aatpe_ml::ThreadFeatures featuresFromVector(const std::vector<float>& f) 
     return tf;
 }
 
-// P1-5: poolIdx passed through to g_mlModel (was hardcoded to 0).
 float OnlineLearningModel::predict(int poolIdx, const std::vector<float>& features) {
     aatpe_ml::ThreadFeatures tf = featuresFromVector(features);
     std::lock_guard<std::mutex> lock(g_mlMutex);
@@ -176,7 +149,6 @@ void OnlineLearningModel::update(int poolIdx, const std::vector<float>& features
     g_mlModel.update(poolIdx, tf, target);
 }
 
-// P1-4: Per-pool weight access via getPoolModel(poolIdx).
 std::vector<float> OnlineLearningModel::getWeights(int poolIdx) const {
     std::lock_guard<std::mutex> lock(g_mlMutex);
     aatpe_ml::PoolModel pm = g_mlModel.getPoolModel(poolIdx);
@@ -188,7 +160,6 @@ std::vector<float> OnlineLearningModel::getWeights(int poolIdx) const {
 
 void OnlineLearningModel::setWeights(int poolIdx, const std::vector<float>& w) {
     std::lock_guard<std::mutex> lock(g_mlMutex);
-    // call per-pool setWeights instead of full-model setWeights
     g_mlModel.setWeights(poolIdx, w);
 }
 

@@ -1,19 +1,5 @@
-# AATPE (build-system fixes: #66 #67 #68 + install/test)
 # Reproducible Android arm64 build with NDK r30.
-#
-# ---------------------------------------------------------------------------
-# NDK path configuration (problem #67 fix):
-#   The NDK location is overridable. The default below is /opt/android-ndk-r30.
-#   Override in any of these ways (highest priority wins):
-#     1) Inline:        make NDK=/path/to/android-ndk-r30
-#     2) Environment:   export NDK=/path/to/android-ndk-r30 ; make
-#     3) Environment:   export ANDROID_NDK_HOME=/path/to/android-ndk-r30 ; make
-#                        (standard NDK env var; picked up when NDK is unset)
-# ---------------------------------------------------------------------------
-
-# Problem #67: use ?= so the path can be overridden by environment / command
-# line. Fall back to ANDROID_NDK_HOME (the conventional NDK env var) when NDK
-# itself is not set, and finally to a portable default under /opt.
+# NDK location overridable via `make NDK=/path` or ANDROID_NDK_HOME.
 NDK ?= $(if $(ANDROID_NDK_HOME),$(ANDROID_NDK_HOME),/opt/android-ndk-r30)
 
 TOOLCHAIN := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64
@@ -324,7 +310,7 @@ install: $(TARGETS)
 release-manifest:
 	@echo "==> Regenerating BUILD_MANIFEST.txt from system/bin/* (this build)"
 	@test -d system/bin || { echo "system/bin missing; run 'make install' first" >&2; exit 1; }
-	@head -n 6 BUILD_MANIFEST.txt > BUILD_MANIFEST.txt.new 2>/dev/null || true
+	@head -n 3 BUILD_MANIFEST.txt > BUILD_MANIFEST.txt.new 2>/dev/null || true
 	@echo "" >> BUILD_MANIFEST.txt.new
 	@( cd system/bin && sha256sum aatped aatpe-cli aatpe-watchdog aatpe-probe ) >> BUILD_MANIFEST.txt.new
 	@mv BUILD_MANIFEST.txt.new BUILD_MANIFEST.txt

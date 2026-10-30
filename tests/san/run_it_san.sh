@@ -1,6 +1,4 @@
 #!/bin/bash
-# Run the sanitizer-built integration binary inside the unshare namespace.
-# Usage: MODE=au|tsan [AATPE_ONLY=...] [IT_REPEAT=n] run_it_san.sh
 set -u
 MODE="${MODE:?au|tsan}"
 SANDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,6 +10,4 @@ case "$MODE" in
         export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:print_summary=1 ;;
   tsan) export TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=3 ;;
 esac
-# run_integration.sh does: mktemp mockfs, unshare --map-root-user --mount,
-# bind-mock /sys and /proc, exec BIN.
 exec bash "$SRC/tests/integration/run_integration.sh" "$SRC" "$BIN"

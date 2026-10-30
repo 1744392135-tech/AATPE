@@ -1,27 +1,3 @@
-// ============================================================================
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// AATPE - Scheduling Mode A/B Test Framework
-// ============================================================================
-// Independent test harness that links REAL production code:
-//   scoring.cpp (computeScore + all sub-scores)
-//   placement.cpp (decidePlacement + migration logic)
-//   aatpe_ml.cpp (LearningModel online learning)
-//   aatpe_ml_hybrid.cpp (HybridLearner fine-tuning)
-//
-// Provides test-compatible implementations of I/O utility functions
-// (readThreadCurrentCpu, getThreadAffinityCpus, etc.) that would normally
-// read /proc on Android. Core scheduling logic is 100% production code.
-//
-// 5 A/B test groups:
-//   G1: assist vs full (control mode)
-//   G2: balanced vs gaming (profile)
-//   G3: ML off vs ML on (mlLearningEnabled)
-//   G4: hybrid off vs hybrid on (mlHybridEnabled)
-//   G5: frame-aware off vs on (frameAware)
-//
-// Each group: 150 scheduling cycles, 8 simulated threads, Welch's t-test.
-// ============================================================================
 
 #include <cstdio>
 #include <cstdlib>
@@ -69,18 +45,9 @@
 using namespace aatpe;
 using namespace aatpe_ml;
 
-// ============================================================================
-// TEST-ONLY STATE: simulated thread current CPU map
-// readThreadCurrentCpu() looks up this map instead of reading /proc
-// ============================================================================
 static std::map<int, int> g_testTidCpu;
 static int g_testCycle = 0;
 
-// ============================================================================
-// PRODUCTION GLOBAL VARIABLE DEFINITIONS (normally in aatped.cpp)
-// ============================================================================
-
-// --- Directory paths ---
 const char* RUN_DIR      = "/tmp/aatpe_sched_ab";
 const char* STATE_DIR    = "/tmp/aatpe_sched_ab/state";
 const char* METRICS_DIR  = "/tmp/aatpe_sched_ab/metrics";
@@ -92,10 +59,8 @@ const char* LOCK_FILE    = "/tmp/aatpe_sched_ab/lock";
 const char* CONF_DIR     = "/tmp/aatpe_sched_ab/conf";
 const char* ML_MODEL_PATH = "/tmp/aatpe_sched_ab/ml_model.bin";
 
-// --- Logging ---
 std::atomic<unsigned int> g_debugSampleCounter{0};
 
-// --- Config ---
 Config g_cfg;
 std::mutex g_cfgMutex;
 Config g_preEmergencyCfg;
@@ -106,97 +71,76 @@ ProfileType g_currentProfileEnum = ProfileType::BALANCED;
 RefreshRateMode g_refreshRateModeEnum = RefreshRateMode::PEAK;
 std::atomic<bool> g_reloadConfigRequested{false};
 
-// --- Dynamic scoring weights ---
 DynamicScoreWeights g_dynamicScoreWeights;
 std::mutex g_dynamicWeightsMutex;
 
-// --- Fusion ---
 float g_fusionTemperature = 1.0f;
 
-// --- HMAC ---
 char g_hmacKey[128] = {0};
 std::string g_hmacKeyStatus = "generated";
 bool g_hmacActive = false;
 
-// --- Federated ---
 int g_federatedRounds = 0;
 int g_federatedExports = 0;
 int g_federatedImports = 0;
 int g_federatedTrustedImports = 0;
 
-// --- AB stats (production) ---
 float g_abGroupAAvg = 0;
 float g_abGroupBAvg = 0;
 float g_abPValue = 1.0f;
 ABTestStats g_abStats;
 
-// --- Prediction ---
 float g_avgPredictionMAE = 0;
 
-// --- Thermal ---
 int g_thermalCpu = 40;
 int g_thermalSkin = 35;
 int g_thermalBattery = 30;
 std::atomic<bool> g_thermalEmergency{false};
 std::atomic<int> g_thermalMigrationPressure{0};
-// independent safety-latency gate referenced by placement.cpp.
 std::atomic<bool> g_safetyLatencyActive{false};
 std::atomic<long long> g_keepSafetyLatency{0};
 std::atomic<long long> g_applySafetyLatency{0};
 
-// --- GPU ---
 const char* g_gpuType = "Adreno-650";
 float g_gpuUtilization = 0.0f;
 int g_gpuBusyPercent = 0;
 bool g_gpuBottleneck = false;
 
-// --- eBPF ---
 std::string g_ebpfLoader = "none";
 bool g_ebpfActive = false;
 
-// --- Foreground ---
 std::string g_foregroundApp = "com.test.game";
 time_t g_startTime = 0;
 std::string g_cachedForegroundApp = "com.test.game";
 long long g_foregroundCacheTimeMs = 0;
 
-// --- Per-app config ---
 std::unordered_map<std::string, PerAppConfig> g_perAppConfigs;
 PerAppConfig g_currentAppConfig;
 
-// --- Game scene ---
 GameScene g_currentScene = GameScene::COMBAT;
 int g_sceneChangeCount = 0;
 
-// --- Power ---
 int g_currentPowerMw = 2500;
 int g_batteryCurrentUa = 500000;
 int g_batteryVoltageUv = 4000000;
 
-// --- Battery health ---
 int g_batteryHealthPercent = 95;
 int g_batteryCycleCount = 120;
 bool g_batteryAged = false;
 
-// --- Audio ---
 bool g_audioModeActive = false;
 int g_audioIsolatedCpu = -1;
 
-// --- App launch history ---
 std::unordered_map<std::string, AppLaunchRecord> g_appLaunchHistory;
 
-// --- uevent ---
 std::atomic<bool> g_ueventFallbackActive{false};
 std::atomic<int> g_ueventEventCount{0};
 
-// --- Helper APK ---
 bool g_helperApkInstalled = false;
 
-// --- Daemon control ---
 std::atomic<sig_atomic_t> g_shouldExit{0};
 std::atomic<sig_atomic_t> g_reloadProfile{0};
 
-// --- CPU topology: 8-core 1+3+4 (BIG=7, MID=4-6, LITTLE=0-3) ---
 int g_cpuCount = 8;
 uint64_t g_topologyGeneration = 1;
 std::vector<int> g_allCpus = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -204,33 +148,25 @@ std::vector<int> g_littlePool = {0, 1, 2, 3};
 std::vector<int> g_midPool = {4, 5, 6};
 std::vector<int> g_bigPool = {7};
 
-// --- CPU metrics ---
 std::map<int, CpuMetrics> g_cpuMetrics;
 
-// --- Thread rules ---
 std::vector<ThreadRule> g_rules;
 
-// --- Threads ---
 std::unordered_map<int, ThreadInfo> g_threads;
 std::mutex g_threadsMutex;
 
-// --- Unmigratable ---
 std::set<int> g_unmigratableThreads;
 std::mutex g_unmigratableMutex;
-// NOTE: g_lastUnmigratableReprobe is defined in placement.cpp
 
-// --- Placement history ---
 std::map<int, HistoryEntry> g_history;
 std::mutex g_historyMutex;
 
-// --- ML ---
 aatpe_ml::LearningModel g_mlModel;
 std::mutex g_mlMutex;
 time_t g_mlLastSave = 0;
 std::atomic<unsigned long> g_mlSaveSuccess{0};
 std::atomic<unsigned long> g_mlSaveFail{0};
 
-// --- Atomic counters ---
 std::atomic<long long> g_totalDecisions{0};
 std::atomic<long long> g_totalMigrations{0};
 std::atomic<long long> g_highLoadCycles{0};
@@ -268,7 +204,6 @@ std::atomic<long long> g_mlPendingTidReused{0};
 std::atomic<long long> g_mlPendingThreadExited{0};
 std::atomic<long long> g_cooldownBypassCount{0};
 
-// --- Migration budget ---
 MigrationBudget g_migrationBudget;
 int g_migrationCount = 0;
 time_t g_migrationWindowStart = 0;
@@ -280,12 +215,10 @@ std::map<int, int> g_migFailCount;
 std::map<int, int> g_migFailCpu;
 time_t g_cooldownFloorWindowStart = 0;
 
-// --- WebUI decision ring ---
 std::vector<WebuiDecision> g_decisionRing;
 std::mutex g_decisionRingMutex;
 std::atomic<int> g_explainTid{-1};
 
-// --- Misc ---
 std::map<int, std::pair<unsigned long long, unsigned long long>> g_prevCpuStat;
 std::unordered_map<int, ThreadInfo> g_scannedThreadMap;
 std::unordered_map<std::string, int> g_threadRoleCache;
@@ -294,15 +227,9 @@ float g_systemLoad = 50.0f;
 std::atomic<bool> g_frameCritical{false};
 std::atomic<bool> g_profileLock{false};
 
-// ============================================================================
-// PRODUCTION UTILITY FUNCTION IMPLEMENTATIONS (test-compatible)
-// Normally defined in aatped.cpp; here they work with simulated state.
-// ============================================================================
-
 void logInit() {}
 void logMsg(int level, const char* fmt, ...) {
     (void)level; (void)fmt;
-    // Discard all log output in test harness to avoid I/O noise
 }
 
 std::string readFile(const char* path) { (void)path; return ""; }
@@ -327,20 +254,15 @@ const char* aatpeAndroidVersionName() { return "10"; }
 bool aatpeIsCgroupV2Cpuset() { return false; }
 std::string aatpeCpusetMountRoot() { return "/dev/cpuset"; }
 
-// --- CPU topology helpers ---
-// NOTE: getPoolForCpu, getPoolName, getPoolCpus, getOnlineCpus, refreshCpuTopology
-// are defined in placement.cpp (production code). Only detectCpuTopology is stubbed here.
 void detectCpuTopology() {}
 
 void readCpuMetrics() {}
 void readThermal() {}
 
-// --- Thread classification stubs ---
 void loadThreadRules() {}
 bool matchPattern(const std::string& text, const std::string& pattern) {
     if (pattern == "*") return true;
     if (pattern.empty()) return text.empty();
-    // simple substring match
     return text.find(pattern) != std::string::npos;
 }
 ThreadRole classifyThread(int pid, int tid, const std::string& tname,
@@ -351,7 +273,6 @@ ThreadRole classifyThread(int pid, int tid, const std::string& tname,
     return ROLE_S5_BACKGROUND;
 }
 
-// --- Thread I/O: uses simulated state instead of /proc ---
 int readThreadCurrentCpu(int pid, int tid) {
     (void)pid;
     auto it = g_testTidCpu.find(tid);
@@ -361,7 +282,6 @@ int readThreadCurrentCpu(int pid, int tid) {
 
 std::set<int> getThreadAffinityCpus(int tid) {
     (void)tid;
-    // Simulate full affinity (all CPUs allowed)
     return std::set<int>(g_allCpus.begin(), g_allCpus.end());
 }
 
@@ -398,23 +318,19 @@ cpu_set_t readCpusetCpus(const std::string& cpusetPath) {
     return mask;
 }
 
-// --- Power ---
 void readBatteryPower() {}
 int computePowerPenalty(int cpuId, int threadImportance) {
     (void)cpuId; (void)threadImportance;
     return 0;
 }
 
-// --- Battery aging ---
 void readBatteryHealth() {}
 int getBatteryAgePenalty(int cpuId) { (void)cpuId; return 0; }
 
-// --- GPU ---
 void readGpuUtilization() {}
 bool isGpuBottleneck(float cpuUtilization) { (void)cpuUtilization; return false; }
 int getGpuBottleneckDecisionInterval() { return 200; }
 
-// --- Audio ---
 bool detectAudioPlayback() { return false; }
 bool isAudioThread(const char* threadName) {
     std::string n(threadName);
@@ -424,7 +340,6 @@ int getAudioThreadMigrationPenalty(const char* threadName) {
     return isAudioThread(threadName) ? 50 : 0;
 }
 
-// --- Frame / SF ---
 void readSurfaceFlinger() {}
 int aatpeDetectRefreshRate() { return 60; }
 std::string aatpeExec(const std::string& cmd, const char* debugTag) { (void)cmd; (void)debugTag; return ""; }
@@ -437,7 +352,6 @@ void autoSelectProfile() {}
 bool checkSystemLoad() { return false; }
 void aatpeProbeEnvironment() {}
 
-// --- Profile helpers ---
 ProfileType parseProfileType(const std::string& s) {
     if (s == "balanced") return ProfileType::BALANCED;
     if (s == "gaming") return ProfileType::GAMING;
@@ -457,9 +371,7 @@ const char* profileTypeToString(ProfileType p) {
 RefreshRateMode parseRefreshRateMode(const std::string& s) { (void)s; return RefreshRateMode::PEAK; }
 const char* refreshRateModeToString(RefreshRateMode m) { (void)m; return "peak"; }
 
-// --- Softmax fusion (real math from production) ---
 float softmaxFuseScores(float modelScore, float heuristicScore, float temperature) {
-    // temperature boundary protection — negative → abs, zero/tiny → clamp to 0.01
     if (temperature < 0.0f) temperature = -temperature;
     if (temperature < 0.01f) temperature = 0.01f;
     float m = modelScore / temperature;
@@ -473,50 +385,40 @@ float softmaxFuseScores(float modelScore, float heuristicScore, float temperatur
     return (modelScore * em + heuristicScore * eh) / total;
 }
 
-// --- Config ---
 void loadConfig() {}
 void loadProfile(const std::string& profile) {
     g_currentProfile = profile;
     g_currentProfileEnum = parseProfileType(profile);
 }
 
-// --- Game scene ---
 GameScene detectGameScene(float cpuLoad, float frameTimeJitter, float avgFrameTime) {
     (void)cpuLoad; (void)frameTimeJitter; (void)avgFrameTime;
     return GameScene::COMBAT;
 }
 const char* sceneToString(GameScene s) { (void)s; return "COMBAT"; }
 
-// --- App launch ---
 void recordAppLaunch(const char* packageName, int mainTid, int renderTid) {
     (void)packageName; (void)mainTid; (void)renderTid;
 }
 void checkAndPreloadNewApps() {}
 int getPreloadedPreferredCpu(const char* packageName) { (void)packageName; return 4; }
 
-// --- Per-app config ---
 void loadPerAppConfigs(const char* confPath) { (void)confPath; }
 void checkAndApplyPerAppConfig(const char* foregroundApp) { (void)foregroundApp; }
 
-// --- Adaptive interval ---
 int computeAdaptiveInterval(float systemLoad, bool jankDetected, bool hasForeground) {
     (void)systemLoad; (void)jankDetected; (void)hasForeground;
     return 200;
 }
 
-// --- Foreground cache ---
 std::string getCachedForegroundApp() { return g_cachedForegroundApp; }
 
-// --- Incremental scan ---
 void incrementalThreadScan() {}
 
-// --- Watchdog ---
 void watchdogTakeoverScheduling() {}
 
-// --- Lazy cleanup ---
 void lazyCleanupDecisionsDir() {}
 
-// --- Role cache ---
 int getCachedThreadRole(const std::string& threadName) {
     auto it = g_threadRoleCache.find(threadName);
     return (it != g_threadRoleCache.end()) ? it->second : -1;
@@ -528,26 +430,21 @@ void invalidateThreadRoleCache(const std::string& threadName) {
     g_threadRoleCache.erase(threadName);
 }
 
-// --- Schedstat ---
 bool readSchedstatCpuUtil() { return false; }
 float computeSchedstatCpuUtil(int cpuId) { (void)cpuId; return 0.0f; }
 float readCpuUtilizationSchedstat(int cpuId) { (void)cpuId; return 0.0f; }
 
-// --- HMAC ---
 bool verifyCommandHmac(const char* command, const char* signature) { (void)command; (void)signature; return true; }
 std::string computeCommandHmac(const char* command) { (void)command; return ""; }
 
-// --- ML save state ---
 void updateMlSaveStateFiles(bool success, const char* path) { (void)success; (void)path; }
 
-// --- Production AB test stubs ---
 int abTestAssignThread(int tid) { (void)tid; return 0; }
 void abTestRecordFrameTime(int group, float frameTime) { (void)group; (void)frameTime; }
 void abTestRecordJank(int group) { (void)group; }
 void abTestRecordMigration(int group) { (void)group; }
 int abTestDetermineWinner(void) { return -1; }
 
-// --- WebUI stubs ---
 void recordWebuiDecision(int tid, const std::string& name, const std::string& role,
                           int fromCpu, int toCpu, int score, int confidence,
                           const std::string& type) {
@@ -563,40 +460,30 @@ void writeSystemJson() {}
 void writePerCpuJson() {}
 void writeLogsJson() {}
 
-// --- Thread scan stubs ---
-// NOTE: findPidByPackage is defined in placement.cpp (production code).
 void scanThreads() {}
 void persistThreadDb(const std::unordered_map<int, ThreadInfo>& threads) { (void)threads; }
 
-// --- Config hot-reload ---
 void startConfigHotReload() {}
 void stopConfigHotReload() {}
 
-// --- Signal / daemon ---
 void signalHandler(int sig) { (void)sig; }
 void processControlCommands() {}
 void daemonInit() {}
 void daemonLoop() {}
 
-// --- CLI stubs ---
 void cmdStatus() {}
 void cmdThreads() {}
 void cmdBenchmark() {}
 void cmdExplain(int targetTid) { (void)targetTid; }
 
-// --- uevent ---
 void checkUeventFallback() {}
 void pollSysfsEvents() {}
 
-// --- MigrationBudget::tryAcquire (defined in aatped.cpp normally) ---
 bool MigrationBudget::tryAcquire(bool frameCritical) {
     (void)frameCritical;
-    return true;  // Always allow migrations in test
+    return true;
 }
 
-// ============================================================================
-// STATISTICAL FUNCTIONS: Welch's t-test (from aatpe_test_ab.cpp)
-// ============================================================================
 static double betaIncomplete(double x, double a, double b) {
     if (x <= 0.0) return 0.0;
     if (x >= 1.0) return 1.0;
@@ -638,7 +525,6 @@ static double tDistCDF(double t, double df) {
     return 0.5 * ibeta;
 }
 
-// Welch's t-test for two independent samples, returns two-tailed p-value
 static double welchTTest(const std::vector<double>& a, const std::vector<double>& b) {
     if (a.size() < 2 || b.size() < 2) return 1.0;
     double meanA = 0, meanB = 0;
@@ -667,14 +553,10 @@ static double welchTTest(const std::vector<double>& a, const std::vector<double>
     return p;
 }
 
-// ============================================================================
-// TEST FRAMEWORK TYPES
-// ============================================================================
-
 struct TestConfig {
     std::string name;
-    std::string controlMode;     // assist / full / passive
-    std::string profile;         // balanced / battery / gaming / thermal
+    std::string controlMode;
+    std::string profile;
     bool mlLearningEnabled;
     bool mlHybridEnabled;
     int frameAware;
@@ -683,10 +565,10 @@ struct TestConfig {
 
 struct SimThread {
     ThreadInfo info;
-    float baseRunRatio;     // 0-1, fraction of cycle running
-    float baseSwitchRate;   // context switches per cycle
-    bool frameProducer;     // produces frames (for frame-time metric)
-    CpuPool expectedPool;   // expected optimal pool for role correctness
+    float baseRunRatio;
+    float baseSwitchRate;
+    bool frameProducer;
+    CpuPool expectedPool;
 };
 
 struct PendingML {
@@ -718,7 +600,6 @@ struct GroupResult {
     TestConfig configB;
     std::vector<CycleMetrics> cyclesA;
     std::vector<CycleMetrics> cyclesB;
-    // Aggregated A
     int totalMigA = 0;
     float avgBigUtilA = 0, avgMidUtilA = 0, avgLittleUtilA = 0;
     float avgScoreA = 0;
@@ -727,7 +608,6 @@ struct GroupResult {
     float roleCorrectnessA = 0;
     int mlSamplesA = 0;
     int hybridUpdatesA = 0;
-    // Aggregated B
     int totalMigB = 0;
     float avgBigUtilB = 0, avgMidUtilB = 0, avgLittleUtilB = 0;
     float avgScoreB = 0;
@@ -736,16 +616,12 @@ struct GroupResult {
     float roleCorrectnessB = 0;
     int mlSamplesB = 0;
     int hybridUpdatesB = 0;
-    // Significance
     double pMigrations = 1.0;
     double pScore = 1.0;
     double pBigUtil = 1.0;
     double pFrameDev = 1.0;
 };
 
-// ============================================================================
-// DETERMINISTIC RNG (fixed seed for reproducibility)
-// ============================================================================
 static uint32_t g_rngState = 0x12345678;
 static inline uint32_t rngNext() {
     g_rngState ^= g_rngState << 13;
@@ -757,12 +633,8 @@ static inline float rngFloat(float lo, float hi) {
     return lo + (hi - lo) * ((float)rngNext() / 4294967295.0f);
 }
 
-// ============================================================================
-// CPU METRICS SETUP
-// ============================================================================
 static void setupCpuMetrics() {
     g_cpuMetrics.clear();
-    // LITTLE cores (0-3): capacity ~380, max freq 1800
     for (int i = 0; i <= 3; i++) {
         CpuMetrics m;
         m.capacity = 380 + i * 5;
@@ -773,7 +645,6 @@ static void setupCpuMetrics() {
         m.temp = 38;
         g_cpuMetrics[i] = m;
     }
-    // MID cores (4-6): capacity ~750, max freq 2400
     for (int i = 4; i <= 6; i++) {
         CpuMetrics m;
         m.capacity = 750 + (i - 4) * 10;
@@ -784,7 +655,6 @@ static void setupCpuMetrics() {
         m.temp = 45;
         g_cpuMetrics[i] = m;
     }
-    // BIG core (7): capacity 1024, max freq 2900
     {
         CpuMetrics m;
         m.capacity = 1024;
@@ -797,13 +667,9 @@ static void setupCpuMetrics() {
     }
 }
 
-// ============================================================================
-// SIMULATED THREAD WORKLOAD DEFINITION
-// ============================================================================
 static std::vector<SimThread> createSimulatedThreads() {
     std::vector<SimThread> threads;
 
-    // 1. UnityMain - game main thread, high CPU, high switches
     {
         SimThread st;
         st.info.pid = 10000;
@@ -817,7 +683,7 @@ static std::vector<SimThread> createSimulatedThreads() {
         st.info.protect = false;
         st.info.runTime = 5000000;
         st.info.nrSwitches = 2000;
-        st.info.currentCpu = 1;  // start on LITTLE (suboptimal)
+        st.info.currentCpu = 1;
         CPU_ZERO(&st.info.originalAffinity);
         st.info.affinityModified = false;
         st.baseRunRatio = 0.82f;
@@ -827,7 +693,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 2. RenderThread - render thread, high CPU
     {
         SimThread st;
         st.info.pid = 10000;
@@ -841,7 +706,7 @@ static std::vector<SimThread> createSimulatedThreads() {
         st.info.protect = false;
         st.info.runTime = 4800000;
         st.info.nrSwitches = 1500;
-        st.info.currentCpu = 2;  // start on LITTLE
+        st.info.currentCpu = 2;
         CPU_ZERO(&st.info.originalAffinity);
         st.info.affinityModified = false;
         st.baseRunRatio = 0.78f;
@@ -851,7 +716,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 3. UnityGfxWorker - game worker, medium-high CPU
     {
         SimThread st;
         st.info.pid = 10000;
@@ -875,7 +739,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 4. AudioTrack - audio, real-time low latency
     {
         SimThread st;
         st.info.pid = 10000;
@@ -899,7 +762,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 5. BackgroundLoader - background, intermittent
     {
         SimThread st;
         st.info.pid = 10000;
@@ -913,7 +775,7 @@ static std::vector<SimThread> createSimulatedThreads() {
         st.info.protect = false;
         st.info.runTime = 1800000;
         st.info.nrSwitches = 200;
-        st.info.currentCpu = 4;  // start on MID (suboptimal for BG)
+        st.info.currentCpu = 4;
         CPU_ZERO(&st.info.originalAffinity);
         st.info.affinityModified = false;
         st.baseRunRatio = 0.30f;
@@ -923,7 +785,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 6. PhysicsWorker - throughput, high CPU
     {
         SimThread st;
         st.info.pid = 10000;
@@ -947,7 +808,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 7. surfaceflinger - system thread (protected)
     {
         SimThread st;
         st.info.pid = 200;
@@ -971,7 +831,6 @@ static std::vector<SimThread> createSimulatedThreads() {
         threads.push_back(st);
     }
 
-    // 8. InputReader - UI, low CPU
     {
         SimThread st;
         st.info.pid = 10000;
@@ -998,22 +857,17 @@ static std::vector<SimThread> createSimulatedThreads() {
     return threads;
 }
 
-// ============================================================================
-// SCHEDULING RUNNER: runs N cycles for a given config
-// ============================================================================
 static const int NUM_CYCLES = 150;
-static const int CYCLE_US = 200000;  // 200ms per cycle (matches decisionInterval)
-static const int ML_OUTCOME_DELAY = 5;  // cycles before measuring ML outcome
+static const int CYCLE_US = 200000;
+static const int ML_OUTCOME_DELAY = 5;
 
 static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
     GroupResult result;
-    result.configA = cfg;  // store for reference
+    result.configA = cfg;
     (void)label;
 
-    // Reset RNG for deterministic workload per config
     g_rngState = 0x12345678;
 
-    // Reset all production counters
     g_totalDecisions = 0;
     g_totalMigrations = 0;
     g_keepProtected = 0;
@@ -1027,13 +881,12 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
     g_mlOutcomeMeasured = 0;
     g_mlOutcomeValid = 0;
 
-    // Configure g_cfg from TestConfig
     g_cfg.controlMode = cfg.controlMode;
     g_cfg.mlLearningEnabled = cfg.mlLearningEnabled;
     g_cfg.mlHybridEnabled = cfg.mlHybridEnabled;
     g_cfg.frameAware = cfg.frameAware;
     g_cfg.autoProfile = cfg.autoProfile;
-    g_cfg.learningEnabled = false;  // disable placement history (not core scheduling)
+    g_cfg.learningEnabled = false;
     g_cfg.confidenceThreshold = 8;
     g_cfg.migrationCostThreshold = 6;
     g_cfg.maxMigrationsPerSec = 80;
@@ -1055,72 +908,59 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
     g_cfg.learningDecay = 95;
     g_cfg.minSamplesForLearning = 5;
 
-    // Set profile
     g_currentProfile = cfg.profile;
     g_currentProfileEnum = parseProfileType(cfg.profile);
 
-    // Reset CPU metrics
     setupCpuMetrics();
 
-    // Initialize scoring arrays
     initScoringArrays(g_cpuCount);
 
-    // Reset ML model
     {
         std::lock_guard<std::mutex> mlLock(g_mlMutex);
         g_mlModel.reset();
-        g_mlModel.init(3);  // 3 pools: LITTLE, MID, BIG
+        g_mlModel.init(3);
         g_mlModel.setEnabled(cfg.mlLearningEnabled);
         g_mlModel.setMaxAlpha(g_cfg.mlMaxAlpha);
         g_mlModel.setInitialLR(g_cfg.mlInitialLR);
         g_mlModel.setDecay(g_cfg.mlDecay);
         g_mlModel.setWeightClamp(g_cfg.mlWeightClamp);
-        // Set CPU-to-pool assignment
         std::vector<int> poolAssign(8, 0);
-        for (int i = 0; i <= 3; i++) poolAssign[i] = 0;  // LITTLE
-        for (int i = 4; i <= 6; i++) poolAssign[i] = 1;  // MID
-        poolAssign[7] = 2;  // BIG
+        for (int i = 0; i <= 3; i++) poolAssign[i] = 0;
+        for (int i = 4; i <= 6; i++) poolAssign[i] = 1;
+        poolAssign[7] = 2;
         g_mlModel.setCpuPoolAssignment(poolAssign);
     }
 
-    // Reset hybrid learner
     aatpe_ml_hybrid::instance().reset();
     if (cfg.mlHybridEnabled) {
         aatpe_ml_hybrid::instance().init(3);
         aatpe_ml_hybrid::instance().setEnabled(true);
     }
 
-    // Create simulated threads
     std::vector<SimThread> simThreads = createSimulatedThreads();
 
-    // Set up test current-CPU map
     g_testTidCpu.clear();
     for (auto& st : simThreads) {
         g_testTidCpu[st.info.tid] = st.info.currentCpu;
     }
 
-    // Pending ML decisions
     std::vector<PendingML> pendingML;
 
-    // Hybrid update counter
     int hybridUpdateCount = 0;
     int mlSampleCount = 0;
 
-    // Run cycles
     for (int cycle = 0; cycle < NUM_CYCLES; cycle++) {
         g_testCycle = cycle;
         CycleMetrics cm;
 
-        // --- Step 1: Update workload (runTime, nrSwitches) ---
         for (auto& st : simThreads) {
             float variation = rngFloat(0.85f, 1.15f);
             float runRatio = st.baseRunRatio * variation;
             if (runRatio > 1.0f) runRatio = 1.0f;
-            st.info.runTime += (unsigned long long)(runRatio * CYCLE_US * 1000);  // ns
+            st.info.runTime += (unsigned long long)(runRatio * CYCLE_US * 1000);
             st.info.nrSwitches += (unsigned long long)(st.baseSwitchRate * rngFloat(0.7f, 1.3f));
         }
 
-        // --- Step 2: Calculate CPU utilization from thread placement ---
         std::map<int, float> cpuUtil;
         for (int cpu : g_allCpus) cpuUtil[cpu] = 0.0f;
         for (auto& st : simThreads) {
@@ -1130,18 +970,15 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         for (int cpu : g_allCpus) {
             if (cpuUtil[cpu] > 100.0f) cpuUtil[cpu] = 100.0f;
             g_cpuMetrics[cpu].util = (int)cpuUtil[cpu];
-            // Update frequency based on util
             int maxFreq = g_cpuMetrics[cpu].maxFreq;
             g_cpuMetrics[cpu].curFreq = (int)(maxFreq * (0.4f + 0.6f * cpuUtil[cpu] / 100.0f));
             g_cpuMetrics[cpu].freqPct = (int)(100.0f * g_cpuMetrics[cpu].curFreq / maxFreq);
         }
 
-        // --- Step 3: Update temperature (thermal inertia) ---
         int thermalPenalties = 0;
         for (int cpu : g_allCpus) {
             int baseTemp = (cpu <= 3) ? 38 : (cpu <= 6) ? 45 : 52;
             int targetTemp = baseTemp + (int)(cpuUtil[cpu] * 0.25f);
-            // Thermal inertia: move 30% toward target
             int curTemp = g_cpuMetrics[cpu].temp;
             int newTemp = curTemp + (int)((targetTemp - curTemp) * 0.3f);
             g_cpuMetrics[cpu].temp = newTemp;
@@ -1149,7 +986,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         }
         cm.thermalPenalties = thermalPenalties;
 
-        // Set global thermal pressure
         int maxTemp = 0;
         for (int cpu : g_allCpus) maxTemp = std::max(maxTemp, g_cpuMetrics[cpu].temp);
         if (maxTemp > 75) {
@@ -1158,12 +994,10 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
             g_thermalMigrationPressure = 0;
         }
 
-        // --- Step 4: System load ---
         float totalUtil = 0;
         for (int cpu : g_allCpus) totalUtil += cpuUtil[cpu];
         g_systemLoad = totalUtil / g_cpuCount;
 
-        // --- Step 5: Frame critical state ---
         bool frameCritical = false;
         if (cfg.frameAware) {
             for (auto& st : simThreads) {
@@ -1178,10 +1012,8 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         }
         g_frameCritical = frameCritical;
 
-        // --- Step 6: Precompute CPU base scores ---
         precomputeCpuBaseScores();
 
-        // --- Step 7: Run placement decisions for each thread ---
         int migrationsThisCycle = 0;
         float scoreSum = 0;
         int scoreCount = 0;
@@ -1189,9 +1021,7 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         int roleTotal = 0;
 
         for (auto& st : simThreads) {
-            // System/protected threads: skip decision (they're KEEP by decidePlacement)
             if (st.info.protect || st.info.role == ROLE_S0_SYSTEM) {
-                // Still count role correctness for system threads
                 roleTotal++;
                 CpuPool curPool = getPoolForCpu(st.info.currentCpu);
                 if (curPool == st.expectedPool || st.expectedPool == CpuPool::UNKNOWN) {
@@ -1200,7 +1030,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
                 continue;
             }
 
-            // Call REAL production decidePlacement
             Decision d = decidePlacement(st.info, g_cfg);
             g_totalDecisions++;
 
@@ -1210,7 +1039,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
                 scoreSum += (float)d.score;
                 scoreCount++;
 
-                // Record ML pending decision if mlActive
                 if (d.mlActive && cfg.mlLearningEnabled) {
                     PendingML pml;
                     pml.tid = st.info.tid;
@@ -1223,22 +1051,18 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
                     g_mlPendingCreated++;
                 }
 
-                // Simulate migration: update current CPU
                 st.info.currentCpu = d.targetCpu;
                 g_testTidCpu[st.info.tid] = d.targetCpu;
                 recordMigrationCount(st.info.tid);
 
-                // Role correctness after migration
                 roleTotal++;
                 CpuPool newPool = getPoolForCpu(d.targetCpu);
                 if (newPool == st.expectedPool) roleCorrect++;
             } else {
-                // KEEP decision - still record score if available
                 if (d.score > 0) {
                     scoreSum += (float)d.score;
                     scoreCount++;
                 }
-                // Role correctness for kept placement
                 roleTotal++;
                 CpuPool curPool = getPoolForCpu(st.info.currentCpu);
                 if (curPool == st.expectedPool) roleCorrect++;
@@ -1250,30 +1074,25 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         cm.roleCorrect = roleCorrect;
         cm.roleTotal = roleTotal;
 
-        // --- Step 8: ML outcome measurement ---
         if (cfg.mlLearningEnabled) {
             std::vector<PendingML> stillPending;
             for (auto& pml : pendingML) {
                 if (cycle - pml.createCycle >= ML_OUTCOME_DELAY) {
-                    // Measure outcome: find the thread
                     for (auto& st : simThreads) {
                         if (st.info.tid == pml.tid) {
-                            // Simulate outcome based on placement quality
                             CpuPool curPool = getPoolForCpu(st.info.currentCpu);
                             float outcome = 0.5f;
                             if (curPool == st.expectedPool) {
-                                outcome = 0.85f;  // good placement
+                                outcome = 0.85f;
                             } else if ((int)curPool > (int)st.expectedPool) {
-                                outcome = 0.65f;  // over-provisioned, ok
+                                outcome = 0.65f;
                             } else {
-                                outcome = 0.25f;  // under-provisioned, bad
+                                outcome = 0.25f;
                             }
-                            // Add some noise
                             outcome += rngFloat(-0.1f, 0.1f);
                             if (outcome < 0.0f) outcome = 0.0f;
                             if (outcome > 1.0f) outcome = 1.0f;
 
-                            // Update REAL ML model
                             {
                                 std::lock_guard<std::mutex> mlLock(g_mlMutex);
                                 if (pml.targetPool >= 0 && pml.targetPool < g_mlModel.getPoolCount()) {
@@ -1293,7 +1112,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
             pendingML = stillPending;
         }
 
-        // --- Step 9: Hybrid learning tick (every 5 cycles) ---
         if (cfg.mlHybridEnabled && (cycle % 5 == 0) && cycle > 0) {
             std::vector<aatpe_ml_hybrid::ThreadCpuSnapshot> snapshots;
             std::vector<uint64_t> cpuRuntimeNs(8, 0);
@@ -1313,7 +1131,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
             hybridUpdateCount += (newUpdates - prevUpdates);
         }
 
-        // --- Step 10: Collect per-pool utilization ---
         float bigUtilSum = 0, midUtilSum = 0, littleUtilSum = 0;
         for (int cpu : g_bigPool) bigUtilSum += cpuUtil[cpu];
         for (int cpu : g_midPool) midUtilSum += cpuUtil[cpu];
@@ -1322,20 +1139,17 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         cm.midUtil = midUtilSum / g_midPool.size();
         cm.littleUtil = littleUtilSum / g_littlePool.size();
 
-        // --- Step 11: Frame time deviation simulation ---
         float frameDevSum = 0;
         int frameProducers = 0;
         for (auto& st : simThreads) {
             if (st.frameProducer && st.info.role != ROLE_S0_SYSTEM) {
                 int cpu = st.info.currentCpu;
                 CpuPool pool = getPoolForCpu(cpu);
-                float baseDev = 1.5f;  // ms base deviation
+                float baseDev = 1.5f;
                 if (pool == CpuPool::BIG) baseDev = 0.8f;
                 else if (pool == CpuPool::MID) baseDev = 1.5f;
-                else baseDev = 3.0f;  // LITTLE
-                // Add load-based jitter
+                else baseDev = 3.0f;
                 baseDev += cpuUtil[cpu] * 0.03f;
-                // Frame-aware reduces deviation when frame-critical
                 if (cfg.frameAware && frameCritical) baseDev *= 0.7f;
                 frameDevSum += baseDev * rngFloat(0.8f, 1.2f);
                 frameProducers++;
@@ -1343,10 +1157,9 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         }
         cm.frameTimeDeviation = (frameProducers > 0) ? frameDevSum / frameProducers : 0.0f;
 
-        result.cyclesA.push_back(cm);  // reuse cyclesA for single config run
+        result.cyclesA.push_back(cm);
     }
 
-    // Aggregate metrics
     int n = (int)result.cyclesA.size();
     for (auto& cm : result.cyclesA) {
         result.totalMigA += cm.migrations;
@@ -1367,7 +1180,7 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
         result.avgScoreA /= n;
         result.avgFrameDevA /= n;
         result.roleCorrectnessA /= n;
-        result.roleCorrectnessA *= 100.0f;  // percentage
+        result.roleCorrectnessA *= 100.0f;
     }
     result.mlSamplesA = mlSampleCount;
     result.hybridUpdatesA = hybridUpdateCount;
@@ -1375,9 +1188,6 @@ static GroupResult runConfig(const TestConfig& cfg, const std::string& label) {
     return result;
 }
 
-// ============================================================================
-// RUN A/B PAIR: runs both configs and computes significance
-// ============================================================================
 static GroupResult runABPair(const std::string& groupName,
                                const std::string& descA, const TestConfig& cfgA,
                                const std::string& descB, const TestConfig& cfgB) {
@@ -1387,7 +1197,6 @@ static GroupResult runABPair(const std::string& groupName,
     printf("  [%s] Running B: %s ...\n", groupName.c_str(), descB.c_str());
     GroupResult resB = runConfig(cfgB, "B");
 
-    // Combine into one result
     GroupResult r;
     r.groupName = groupName;
     r.configADesc = descA;
@@ -1395,9 +1204,8 @@ static GroupResult runABPair(const std::string& groupName,
     r.configA = cfgA;
     r.configB = cfgB;
     r.cyclesA = resA.cyclesA;
-    r.cyclesB = resB.cyclesA;  // resB stored its cycles in cyclesA
+    r.cyclesB = resB.cyclesA;
 
-    // Copy A aggregates
     r.totalMigA = resA.totalMigA;
     r.avgBigUtilA = resA.avgBigUtilA;
     r.avgMidUtilA = resA.avgMidUtilA;
@@ -1409,7 +1217,6 @@ static GroupResult runABPair(const std::string& groupName,
     r.mlSamplesA = resA.mlSamplesA;
     r.hybridUpdatesA = resA.hybridUpdatesA;
 
-    // Copy B aggregates
     r.totalMigB = resB.totalMigA;
     r.avgBigUtilB = resB.avgBigUtilA;
     r.avgMidUtilB = resB.avgMidUtilA;
@@ -1421,7 +1228,6 @@ static GroupResult runABPair(const std::string& groupName,
     r.mlSamplesB = resB.mlSamplesA;
     r.hybridUpdatesB = resB.hybridUpdatesA;
 
-    // Extract per-cycle metric vectors for t-test
     std::vector<double> migA, migB, scoreA, scoreB, bigA, bigB, frameA, frameB;
     for (auto& cm : r.cyclesA) {
         migA.push_back(cm.migrations);
@@ -1444,9 +1250,6 @@ static GroupResult runABPair(const std::string& groupName,
     return r;
 }
 
-// ============================================================================
-// REPORT GENERATION
-// ============================================================================
 static const char* sigLabel(double p) {
     if (p < 0.001) return "*** (p<0.001)";
     if (p < 0.01)  return "**  (p<0.01)";
@@ -1493,7 +1296,6 @@ static void printGroupReport(const GroupResult& r) {
            r.hybridUpdatesA, r.hybridUpdatesB, r.hybridUpdatesB - r.hybridUpdatesA);
     printf("╚════════════════╩════════════╩════════════╩════════════╩═════════════╝\n");
 
-    // Conclusion
     printf("\n  ▶ Conclusion for %s:\n", r.groupName.c_str());
     bool anySignificant = (r.pMigrations < 0.05 || r.pScore < 0.05 ||
                            r.pBigUtil < 0.05 || r.pFrameDev < 0.05);
@@ -1524,9 +1326,6 @@ static void printGroupReport(const GroupResult& r) {
     }
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
 int main() {
     printf("╔══════════════════════════════════════════════════════════════════════╗\n");
     printf("║        AATPE - Scheduling Mode A/B Test Framework                ║\n");
@@ -1534,15 +1333,10 @@ int main() {
     printf("║        5 groups × 2 configs × 150 cycles × 8 threads                 ║\n");
     printf("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-    // Create temp dirs
     int _rc = system("mkdir -p /tmp/aatpe_sched_ab/decisions /tmp/aatpe_sched_ab/state"); (void)_rc;
 
     std::vector<GroupResult> allResults;
 
-    // ========================================================================
-    // Group 1: assist vs full (control mode)
-    // Others: balanced + ML on + hybrid off + frame aware on
-    // ========================================================================
     {
         TestConfig a;
         a.name = "G1-A assist";
@@ -1569,10 +1363,6 @@ int main() {
         printGroupReport(r);
     }
 
-    // ========================================================================
-    // Group 2: balanced vs gaming (profile)
-    // Others: full + ML on + hybrid off + frame aware on
-    // ========================================================================
     {
         TestConfig a;
         a.name = "G2-A balanced";
@@ -1599,10 +1389,6 @@ int main() {
         printGroupReport(r);
     }
 
-    // ========================================================================
-    // Group 3: ML off vs ML on (mlLearningEnabled)
-    // Others: full + balanced + hybrid off + frame aware on
-    // ========================================================================
     {
         TestConfig a;
         a.name = "G3-A ML off";
@@ -1629,10 +1415,6 @@ int main() {
         printGroupReport(r);
     }
 
-    // ========================================================================
-    // Group 4: hybrid off vs hybrid on (mlHybridEnabled)
-    // Others: full + balanced + ML on + frame aware on
-    // ========================================================================
     {
         TestConfig a;
         a.name = "G4-A hybrid off";
@@ -1659,10 +1441,6 @@ int main() {
         printGroupReport(r);
     }
 
-    // ========================================================================
-    // Group 5: frame aware off vs on (frameAware)
-    // Others: full + balanced + ML on + hybrid off
-    // ========================================================================
     {
         TestConfig a;
         a.name = "G5-A frame off";
@@ -1689,9 +1467,6 @@ int main() {
         printGroupReport(r);
     }
 
-    // ========================================================================
-    // OVERALL SUMMARY
-    // ========================================================================
     printf("\n\n");
     printf("╔══════════════════════════════════════════════════════════════════════╗\n");
     printf("║                     OVERALL A/B TEST SUMMARY                          ║\n");

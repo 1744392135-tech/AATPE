@@ -1,21 +1,3 @@
-// test_arb_wiring.cpp - v4.3.9 multi-source arbitration wiring regressions.
-//
-// PURE host test (links aatped_arbitrator.cpp WITHOUT AATPED_ARBITRATOR_DAEMON
-// + the four mech cores). Pins the fixes for:
-//   audit4_pipeline F1  : signals were hardcoded 0 (context always "midnight +
-//                         screen-off + low battery", game_scene saw no touch/frame).
-//   audit4_state F4/F10 : device_profile set_topology/record_boost were dead;
-//                         profile had no topology fingerprint.
-//   audit4_sec F-1      : profile load followed symlinks.
-//
-// Covers:
-//   1. context no longer always "midnight" when real time/battery/screen fed.
-//   2. game_scene consumes real touch + derived frame timing -> IN_GAME.
-//   3. device_profile topology + boost learning actually move calibration.
-//   4. profile persistence round-trip, corrupt -> -2, fingerprint mismatch -> -3,
-//      symlink -> rejected, missing -> -1.
-//   5. no-signal -> fail-safe no-action (already pinned in test_arbitrator; here
-//      we re-check with all fields finite-0 but signals_valid=1).
 
 #include <cstdio>
 #include <cstring>
@@ -50,16 +32,12 @@ static void settle(ArbRuntime* rt, const ArbSignals& s, int n) {
     ArbOutput o; for (int i = 0; i < n; i++) arb_compute(&s, rt, &o);
 }
 
-// ---- 1. context: real daytime vs the old all-zero "midnight+screen-off+lowbat"
 static void test_context_not_midnight() {
-    // Day, plugged, screen on, recently touched.
     ArbRuntime rd; arb_runtime_init(&rd);
     ArbSignals d = base();
     d.cpu_util_pct = 85; d.gpu_util_pct = 80; d.touch_events_per_tick = 3;
     settle(&rd, d, 20); ArbOutput od; arb_compute(&d, &rd, &od);
 
-    // The OLD bug: memset(sig,0) -> hours=0, screen_on=0, battery=0, charging=0.
-    // That is "night + screen off + low battery" which suppresses boost.
     ArbRuntime rn; arb_runtime_init(&rn);
     ArbSignals n = base();
     n.hours_of_day = 0; n.screen_on = 0; n.battery_pct = 0; n.charging = 0;
@@ -72,40 +50,33 @@ static void test_context_not_midnight() {
     CHECK(on.boost_vote_pct <= od.raw_perf_vote + 1,
           "context: night/lowbat soft bias never inflates boost");
 
-    // arbHoursOfDay maps a real local time to a finite hour in [0,24).
     time_t now = time(nullptr);
     float hr = arbHoursOfDay(now);
     CHECK(hr >= 0.0f && hr < 24.0f, "arbHoursOfDay: real localtime -> finite hour");
     CHECK(arbHoursOfDay((time_t)0) < 0.0f, "arbHoursOfDay: epoch 0 -> unknown (<0)");
 
-    // screen-on from fb0/blank: 0=on, else off.
     CHECK(arbScreenOnFromBlank(0) == 1, "screen: blank==0 -> on");
     CHECK(arbScreenOnFromBlank(1) == 0, "screen: blank==1 -> off");
     CHECK(arbScreenOnFromBlank(2) == 0, "screen: blank==2 -> off");
 }
 
-// ---- 2. game_scene eats real touch + derived frame timing -> IN_GAME
 static void test_game_scene_eats_touch_frame() {
-    // Derive frame signals exactly as the daemon wiring does.
     float actual, target, jitter;
-    arbDeriveFrameSignals(16.0f, 17.5f, 1 /*valid*/, 60 /*Hz*/,
+    arbDeriveFrameSignals(16.0f, 17.5f, 1 , 60 ,
                           &actual, &target, &jitter);
     CHECK(actual > 0.0f && actual < 20.0f, "frame: gfxinfo avg -> actual");
     CHECK(std::fabs(target - (1000.0f/60.0f)) < 0.01f, "frame: target = 1000/refresh");
     CHECK(jitter >= 0.0f, "frame: jitter non-negative");
 
-    // invalid gfxinfo -> all zero (no signal), never NaN.
     float a2,t2,j2;
     arbDeriveFrameSignals(0.0f, 0.0f, 0, 60, &a2,&t2,&j2);
     CHECK(a2 == 0.0f && t2 == 0.0f && j2 == 0.0f, "frame: invalid -> all zero");
 
-    // Touch delta from cumulative counter.
     uint64_t prev = 0;
     float e1 = arbTouchEventsPerTick(5, &prev);
     float e2 = arbTouchEventsPerTick(12, &prev);
     CHECK(e1 == 5.0f && e2 == 7.0f, "touch: per-window event delta");
 
-    // Feed into arb_compute: high cpu/gpu + touch + frames -> IN_GAME.
     ArbRuntime rt; arb_runtime_init(&rt);
     ArbSignals s = base();
     s.frame_actual_ms = actual; s.frame_target_ms = target; s.frame_jitter_ms = jitter;
@@ -117,16 +88,13 @@ static void test_game_scene_eats_touch_frame() {
     CHECK(o.boost_vote_pct > 0, "gamescene: in-game boost > 0");
 }
 
-// ---- 3. device_profile: topology + boost learning actually move calibration
 static void test_device_profile_learning() {
     DeviceProfile dp; device_profile_init(&dp);
     CalibratedThresholds ct;
 
-    // Fresh profile: confidence 0 -> conservative defaults.
     device_profile_calibrate(&dp, &ct);
     float defBoost = ct.default_boost_level;
 
-    // Build a 2-cluster topology; fingerprint must become non-zero and stable.
     DevCluster cl[2]; std::memset(cl, 0, sizeof(cl));
     cl[0].cpu_mask = 0x3u; cl[0].max_freq_khz = 1800000; cl[0].min_freq_khz = 300000;
     cl[1].cpu_mask = 0xCu; cl[1].max_freq_khz = 2800000; cl[1].min_freq_khz = 600000;
@@ -134,24 +102,20 @@ static void test_device_profile_learning() {
     CHECK(dp.num_clusters == 2, "dp: topology set -> 2 clusters");
     CHECK(dp.topology_fingerprint != 0, "dp: topology fingerprint non-zero");
 
-    // Deterministic fingerprint.
     uint64_t fp1 = device_profile_fingerprint(cl, 2);
     DevCluster cl2[2]; std::memset(cl2, 0, sizeof(cl2));
     cl2[0].cpu_mask = 0x3u; cl2[0].max_freq_khz = 1800000; cl2[0].min_freq_khz = 300000;
     cl2[1].cpu_mask = 0xCu; cl2[1].max_freq_khz = 2800000; cl2[1].min_freq_khz = 600000;
     CHECK(device_profile_fingerprint(cl2,2) == fp1, "dp: fingerprint deterministic");
-    cl2[1].max_freq_khz = 3000000;  // different hardware
+    cl2[1].max_freq_khz = 3000000;
     CHECK(device_profile_fingerprint(cl2,2) != fp1, "dp: fingerprint changes with hw");
 
-    // Feed 80 observations -> confidence > 0.3.
     DevObservation obs; std::memset(&obs, 0, sizeof(obs));
     obs.temp_c = 45; obs.thermal_trip_c = 85; obs.battery_pct = 80;
     obs.refresh_rate_hz = 60; obs.cpu_util_pct = 40; obs.gpu_util_pct = 30;
     for (int i = 0; i < 80; i++) device_profile_observe(&dp, &obs);
     CHECK(dp.calibration_confidence > 0.3f, "dp: confidence grows > 0.3");
 
-    // record_boost: strong boost (frame time 20ms -> 8ms, eff=0.6) pulls the
-    // EWMA off its 0.5 neutral prior upward.
     float effBefore = dp.boost_effectiveness;
     for (int i = 0; i < 5; i++) {
         DevBoostObservation b;
@@ -167,13 +131,11 @@ static void test_device_profile_learning() {
     CHECK(device_profile_is_valid(&dp) == 1, "dp: learned profile valid");
 }
 
-// ---- 4. profile file IO: round-trip / corrupt / fingerprint / symlink
 static void test_profile_file_io() {
     char tmpl[] = "/tmp/arbprof_XXXXXX";
     if (!mkdtemp(tmpl)) { CHECK(0, "mkdtemp failed"); return; }
     std::string path = std::string(tmpl) + "/device_profile.bin";
 
-    // Build a profile with a real topology fingerprint.
     DeviceProfile dp; device_profile_init(&dp);
     DevCluster cl[1]; std::memset(cl, 0, sizeof(cl));
     cl[0].cpu_mask = 0x1u; cl[0].max_freq_khz = 2000000; cl[0].min_freq_khz = 300000;
@@ -181,32 +143,26 @@ static void test_profile_file_io() {
     uint64_t fp = dp.topology_fingerprint;
     CHECK(fp != 0, "prof: fingerprint set by topology");
 
-    // Save.
     CHECK(arbSaveProfileFileAtomic(path.c_str(), &dp) == 0, "prof: atomic save ok");
 
-    // Load with matching fingerprint.
     DeviceProfile loaded; device_profile_init(&loaded);
     int rc = arbLoadProfileFile(path.c_str(), &loaded, fp);
     CHECK(rc == 0 && loaded.num_clusters == 1, "prof: load round-trip + fingerprint match");
 
-    // Load with WRONG fingerprint -> rejected.
     DeviceProfile l2; device_profile_init(&l2);
     CHECK(arbLoadProfileFile(path.c_str(), &l2, fp ^ 0xdeadbeefULL) == -3,
           "prof: fingerprint mismatch -> -3");
 
-    // Missing file -> -1.
     DeviceProfile l3; device_profile_init(&l3);
     CHECK(arbLoadProfileFile((path + ".nope").c_str(), &l3, fp) == -1,
           "prof: missing file -> -1");
 
-    // Corrupt the file -> -2.
     FILE* f = fopen(path.c_str(), "wb");
     const char garbage[] = "GARBAGEGARBAGE";
     fwrite(garbage, 1, sizeof(garbage), f); fclose(f);
     DeviceProfile l4; device_profile_init(&l4);
     CHECK(arbLoadProfileFile(path.c_str(), &l4, fp) == -2, "prof: corrupt bytes -> -2");
 
-    // Symlink at the target -> rejected (O_NOFOLLOW).
     std::string link = std::string(tmpl) + "/link.bin";
     if (symlink("/etc/hostname", link.c_str()) == 0) {
         DeviceProfile l5; device_profile_init(&l5);
@@ -216,7 +172,6 @@ static void test_profile_file_io() {
     rmdir(tmpl);
 }
 
-// ---- 5. fail-safe: signals_valid=0 still zeroes everything
 static void test_fail_safe() {
     ArbRuntime rt; arb_runtime_init(&rt);
     ArbSignals s; std::memset(&s, 0, sizeof(s)); s.signals_valid = 0;
@@ -224,16 +179,14 @@ static void test_fail_safe() {
     CHECK(o.active == 0 && o.boost_vote_pct == 0 && o.frame_cap_hz == 0 &&
           o.efficiency_hint == 0.0f, "failsafe: signals_valid=0 -> no action");
 
-    // dt bounded: first call -> 50; subsequent deltas clamped.
     int64_t prev = 0;
     float d1 = arbDtMs(10000, &prev);
     float d2 = arbDtMs(10050, &prev);
-    float d3 = arbDtMs(100000000LL, &prev); // huge jump -> clamped
+    float d3 = arbDtMs(100000000LL, &prev);
     CHECK(d1 == 50.0f && std::fabs(d2 - 50.0f) < 0.01f && d3 <= 60000.0f,
           "dt: first=50, delta measured, huge jump bounded");
 }
 
-// ---- v4.4.0 audit5 N2/N5: trip EWMA learning + temperature range-gate + forget
 static void test_v440_thermal_learning() {
     DeviceProfile dp; device_profile_init(&dp);
     CHECK(dp.thermal_trip_c > 0.0f && dp.thermal_trip_c < 90.0f,
@@ -243,17 +196,13 @@ static void test_v440_thermal_learning() {
     o.temp_c = 50.0f; o.thermal_trip_c = 95.0f; o.battery_pct = 80;
     o.refresh_rate_hz = 60; o.cpu_util_pct = 40; o.gpu_util_pct = 30;
     for (int i = 0; i < 300; i++) device_profile_observe(&dp, &o);
-    // N2: a real trip now moves the trip estimate off the 85 default via EWMA
-    // (previously hardcoded trip=0 made it never learn).
     CHECK(dp.thermal_trip_c > 85.0f && dp.thermal_trip_c < 95.6f,
           "v440: trip EWMA converges toward the real trip (~95)");
 
-    // N5: out-of-range temp (200C sensor spike) must NOT raise the sticky max.
     DevObservation bad = o; bad.temp_c = 200.0f; bad.thermal_trip_c = 0;
     device_profile_observe(&dp, &bad);
     CHECK(dp.thermal_max_observed_c <= 150.0f, "v440: out-of-range temp 200C rejected");
 
-    // N5: a sticky spike then relaxes toward the current (cool) reading.
     dp.thermal_max_observed_c = 140.0f;
     DevObservation cool = o; cool.thermal_trip_c = 0;
     for (int i = 0; i < 2000; i++) device_profile_observe(&dp, &cool);
@@ -261,7 +210,6 @@ static void test_v440_thermal_learning() {
           "v440: sticky max forgets toward current temp");
 }
 
-// ---- v4.4.0 audit5 N9: confidence decay at the 1000-observation boundary
 static void test_v440_confidence_decay() {
     DeviceProfile dp; device_profile_init(&dp);
     DevObservation o; std::memset(&o, 0, sizeof(o));

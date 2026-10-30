@@ -1,24 +1,3 @@
-// test_c4_freezer_autogame.cpp — v6.0.1 regression for the 8h "no-game-target"
-// field bug.
-//
-// On a real device the user played a game for 8 hours but the C4 panel always
-// read "后端可用 · 当前无游戏目标（后台暂无应用可冻）" with degraded code
-// "no-game-target". Root cause: c4FreezerTick() set
-//   fgIsGame = !fg.empty() && gamelist::isManualGame(fg)
-// and isManualGame() only consults /data/adb/aatpe/game_overrides.list, which
-// does not exist by default. There is no auto game detection wired in. So with
-// zero manual entries, fgIsGame was permanently false, lastGame was never set,
-// c4ChooseTarget() always returned "", and the panel sat at no-game-target
-// forever.
-//
-// This test reproduces that world (manual list empty, config list empty) and
-// proves the fix: when the foreground app is AUTO-detected as a game (via the
-// game-engine-thread signal), it becomes the freeze target after it backgrounds.
-// It also proves the negative: with no auto-detection signal, target stays ""
-// and the panel reports no-game-target (the safe historical behaviour).
-//
-// Compiled in production mode (-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM) so the
-// real c4FreezerTick / c4FreezerStateJson bodies run.
 
 #include <cstdio>
 #include <cstring>
@@ -42,8 +21,6 @@ const char* STATE_DIR = "/tmp/aatpe_c4autogame_state";
 namespace aatpe { namespace c4freezer {
 extern std::atomic<int> g_c4freezerLockDepth;
 void c4FreezerTestSetMountRoot(const std::string& root);
-// v6.0.1 test seam: mark `pkg` as auto-detected (engine threads present).
-// Empty string disables the seam (production/host returns false).
 void c4FreezerTestSetAutoGamePkg(const std::string& pkg);
 }}
 
@@ -57,16 +34,11 @@ std::string ForegroundManager::getPackage() const { return g_fg; }
 void ForegroundManager::setPackage(const std::string&) {}
 time_t ForegroundManager::startTime() const { return 0; }
 
-// Reproduce the bug world: manual game list EMPTY.
 namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return false; }
 }}
-// Reproduce the bug world: config game list EMPTY.
 bool isPackageInGameList(const std::string&) { return false; }
 
-// Smart exec stub.
-//   "pm list packages -U com.auto.game" -> uid 10123
-//   anything else (dumpsys media_session) -> a paused session for another pkg.
 std::string aatpeExec(const std::string& cmd, const char*) {
     if (cmd.find("pm list packages -U com.auto.game") != std::string::npos) {
         return "package:com.auto.game uid:10123\n";
@@ -110,7 +82,6 @@ static void rmrf(const std::string& path) {
 int main() {
     printf("=== C4 v6.0.1: auto engine-thread game detection primes the freeze target ===\n");
 
-    // Fake v1 freezer hierarchy for uid 10123 (the auto-detected game).
     std::string root = "/tmp/aatpe_c4autogame_fakecg";
     rmrf(root);
     mkdir(root.c_str(), 0755);
@@ -124,15 +95,9 @@ int main() {
     mkdir(STATE_DIR, 0700);
     setC4FreezerEnabled(true);
 
-    // ------------------------------------------------------------------
-    // PHASE 0: NEGATIVE — no manual entry, no config entry, no auto signal.
-    // This is the 8-hour-bug world. target must stay "" and degraded must
-    // be "no-game-target". (If the fix broke this guard, a launcher/app
-    // would be wrongly frozen.)
-    // ------------------------------------------------------------------
     printf("--- P0: no signal at all -> safe no-target (the old bug world) ---\n");
-    c4FreezerTestSetAutoGamePkg("");   // auto-detect seam OFF
-    g_fg = "com.auto.game";            // user's game, but we don't recognize it yet
+    c4FreezerTestSetAutoGamePkg("");
+    g_fg = "com.auto.game";
     c4FreezerTick();
     {
         std::string j = c4FreezerStateJson();
@@ -143,18 +108,13 @@ int main() {
               "P0: degraded=no-game-target (the bug we are fixing)");
     }
 
-    // ------------------------------------------------------------------
-    // PHASE 1: AUTO-DETECT the game (engine threads seen). fg=game ->
-    // lastGame should now be primed even though NO manual/config entry exists.
-    // ------------------------------------------------------------------
     printf("--- P1: engine-thread auto-detection primes lastGame ---\n");
-    c4FreezerTestSetAutoGamePkg("com.auto.game");  // engine threads present
+    c4FreezerTestSetAutoGamePkg("com.auto.game");
     g_fg = "com.auto.game";
     c4FreezerTick();
     {
         std::string j = c4FreezerStateJson();
         printf("  p1 snapshot: %s\n", j.c_str());
-        // Foreground game: target == game (it will freeze when it backgrounds).
         CHECK(j.find("\"target\":\"com.auto.game\"") != std::string::npos,
               "P1: auto-detected fg game becomes the target");
         CHECK(j.find("no-game-target") == std::string::npos,
@@ -163,12 +123,8 @@ int main() {
               "P1: foreground game is NOT frozen");
     }
 
-    // ------------------------------------------------------------------
-    // PHASE 2: game backgrounds (launcher comes to foreground). The game
-    // must now become a freezable background target and actually get FROZEN.
-    // ------------------------------------------------------------------
     printf("--- P2: game backgrounds -> v1 FROZEN ---\n");
-    c4FreezerTestSetAutoGamePkg("");   // launcher has no engine threads
+    c4FreezerTestSetAutoGamePkg("");
     g_fg = "com.android.launcher";
     c4FreezerTick();
     {
@@ -188,9 +144,6 @@ int main() {
     CHECK(st.find("FROZEN") != std::string::npos,
           "P2: on-disk freezer.state is FROZEN");
 
-    // ------------------------------------------------------------------
-    // PHASE 3: game returns to foreground -> thawed (safety guard).
-    // ------------------------------------------------------------------
     printf("--- P3: game returns to foreground -> THAWED ---\n");
     c4FreezerTestSetAutoGamePkg("com.auto.game");
     g_fg = "com.auto.game";

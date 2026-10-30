@@ -1,16 +1,3 @@
-// test_shadow_race_hammer_v450.cpp — TSan concurrent hammer for v4.5.0 shadow sampling.
-//
-// Gate G2 task one: prove the new shadow ring + g_mlShadowSamplesCollected/Dropped
-// atomics + recordShadowOutcome/markPendingShadow/pending routing are data-race
-// FREE under true concurrency (a single-threaded TSan run cannot trigger a race).
-//
-// 4 threads hit ONE LearningModel concurrently:
-//   W1: recordShadowOutcome() loop        (writes shadowRing_, bumps collected/dropped)
-//   W2: recordPendingDecision()+markPendingShadow() loop (writes pending_decisions)
-//   R1: getShadowRingSize()/counters loop (reads ring + atomic counters)
-//   R2: getPendingDecision() enumeration loop  (reads pending_decisions)
-// All production mutations take LearningModel::mutex_; counters are std::atomic.
-// Under TSan a correct lock/atomic scheme reports ZERO data races.
 #include <cstdio>
 #include <cstdlib>
 #include <thread>

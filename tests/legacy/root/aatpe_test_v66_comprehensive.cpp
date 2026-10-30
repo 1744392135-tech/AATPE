@@ -1,9 +1,3 @@
-// AATPE Comprehensive Unit Test Suite
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Tests: ML learning rate decay (sample-count fix), hybrid learning,
-//        command parsing, ML core functionality.
-// GREEN→RED→GREEN methodology: each test has a unique failure mode.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,7 +26,6 @@ static int g_fail = 0;
     else { g_fail++; printf("  [FAIL] %s (got %.6f, expected %.6f, diff %.6f)\n", msg, _a, _e, std::fabs(_a-_e)); } \
 } while(0)
 
-// Helper: make non-zero features
 static ThreadFeatures makeFeatures(float val = 0.5f) {
     ThreadFeatures f;
     f.avg_run_us = val;
@@ -52,9 +45,6 @@ static ThreadFeatures makeFeatures(float val = 0.5f) {
     return f;
 }
 
-// ============================================================================
-// Test Group 1: ML Learning Rate Decay (P0 fix — sample-count based)
-// ============================================================================
 static void test_ml_lr_decay_sample_count() {
     printf("\n=== Test: ML Learning Rate Decay (sample-count based, v66 fix) ===\n");
     LearningModel m;
@@ -66,14 +56,12 @@ static void test_ml_lr_decay_sample_count() {
     ASSERT_NEAR(pm0.learning_rate, 0.01f, 1e-6f, "initial lr = 0.01");
     ASSERT(pm0.sample_count == 0, "initial sample_count = 0");
 
-    // After 1 update, lr should be 0.01 * 0.999 = 0.00999
     ThreadFeatures f = makeFeatures();
     m.update(0, f, 0.8f);
     pm0 = m.getPoolModel(0);
     ASSERT_NEAR(pm0.learning_rate, 0.01f * 0.999f, 1e-6f, "after 1 sample: lr = 0.00999");
     ASSERT(pm0.sample_count == 1, "after 1 sample: sample_count = 1");
 
-    // After 100 updates, lr = 0.01 * 0.999^100
     for (int i = 1; i < 100; i++) m.update(0, f, 0.8f);
     pm0 = m.getPoolModel(0);
     float expected100 = 0.01f * std::pow(0.999f, 100);
@@ -111,7 +99,6 @@ static void test_ml_lr_per_model_independence() {
     m.setDecay(0.999f);
 
     ThreadFeatures f = makeFeatures();
-    // Update pool 0 100 times
     for (int i = 0; i < 100; i++) m.update(0, f, 0.8f);
 
     PoolModel pm0 = m.getPoolModel(0);
@@ -133,10 +120,9 @@ static void test_ml_weight_update_magnitude() {
     m.init(3);
     m.setInitialLR(0.01f);
     m.setDecay(0.999f);
-    m.setL2Lambda(0.0f);  // disable L2 for clean measurement
+    m.setL2Lambda(0.0f);
 
     ThreadFeatures f = makeFeatures(0.8f);
-    // Train with consistent outcome=1.0, weights should move significantly
     for (int i = 0; i < 3000; i++) {
         m.update(0, f, 1.0f);
     }
@@ -152,7 +138,6 @@ static void test_ml_weight_update_magnitude() {
     ASSERT(maxAbsWeight > 0.01f, "max |weight| > 0.01 after 3000 samples (meaningful learning)");
     ASSERT(pm0.weights[0] > 0.1f, "bias weight > 0.1 (learned to predict high outcome)");
 
-    // Verify prediction reflects learning
     float pred = m.predict(0, f);
     printf("  [INFO] prediction after training = %.6f\n", pred);
     ASSERT(pred > 0.7f, "prediction > 0.7 after training on outcome=1.0 (model learned)");
@@ -166,26 +151,18 @@ static void test_ml_lr_floor() {
     m.setDecay(0.999f);
 
     ThreadFeatures f = makeFeatures();
-    // 0.01 * 0.999^N = 1e-6 → N = ln(1e-4)/ln(0.999) ≈ 9206
     for (int i = 0; i < 9206; i++) m.update(0, f, 0.5f);
     PoolModel pm = m.getPoolModel(0);
     printf("  [INFO] lr at 9206 samples = %.8f\n", pm.learning_rate);
     ASSERT(pm.learning_rate >= 1e-6f - 1e-9f, "lr near floor at 9206 samples");
 
-    // A few more should hit the floor
     for (int i = 0; i < 100; i++) m.update(0, f, 0.5f);
     pm = m.getPoolModel(0);
     ASSERT_NEAR(pm.learning_rate, 1e-6f, 1e-9f, "lr at 1e-6 floor after 9306 samples");
 }
 
-// ============================================================================
-// Test Group 2: Command Parsing (set_ml_hybrid=1 off-by-one regression)
-// ============================================================================
 static void test_command_parsing_set_ml_hybrid() {
     printf("\n=== Test: Command parsing set_ml_hybrid=1 (off-by-one regression) ===\n");
-    // "set_ml_hybrid=" is exactly 14 characters:
-    // s(1)e(2)t(3)_(4)m(5)l(6)_(7)h(8)y(9)b(10)r(11)i(12)d(13)=(14)
-    // So line.c_str() + 14 points to the value, NOT the '='.
     const char* prefix = "set_ml_hybrid=";
     ASSERT(strlen(prefix) == 14, "prefix 'set_ml_hybrid=' has length 14");
 
@@ -198,7 +175,6 @@ static void test_command_parsing_set_ml_hybrid() {
     const char* val0 = line0.c_str() + 14;
     ASSERT(strcmp(val0, "0") == 0, "set_ml_hybrid=0 → valStr='0'");
 
-    // Verify isAllDigits works on correctly-parsed values
     auto isAllDigits = [](const char* s) -> bool {
         if (!s || *s == '\0') return false;
         for (; *s; s++) if (*s < '0' || *s > '9') return false;
@@ -207,15 +183,11 @@ static void test_command_parsing_set_ml_hybrid() {
     ASSERT(isAllDigits(val1), "valStr='1' passes isAllDigits");
     ASSERT(isAllDigits(val0), "valStr='0' passes isAllDigits");
 
-    // Demonstrate what off-by-one (offset 13) would produce:
     const char* badVal = line1.c_str() + 13;
     ASSERT(strcmp(badVal, "=1") == 0, "offset 13 would give '=1' (the bug)");
     ASSERT(!isAllDigits(badVal), "'=1' fails isAllDigits (would be rejected)");
 }
 
-// ============================================================================
-// Test Group 3: Hybrid Learning
-// ============================================================================
 static void test_hybrid_init_enable() {
     printf("\n=== Test: Hybrid learning init/enable/disable ===\n");
     aatpe_ml_hybrid::HybridLearner h;
@@ -229,7 +201,6 @@ static void test_hybrid_init_enable() {
     h.setEnabled(false);
     ASSERT(!h.isEnabled(), "hybrid disabled after setEnabled(false)");
 
-    // Status string
     std::string status = h.getStatusString();
     ASSERT(status.find("hybrid=off") != std::string::npos, "status shows hybrid=off");
     h.setEnabled(true);
@@ -243,13 +214,11 @@ static void test_hybrid_sgd_update() {
     h.init(3);
     h.setEnabled(true);
 
-    // Before: all zero
     aatpe_ml_hybrid::HybridPoolDelta before = h.getPoolDelta(0);
     float beforeSum = 0;
     for (int i = 0; i < 15; i++) beforeSum += std::fabs(before.weights[i]);
     ASSERT_NEAR(beforeSum, 0.0f, 1e-6f, "hybrid weights zero before tick");
 
-    // Create two snapshots 500ms apart with runtime delta
     std::vector<aatpe_ml_hybrid::ThreadCpuSnapshot> snaps1, snaps2;
     aatpe_ml_hybrid::ThreadCpuSnapshot s1, s2;
     s1.tid = 100; s1.cpu = 0; s1.pool = 0; s1.runTimeNs = 1000000; s1.timestamp = 1000000000ULL;
@@ -258,8 +227,8 @@ static void test_hybrid_sgd_update() {
     snaps2.push_back(s2);
 
     std::vector<uint64_t> cpuRt(8, 0);
-    h.tick(snaps1, cpuRt, 8);  // first tick: records baseline
-    h.tick(snaps2, cpuRt, 8);  // second tick: computes delta + SGD
+    h.tick(snaps1, cpuRt, 8);
+    h.tick(snaps2, cpuRt, 8);
 
     aatpe_ml_hybrid::HybridPoolDelta after = h.getPoolDelta(0);
     float afterSum = 0;
@@ -279,7 +248,6 @@ static void test_hybrid_save_load() {
     h1.init(3);
     h1.setEnabled(true);
 
-    // Train a bit
     std::vector<aatpe_ml_hybrid::ThreadCpuSnapshot> snaps1, snaps2;
     aatpe_ml_hybrid::ThreadCpuSnapshot s1, s2;
     s1.tid = 200; s1.cpu = 6; s1.pool = 2; s1.runTimeNs = 500000; s1.timestamp = 2000000000ULL;
@@ -291,12 +259,10 @@ static void test_hybrid_save_load() {
 
     ASSERT(h1.save(path), "hybrid save succeeds");
 
-    // Load into new learner
     aatpe_ml_hybrid::HybridLearner h2;
     h2.init(3);
     ASSERT(h2.load(path), "hybrid load succeeds");
 
-    // Compare pool 2 deltas
     aatpe_ml_hybrid::HybridPoolDelta d1 = h1.getPoolDelta(2);
     aatpe_ml_hybrid::HybridPoolDelta d2 = h2.getPoolDelta(2);
     bool match = true;
@@ -346,7 +312,6 @@ static void test_hybrid_disabled_zero_overhead() {
     snaps.push_back(s);
     std::vector<uint64_t> cpuRt(8, 0);
 
-    // Multiple ticks while disabled should not change anything
     for (int i = 0; i < 10; i++) h.tick(snaps, cpuRt, 8);
     ASSERT(h.getTotalUpdates() == 0, "hybrid disabled: no updates after 10 ticks");
     aatpe_ml_hybrid::HybridPoolDelta d = h.getPoolDelta(0);
@@ -355,9 +320,6 @@ static void test_hybrid_disabled_zero_overhead() {
     ASSERT_NEAR(sum, 0.0f, 1e-6f, "hybrid disabled: weights stay zero");
 }
 
-// ============================================================================
-// Test Group 4: ML Core Functionality
-// ============================================================================
 static void test_ml_predict_update() {
     printf("\n=== Test: ML predict + update basic ===\n");
     LearningModel m;
@@ -439,16 +401,16 @@ static void test_ml_is_all_zero_features() {
 static void test_ml_extract_features() {
     printf("\n=== Test: ML extractFeatures normalization ===\n");
     ThreadFeatures f = LearningModel::extractFeatures(
-        100000,  // avg_run_us = 100ms
-        500,     // nr_switches
-        75,      // cpu_usage %
-        50,      // priority
-        0,       // nice
-        true,    // is_game
-        120,     // thermal (always 120)
-        1024,    // capacity
-        true,    // current_cpu_match
-        10       // migration_count
+        100000,
+        500,
+        75,
+        50,
+        0,
+        true,
+        120,
+        1024,
+        true,
+        10
     );
     ASSERT(f.avg_run_us >= 0.0f && f.avg_run_us <= 1.0f, "avg_run_us normalized [0,1]");
     ASSERT(f.nr_switches >= 0.0f && f.nr_switches <= 1.0f, "nr_switches normalized [0,1]");
@@ -474,10 +436,10 @@ static void test_ml_alpha_cold_start() {
     ASSERT_NEAR(m.getAlpha(), 0.0f, 1e-6f, "global alpha=0 with 49 samples (< cold_start=50)");
     ASSERT_NEAR(m.getAlphaForPool(0), 0.0f, 1e-6f, "pool 0 alpha=0 with 49 samples");
 
-    m.update(0, f, 0.8f);  // 50th sample: progress=(50-50+1)/500=0.002, alpha=0.0006
+    m.update(0, f, 0.8f);
     ASSERT(m.getAlpha() > 0.0f, "global alpha > 0 at 50 samples (cold start exited, +1 formula)");
     ASSERT_NEAR(m.getAlpha(), 0.0006f, 1e-5f, "global alpha=0.0006 at exactly 50 samples");
-    m.update(0, f, 0.8f);  // 51st sample: progress=(51-50+1)/500=0.004, alpha=0.0012
+    m.update(0, f, 0.8f);
     ASSERT(m.getAlpha() > 0.0006f, "global alpha increases at 51 samples");
 }
 
@@ -499,32 +461,22 @@ static void test_ml_reset() {
     ASSERT_NEAR(sum, 0.0f, 1e-6f, "pool 0 weights zero after reset");
 }
 
-// ============================================================================
-// Test Group 5: ML measureOutcomeV2
-// ============================================================================
 static void test_ml_measure_outcome_v2() {
     printf("\n=== Test: ML measureOutcomeV2 ===\n");
-    // measureOutcomeV2 semantics: LOWER run_ratio = better (less CPU time needed).
-    // Use 1-second wall time (before_ts=1000, after_ts=1001) for realistic ratios.
-    // baseline=0.5 means pre-migration run_ratio was 0.5.
 
-    // Good outcome: post-migration run_ratio = 0.1 (big improvement from 0.5)
-    // delta_run = 0.1 * 1e9ns = 100000000ns
     float good = LearningModel::measureOutcomeV2(
-        0, 100000000,        // before/after run time (ns): delta=100M = 0.1 ratio
-        1000, 1001,           // 1 second wall time
-        2000000, 2000000,     // freq unchanged
-        2000000,               // base freq
-        50,                    // load
-        0.5f                   // baseline run_ratio = 0.5
+        0, 100000000,
+        1000, 1001,
+        2000000, 2000000,
+        2000000,
+        50,
+        0.5f
     );
     ASSERT(good >= 0.0f && good <= 1.0f, "good outcome in [0,1]");
     printf("  [INFO] good outcome (run_ratio 0.1, baseline 0.5) = %.4f\n", good);
 
-    // Bad outcome: post-migration run_ratio = 0.8 (worse than baseline 0.5)
-    // delta_run = 0.8 * 1e9ns = 800000000ns
     float bad = LearningModel::measureOutcomeV2(
-        0, 800000000,         // delta=800M = 0.8 ratio (worse)
+        0, 800000000,
         1000, 1001,
         2000000, 2000000,
         2000000,
@@ -535,9 +487,8 @@ static void test_ml_measure_outcome_v2() {
     printf("  [INFO] bad outcome (run_ratio 0.8, baseline 0.5) = %.4f\n", bad);
     ASSERT(good > bad, "good outcome (low run_ratio) score > bad outcome (high run_ratio)");
 
-    // Anomaly: delta_run=0 (sleeping thread) → returns -1
     float anomaly = LearningModel::measureOutcomeV2(
-        1000000, 1000000,     // delta=0
+        1000000, 1000000,
         1000, 1001,
         2000000, 2000000,
         2000000,
@@ -547,19 +498,13 @@ static void test_ml_measure_outcome_v2() {
     ASSERT(anomaly < 0.0f, "delta_run=0 returns -1 (anomaly/sleeping)");
 }
 
-// ============================================================================
-// RED phase verification: intentionally break decay to prove test catches it
-// ============================================================================
 static void test_red_phase_lr_decay_bug_detection() {
     printf("\n=== Test: RED phase — verify test catches time-based decay bug ===\n");
-    // Verify that decayLearningRate() is a no-op (fix: time-based decay removed,
-    // decay now happens only in update() per-sample). This is the GREEN state.
     LearningModel m;
     m.init(3);
     m.setInitialLR(0.01f);
     m.setDecay(0.999f);
 
-    // Calling decayLearningRate() many times should NOT change lr (no-op by design)
     for (int i = 0; i < 9200; i++) m.decayLearningRate();
     PoolModel pm0 = m.getPoolModel(0);
     printf("  [INFO] After 9200 decayLearningRate() calls: lr=%.8f, samples=%d\n",
@@ -567,8 +512,6 @@ static void test_red_phase_lr_decay_bug_detection() {
     ASSERT(pm0.sample_count == 0, "no samples after decayLearningRate-only calls");
     ASSERT(pm0.learning_rate == 0.01f, "lr unchanged (decayLearningRate is no-op by design)");
 
-    // RED simulation: manually verify that per-sample decay in update() works.
-    // If update() did NOT decay lr (old bug), lr would stay at 0.01 after many updates.
     LearningModel m2;
     m2.init(1);
     m2.setInitialLR(0.01f);
@@ -579,7 +522,6 @@ static void test_red_phase_lr_decay_bug_detection() {
     printf("  [INFO] NEW sample-based: lr after 9200 samples = %.8f, samples=%d\n",
            pm2.learning_rate, pm2.sample_count);
     ASSERT(pm2.sample_count == 9200, "NEW fix: lr at floor with 9200 actual samples");
-    // After 9200 updates with decay 0.999: 0.01 * 0.999^9200 ≈ 1.01e-6
     ASSERT(pm2.learning_rate <= 1.1e-6f, "lr decayed to floor after 9200 actual samples");
     float maxW = 0;
     for (int i = 0; i < ML_WEIGHT_COUNT; i++) maxW = std::max(maxW, std::fabs(pm2.weights[i]));
@@ -587,33 +529,26 @@ static void test_red_phase_lr_decay_bug_detection() {
     ASSERT(maxW > 0.01f, "NEW fix: weights learned meaningfully before lr hit floor");
 }
 
-// ============================================================================
-// Main
-// ============================================================================
 int main() {
     printf("================================================================\n");
     printf("  AATPE Comprehensive Unit Test Suite\n");
     printf("  ML Learning Rate Fix + Hybrid Learning + Command Parsing\n");
     printf("================================================================\n");
 
-    // Group 1: ML Learning Rate Decay (the P0 fix)
     test_ml_lr_decay_sample_count();
     test_ml_lr_at_3000_samples();
     test_ml_lr_per_model_independence();
     test_ml_weight_update_magnitude();
     test_ml_lr_floor();
 
-    // Group 2: Command Parsing
     test_command_parsing_set_ml_hybrid();
 
-    // Group 3: Hybrid Learning
     test_hybrid_init_enable();
     test_hybrid_sgd_update();
     test_hybrid_save_load();
     test_hybrid_reset();
     test_hybrid_disabled_zero_overhead();
 
-    // Group 4: ML Core
     test_ml_predict_update();
     test_ml_save_load();
     test_ml_validate_parameters();
@@ -622,10 +557,8 @@ int main() {
     test_ml_alpha_cold_start();
     test_ml_reset();
 
-    // Group 5: Outcome measurement
     test_ml_measure_outcome_v2();
 
-    // RED phase: prove tests catch the old bug
     test_red_phase_lr_decay_bug_detection();
 
     printf("\n================================================================\n");

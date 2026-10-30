@@ -1,5 +1,3 @@
-// test_multiusr.cpp - R7 final test: multi-user package enumeration.
-// Uses the real aatpe::apklabel API (no static prototypes).
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -48,14 +46,12 @@ int main() {
     strcpy(g_tmp, "/tmp/test_r7final_XXXXXX");
     if (!::mkdtemp(g_tmp)) { printf("FATAL: mkdtemp failed\n"); return 2; }
 
-    // ---- uid -> user ID extraction ----
     CHECK(aatpe::apklabel::userIdFromUid(10100) == 0, "uid 10100 -> user 0");
     CHECK(aatpe::apklabel::userIdFromUid(110100) == 1, "uid 110100 -> user 1");
     CHECK(aatpe::apklabel::userIdFromUid(1000) == 0, "system uid 1000 -> user 0");
     CHECK(aatpe::apklabel::userIdFromUid(99100) == 0, "isolated uid 99100 -> user 0");
     CHECK(aatpe::apklabel::userIdFromUid(100000) == 1, "uid 100000 -> user 1");
 
-    // ---- Fixture 1: user0 only, third-party apps ----
     writeFile("f1/list",
         "com.example.game1 10100 0 /data/user/0/com.example.game1\n"
         "com.example.game2 10101 1 /data/user/0/com.example.game2\n");
@@ -64,7 +60,6 @@ int main() {
     CHECK(r1.size() == 2, "user0-only: 2 third-party packages");
     CHECK(hasPkg(r1, "com.example.game1"), "user0-only: game1 present");
 
-    // ---- Fixture 2: user0 + work profile (user 10) ----
     writeFile("f2/list",
         "com.example.game1 10100 0 /data/user/0/com.example.game1\n"
         "com.work.app1 110100 0 /data/user/10/com.work.app1\n"
@@ -74,7 +69,6 @@ int main() {
     CHECK(r2.size() == 3, "user0+work: 3 packages (work apps included)");
     CHECK(hasPkg(r2, "com.work.app1"), "user0+work: work-profile app1 present");
 
-    // ---- Fixture 3: system apps excluded ----
     writeFile("f3/list",
         "com.android.settings 1000 0 /data/user/0/com.android.settings\n"
         "com.android.systemui 1001 0 /data/user/0/com.android.systemui\n"
@@ -85,7 +79,6 @@ int main() {
     CHECK(hasPkg(r3, "com.user.game"), "system apps excluded: user game kept");
     CHECK(!hasPkg(r3, "com.android.settings"), "system apps excluded: settings dropped");
 
-    // ---- Fixture 4: real game packages preserved ----
     writeFile("f4/list",
         "org.cocos2dx.zmxy.mi 10300 0 /data/user/0/org.cocos2dx.zmxy.mi\n"
         "com.smile.gifmaker 10301 0 /data/user/0/com.smile.gifmaker\n"
@@ -98,7 +91,6 @@ int main() {
     CHECK(hasPkg(r4, "com.tencent.tmgp.sgame"), "real games: 王者 kept");
     CHECK(hasPkg(r4, "com.netease.my"), "real games: 梦幻西游 kept");
 
-    // ---- Fixture 5: malicious package names rejected ----
     writeFile("f5/list",
         "com.normal.app 10400 0 /data/user/0/com.normal.app\n"
         "../etc/passwd 10401 0 /data/user/0/x\n"
@@ -109,7 +101,6 @@ int main() {
     CHECK(hasPkg(r5, "com.normal.app"), "malicious: normal app kept");
     CHECK(r5.size() == 1, "malicious: ../ and /abs and sysuid all rejected, only 1 valid");
 
-    // ---- Fixture 6: long line truncation ----
     {
         std::string longPkg = "com.valid.longname.";
         while (longPkg.size() < 4000) longPkg += "x";
@@ -122,12 +113,10 @@ int main() {
         CHECK(r6.size() == 1, "long line: oversize pkg rejected, no fragment injected");
     }
 
-    // ---- Fixture 7: missing packages.list (fail-closed) ----
     auto r7 = aatpe::apklabel::listInstalledPackagesAllUsers(
         tmpPath("f7/nonexistent"), freshDir("f7_app"), freshDir("f7_user"));
     CHECK(r7.empty(), "missing list: empty result (fail-closed)");
 
-    // ---- Fixture 8: /data/app scan supplements list ----
     writeFile("f8/list", "com.list.only 10600 0 /data/user/0/com.list.only\n");
     writeFile("f8_app/~~aaa==/com.extra.app-XyZ==/base.apk", "fake");
     auto r8 = aatpe::apklabel::listInstalledPackagesAllUsers(
@@ -135,7 +124,6 @@ int main() {
     CHECK(hasPkg(r8, "com.list.only"), "app scan: list package kept");
     CHECK(hasPkg(r8, "com.extra.app"), "app scan: extra app found");
 
-    // ---- Fixture 9: malformed uid field ----
     writeFile("f9/list",
         "com.uid.garbage notanumber 0 /data/user/0/x\n"
         "com.uid.ok 10700 0 /data/user/0/com.uid.ok\n");
@@ -143,7 +131,6 @@ int main() {
         tmpPath("f9/list"), freshDir("f9_app"), freshDir("f9_user"));
     CHECK(hasPkg(r9, "com.uid.ok"), "malformed uid: valid package kept");
 
-    // ---- Fixture 10: blank lines ----
     writeFile("f10/list", "\n\n  \n\ncom.blank.ok 10800 0 /data/user/0/com.blank.ok\n\n");
     auto r10 = aatpe::apklabel::listInstalledPackagesAllUsers(
         tmpPath("f10/list"), freshDir("f10_app"), freshDir("f10_user"));

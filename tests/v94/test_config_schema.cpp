@@ -1,7 +1,3 @@
-// test_config_schema.cpp - v94 hermetic unit tests for aatpe_config_schema.cpp.
-// Links aatpe_config_schema.cpp + log_stub (see build.sh recipe).
-// Exercises: field lookup, valid/invalid keys, INT clamping, BOOL parsing,
-// FLOAT formatting, and unknown-key rejection.
 #include <cstdio>
 #include <string>
 #include "aatpe_config_schema.h"
@@ -50,7 +46,6 @@ int main() {
     out = "";
     ok = configSchemaValidate("ML_DRIFT_DETECTION", "1", out);
     CHECK(ok && out == "1", "BOOL numeric 1 -> '1'");
-    // RC6 (C5): case-insensitive bool parsing.
     out = "";
     ok = configSchemaValidate("ML_DRIFT_DETECTION", "True", out);
     CHECK(ok && out == "1", "C5: BOOL 'True' -> '1'");
@@ -60,10 +55,6 @@ int main() {
     out = "";
     ok = configSchemaValidate("ML_DRIFT_DETECTION", "on", out);
     CHECK(ok && out == "1", "C5: BOOL 'on' -> '1'");
-    // RC7 (C5 profile ML segment): bool keys ML_ENABLED/ML_HYBRID_ENABLED/
-    // ML_COLD_START_PROTECTION now route through parseFlexBool (case-insensitive,
-    // illegal value fail-safes to default). Cover the illegal-value rejection path
-    // on the shared BOOL schema type; profile parse uses the same parser.
     out = "";
     ok = configSchemaValidate("ML_DRIFT_DETECTION", "maybe", out);
     CHECK(ok == false, "C5: BOOL illegal 'maybe' rejected (fail-safe to default)");
@@ -88,8 +79,6 @@ int main() {
     ok = configSchemaValidate("STATE_CACHE_TTL_HOURS", "abc", out);
     CHECK(ok == false, "non-numeric INT value rejected");
 
-    // ROUND-003 Defect-1: a trailing unit suffix must be tolerated (legacy
-    // std::stoi accepted "500ms" as 500; the schema path used to reject it).
     printf("=== ConfigSchema ROUND-003: unit suffix tolerated ===\n");
     out = "";
     ok = configSchemaValidate("MIGRATION_COOLDOWN_MS", "500ms", out);
@@ -104,7 +93,6 @@ int main() {
     ok = configSchemaValidate("MIN_USEFUL_CAPACITY_RATIO", "0.5f", out);
     CHECK(ok && out == "0.500", "FLOAT '0.5f' unit suffix tolerated");
 
-    // Still reject: empty / pure-non-numeric / no numeric prefix.
     printf("=== ConfigSchema ROUND-003: still rejected ===\n");
     out = "";
     ok = configSchemaValidate("MIGRATION_COOLDOWN_MS", "", out);
@@ -113,12 +101,10 @@ int main() {
     ok = configSchemaValidate("MIGRATION_COOLDOWN_MS", "ms", out);
     CHECK(ok == false, "pure unit with no number rejected");
 
-    // ROUND-004: dead key EBPF_CAPABILITY_DETECTION must no longer be registered.
     printf("=== ConfigSchema ROUND-004: dead key removed ===\n");
     CHECK(configSchemaLookup("EBPF_CAPABILITY_DETECTION") == nullptr,
           "EBPF_CAPABILITY_DETECTION removed from schema (dead key)");
 
-    // ROUND-004: hot-reload classification metadata.
     printf("=== ConfigSchema ROUND-004: hot-reload class metadata ===\n");
     CHECK(configKeyHotReloadClass("DECISION_INTERVAL") == "live",
           "DECISION_INTERVAL classified live");
@@ -145,7 +131,6 @@ int main() {
     CHECK(configKeyHotReloadClass("STATE_CACHE_TTL_HOURS") == "live",
           "schema key defaults live");
 
-    // ROUND-004: PRIME_POOL cpulist schema validation.
     printf("=== ConfigSchema ROUND-004: PRIME_POOL cpulist validation ===\n");
     out = "";
     ok = configSchemaValidate("PRIME_POOL", "", out);

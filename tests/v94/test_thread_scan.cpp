@@ -1,5 +1,3 @@
-// test_thread_scan.cpp - v94 hermetic unit tests for thread_scan.cpp
-// Focuses on the public pure matcher matchPattern() (glob/exact/prefix/suffix).
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -42,11 +40,6 @@ int main() {
     CHECK(matchPattern("xyz", "Thread") == false, "plain no substring");
 
     printf("=== G5-003: classification threshold ordering contract ===\n");
-    // The role classifier must evaluate the high-util-worker -> GAME branch BEFORE
-    // the generic UI branch. That is only correct while
-    //   kUiAvgRunUs < kGameAvgRunUs < kThroughputAvgRunUs.
-    // Guard this invariant so a future constant edit cannot silently re-introduce
-    // the old misclassification (2-5ms high-switch unnamed worker -> UI).
     CHECK(aatpe::thread_classify::kUiAvgRunUs < aatpe::thread_classify::kGameAvgRunUs, "kUiAvgRunUs < kGameAvgRunUs");
     CHECK(aatpe::thread_classify::kGameAvgRunUs < aatpe::thread_classify::kThroughputAvgRunUs, "kGameAvgRunUs < kThroughputAvgRunUs");
     CHECK(aatpe::thread_classify::kUiMinSwitches > 0, "kUiMinSwitches positive");
@@ -56,18 +49,18 @@ int main() {
     CHECK(threadScanSanitizeCommForTest("RenderThread") == "RenderThread", "ascii name untouched");
     CHECK(threadScanSanitizeCommForTest("kworker/u8:2") == "kworker/u8:2", "kworker/colon preserved");
     {
-        std::string good; good += (char)0xE4; good += (char)0xB8; good += (char)0xAD;  // 中
+        std::string good; good += (char)0xE4; good += (char)0xB8; good += (char)0xAD;
         CHECK(threadScanSanitizeCommForTest(good) == good, "complete UTF-8 char preserved");
     }
     {
-        std::string cut; cut += (char)0xE4; cut += (char)0xB8;  // truncated 中
+        std::string cut; cut += (char)0xE4; cut += (char)0xB8;
         std::string out = threadScanSanitizeCommForTest(cut);
         bool valid = true;
         for (unsigned char c : out) if (c >= 0x80) valid = false;
         CHECK(out.empty() || valid, "truncated 中 -> invalid tail stripped, no orphan byte");
     }
     {
-        std::string s = "Game"; s += (char)0xE4; s += (char)0xB8;  // cut mid-中
+        std::string s = "Game"; s += (char)0xE4; s += (char)0xB8;
         CHECK(threadScanSanitizeCommForTest(s) == "Game", "ascii prefix kept, truncated tail stripped");
     }
     CHECK(threadScanSanitizeCommForTest("").empty(), "empty stays empty");
@@ -78,7 +71,6 @@ int main() {
         ThreadRole r1 = classifyThread(1, 1001, "1.ui", "com.x", pri, sub, &conf, 0);
         CHECK(r1 == ROLE_S1_UI, "Flutter: '1.ui' -> S1_UI");
         ThreadRole r2 = classifyThread(1, 1002, "com.x.ui", "com.x", pri, sub, &conf, 0);
-        // ROUND-014 P3: tight regex ^[0-9]+.type$ — "com.x.ui" is NOT a flutter thread.
         CHECK(r2 != ROLE_S1_UI, "ROUND-014 P3: 'com.x.ui' NOT S1 (tightened)");
         ThreadRole r3 = classifyThread(1, 1003, "1.platform", "com.x", pri, sub, &conf, 0);
         CHECK(r3 == ROLE_S1_UI, "Flutter: '1.platform' -> S1_UI");
@@ -96,7 +88,6 @@ int main() {
         CHECK(r9 != ROLE_S3_GAME, "WebView: 'mtkPowerAIDL' not S3_GAME");
     }
 
-    // ROUND-014 P3: G4 unified threadutil truth table (38 samples, key regressions).
     printf("=== ThreadUtil: Flutter tight regex ^[0-9]+.(ui|raster|gpu|platform)$ ===\n");
     using namespace aatpe;
     CHECK(isFlutterEngineThread("1.ui")==true,  "1.ui -> flutter UI");
@@ -124,7 +115,6 @@ int main() {
 
     printf("=== CFG-binder: loadThreadRules multi-colon tolerance ===\n");
     {
-        // Point CONF_DIR at a temp tree and write a rules/thread_roles.conf.
         char tmp[] = "/tmp/aatpe_tscan_XXXXXX";
         char* t = mkdtemp(tmp);
         std::string base = t;
@@ -134,15 +124,14 @@ int main() {
         {
             std::ofstream rf(base + "/rules/thread_roles.conf");
             rf << "# test\n";
-            rf << "*:binder:*:S0:BINDER:95\n";        // malformed 6-field (the bug)
-            rf << "*:RenderThread:S2:RENDER:88\n";       // normal 5-field
-            rf << "survive:me\n";                        // too short (<5 fields) -> skip
-            rf << "one:two:three:four\n";                // 4 fields -> skip
-            rf << "surfaceflinger:*:S0:SYSTEM:99\n";     // normal wildcard
+            rf << "*:binder:*:S0:BINDER:95\n";
+            rf << "*:RenderThread:S2:RENDER:88\n";
+            rf << "survive:me\n";
+            rf << "one:two:three:four\n";
+            rf << "surfaceflinger:*:S0:SYSTEM:99\n";
         }
         extern std::vector<ThreadRule> g_rules;
         loadThreadRules();
-        // Find the binder rule (threadPattern should recover "binder*").
         bool binderOk = false, binderPriOk = false, binderSubOk = false;
         bool normalOk = false, normalPriOk = false;
         bool wildcardOk = false;

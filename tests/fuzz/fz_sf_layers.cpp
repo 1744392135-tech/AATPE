@@ -1,5 +1,3 @@
-// fz_sf_layers.cpp - fuzz aatpe::frameaware::sfListLayers (surface #1:
-// `dumpsys SurfaceFlinger --list` layer-name list parsing).
 #include <string>
 #include <vector>
 #include "aatped.h"

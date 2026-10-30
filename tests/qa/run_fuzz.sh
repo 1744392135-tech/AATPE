@@ -1,26 +1,11 @@
 #!/bin/bash
-# =============================================================================
-# run_fuzz.sh — run the QA fuzzers.
-#
-# With libFuzzer: run coverage-guided fuzzing for N seconds per target.
-# Without libFuzzer (this host): generate a mutation-based corpus from the
-# committed seeds (bit flips, byte inserts, truncations, structured mutations)
-# and sweep every input through the production parser under ASan+UBSan.
-# A crash (ASan/UBSan abort) is a FAIL and the offending input is copied to
-# tests/qa/artifacts/<target>-crash-<n> so it can be reproduced.
-#
-# Usage: bash tests/qa/run_fuzz.sh [target...]
-# =============================================================================
 set -u
 QA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
 export QA_MODE=fuzz; source "$QA_DIR/common.sh"
 
 ART="$QA_DIR/artifacts"; mkdir -p "$ART"
 MUTDIR="$QA_DIR/build/mutated_corpus"; rm -rf "$MUTDIR"; mkdir -p "$MUTDIR"
 
-# The real binary may live in build/fuzz (libFuzzer) or build/fuzz_noengine
-# (standalone fallback). Pick whichever was actually built.
 fuzz_bin() {
   local t="$1"
   for d in "$QA_DIR/build/fuzz" "$QA_DIR/build/fuzz_noengine"; do
@@ -29,19 +14,15 @@ fuzz_bin() {
   return 1
 }
 
-# libFuzzer presence (re-detect, build_fuzz.sh may have chosen fallback).
 HAVE_LIBFUZZER=0
 if echo 'int main(){}' | $CXX -fsanitize=fuzzer -x c++ - -o /tmp/_lf_t 2>/dev/null; then
   HAVE_LIBFUZZER=1; rm -f /tmp/_lf_t
 fi
 
-FUZZ_TIME="${FUZZ_TIME:-30}"   # seconds per target under libFuzzer
-MUT_COUNT="${MUT_COUNT:-2000}" # mutated inputs per target in fallback mode
+FUZZ_TIME="${FUZZ_TIME:-30}"
+MUT_COUNT="${MUT_COUNT:-2000}"
 
-# --- generate mutated corpus per target ---------------------------------------
-# Python mutator: for each seed produce MUT_COUNT variants via bit flips,
-# truncation, duplication, and structured splices. Deterministic seed.
-gen_mutated() {  # $1=target
+gen_mutated() {
   local t="$1"
   python3 - "$QA_DIR/corpus/$t" "$MUTDIR/$t" "$MUT_COUNT" <<'PY'
 import os, sys, random
@@ -59,29 +40,29 @@ def emit(b):
     global idx
     with open(os.path.join(out_dir, 'm%05d' % idx), 'wb') as f: f.write(b)
     idx += 1
-for s in seeds: emit(s)  # keep originals
+for s in seeds: emit(s)
 for _ in range(n):
     s = bytearray(random.choice(seeds))
     op = random.randrange(6)
-    if op == 0 and s:            # bit flip
+    if op == 0 and s:
         i = random.randrange(len(s)); s[i] ^= 1 << random.randrange(8)
-    elif op == 1 and s:           # truncate
+    elif op == 1 and s:
         del s[random.randrange(len(s)):]
-    elif op == 2:                 # insert random byte
+    elif op == 2:
         i = random.randrange(len(s)+1); s[i:i] = bytes([random.randrange(256)])
-    elif op == 3:                 # splice two seeds
+    elif op == 3:
         o = random.choice(nonempty); cut = random.randrange(len(o))
         s = s + o[:cut]
-    elif op == 4:                 # repeated byte inflation
+    elif op == 4:
         b = random.randrange(256); s = bytearray([b]) * random.randint(1, 64)
-    else:                         # null-flatten: turn some bytes into NULs
+    else:
         for i in range(len(s)):
             if random.random() < 0.1: s[i] = 0
     emit(bytes(s))
 PY
 }
 
-run_one() {  # $1=target
+run_one() {
   local t="$1"
   local bin; bin="$(fuzz_bin "$t")"
   if [ -z "$bin" ]; then
@@ -102,7 +83,6 @@ run_one() {  # $1=target
     local n; n=$(grep -c 'bytes)' "$log" 2>/dev/null || echo 0)
     qa_record_pass "fuzz_$t" "no crash ($n inputs, $(grep -m1 'complete' "$log" || echo 'ok'))"
   else
-    # Save the crashing input: the last [driver_main] line names the file.
     local crash; crash=$(grep -oE "$MUTDIR/$t/[A-Za-z0-9_.-]+" "$log" | tail -1)
     if [ -n "$crash" ] && [ -f "$crash" ]; then
       cp "$crash" "$ART/fuzz_${t}-crash-input.bin"

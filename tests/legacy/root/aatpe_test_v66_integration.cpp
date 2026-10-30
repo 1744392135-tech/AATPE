@@ -1,6 +1,3 @@
-// aatpe_test_v66_integration.cpp - v66 Integration Test Suite
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,12 +59,12 @@ static void test_full_ml_pipeline() {
     for (int i = 0; i < 100; i++) {
         ThreadFeatures f = makeFeatures(5000.0f, 30.0f, false);
         model.update(0, f, 1.0f);
-        model.update(2, f, 0.0f);  // low-run threads do poorly on big
+        model.update(2, f, 0.0f);
     }
     for (int i = 0; i < 100; i++) {
         ThreadFeatures f = makeFeatures(50000.0f, 80.0f, true);
-        model.update(2, f, 1.0f);  // game threads do well on big
-        model.update(0, f, 0.0f);  // game threads do poorly on little
+        model.update(2, f, 1.0f);
+        model.update(0, f, 0.0f);
     }
     CHECK(model.getTotalSamples() == 400, "400 training samples recorded");
     CHECK(model.getAlpha() > 0.0f, "model alpha > 0 after training");
@@ -118,7 +115,6 @@ static void test_federated_integration() {
     printf("\n=== Integration: Federated Learning Export/Import ===\n");
     const char* exchangeDir = "/tmp/aatpe_fed_exchange";
     mkdir(exchangeDir, 0755);
-    // point PSK at a writable tmp path so HMAC .sig is generated
     const char* pskPath = "/tmp/aatpe_fed_test_psk.bin";
     unlink(pskPath);
     setenv("AATPE_PSK_PATH", pskPath, 1);
@@ -138,7 +134,6 @@ static void test_federated_integration() {
         closedir(d);
     }
     CHECK(fileCount > 0, "federated export created files");
-    // verify .sig file exists and is non-empty
     std::string sigPath = std::string(exchangeDir) + "/local_model.bin.sig";
     struct stat sigSt;
     CHECK(stat(sigPath.c_str(), &sigSt) == 0, "HMAC .sig file exists after export");
@@ -146,7 +141,6 @@ static void test_federated_integration() {
         CHECK(sigSt.st_size > 0, "HMAC .sig file is non-empty");
         CHECK(sigSt.st_size == 64, "HMAC .sig file is exactly 64 hex chars");
     }
-    // Verify .sig content is valid hex
     {
         FILE* sf = fopen(sigPath.c_str(), "r");
         if (sf) {
@@ -161,9 +155,6 @@ static void test_federated_integration() {
             CHECK(allHex, "HMAC .sig contains valid hex characters");
         }
     }
-    // computeGradients() was dead production code and has
-    // been removed. This block used to exercise it; exportModel/importModel
-    // below still cover the real federated wire format.
     std::string exported = aatpe_federated::exportModel(weights, 0.3f, 100);
     CHECK(!exported.empty(), "exportModel produces non-empty string");
     std::vector<float> impWeights;
@@ -174,7 +165,7 @@ static void test_federated_integration() {
     CHECK(impWeights.size() == weights.size(), "imported weight count matches");
     CHECK_NEAR(impAlpha, 0.3f, 0.001f, "imported alpha matches");
     CHECK(impSamples == 100, "imported sample count matches");
-    unlink(pskPath);  // cleanup test PSK
+    unlink(pskPath);
     std::string rmCmd = "rm -rf ";
     rmCmd += exchangeDir;
     int _rc = system(rmCmd.c_str()); (void)_rc;
@@ -220,9 +211,6 @@ static void test_model_staleness() {
     CHECK(model.isModelStale() == true, "model remains stale after same fingerprint set");
 }
 
-// P0-fix: Thread role classification integration test.
-// Mirrors thread_scan.cpp matchPattern() + classifyThread() logic with an
-// isolated rule set, verifying end-to-end role assignment for key threads.
 enum IntegThreadRole {
     IROLE_S0_SYSTEM = 0,
     IROLE_S1_UI = 1,
@@ -292,7 +280,6 @@ static IntegThreadRole integClassifyThread(const std::string& tname, const std::
 
 static void test_thread_role_classification() {
     printf("\n=== Integration: Thread Role Classification (P0-fix) ===\n");
-    // Load 3 test rules (same format as production thread_roles.conf)
     std::vector<IntegThreadRule> rules = {
         {"surfaceflinger", "*", IROLE_S0_SYSTEM, "SYSTEM", 99},
         {"*", "main", IROLE_S1_UI, "UI_MAIN", 90},
@@ -302,32 +289,25 @@ static void test_thread_role_classification() {
     CHECK(rules.size() == 4, "test rule set has 4 rules");
     int prio = 0;
     std::string subtype;
-    // UnityMain -> S3_GAME
     IntegThreadRole r1 = integClassifyThread("UnityMain", "com.example.game", rules, prio, subtype);
     CHECK(r1 == IROLE_S3_GAME, "UnityMain classified as ROLE_S3_GAME");
     CHECK(prio == 88, "UnityMain priority=88");
     CHECK(subtype == "GAME_MAIN", "UnityMain subtype=GAME_MAIN");
-    // RenderThread -> S2_RENDER
     IntegThreadRole r2 = integClassifyThread("RenderThread", "com.example.app", rules, prio, subtype);
     CHECK(r2 == IROLE_S2_RENDER, "RenderThread classified as ROLE_S2_RENDER");
     CHECK(prio == 88, "RenderThread priority=88");
     CHECK(subtype == "RENDER", "RenderThread subtype=RENDER");
-    // surfaceflinger process (any thread) -> S0_SYSTEM
     IntegThreadRole r3 = integClassifyThread("any_thread", "surfaceflinger", rules, prio, subtype);
     CHECK(r3 == IROLE_S0_SYSTEM, "surfaceflinger process classified as ROLE_S0_SYSTEM");
     CHECK(prio == 99, "surfaceflinger priority=99");
     CHECK(subtype == "SYSTEM", "surfaceflinger subtype=SYSTEM");
-    // main thread -> S1_UI
     IntegThreadRole r4 = integClassifyThread("main", "com.example.app", rules, prio, subtype);
     CHECK(r4 == IROLE_S1_UI, "main thread classified as ROLE_S1_UI");
-    // unknown thread -> S5_BACKGROUND (fallback)
     IntegThreadRole r5 = integClassifyThread("RandomWorker", "com.example.app", rules, prio, subtype);
     CHECK(r5 == IROLE_S5_BACKGROUND, "unknown thread falls back to ROLE_S5_BACKGROUND");
-    // Wildcard matching: Binder_* should match if rule existed; verify multi-star glob
     CHECK(integMatchPattern("Binder_1", "Binder_*"), "glob 'Binder_*' matches 'Binder_1'");
     CHECK(integMatchPattern("kworker/0:1", "kworker*"), "glob 'kworker*' matches 'kworker/0:1'");
     CHECK(!integMatchPattern("RenderThread", "Unity*"), "glob 'Unity*' does not match 'RenderThread'");
-    // Exact match with '=' prefix
     CHECK(integMatchPattern("main", "=main"), "exact '=main' matches 'main'");
     CHECK(!integMatchPattern("mainloop", "=main"), "exact '=main' does not match 'mainloop'");
 }

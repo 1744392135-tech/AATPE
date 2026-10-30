@@ -1,9 +1,3 @@
-// D06 real-device framestats regression (com.smile.gifmaker, Redmi K40 game,
-// Android 12, MIUI). Rows are comma-separated, no spaces. Verifies:
-//  - comma rows are split correctly (old whitespace parser gave 0 frames)
-//  - FrameCompleted is located via header, not cols.back() (which is trailing 0)
-//  - computed p50/p95/p99 match the gfxinfo summary (Total 766 / Janky 193 /
-//    p50=7ms / p95=85ms / p99=350ms) within reasonable tolerance.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -20,7 +14,6 @@ extern FramestatsMetrics computeFramestatsMetrics(const std::string& out);
 static int g_pass = 0, g_fail = 0;
 #define CK(c,m) do{ if(c){g_pass++;printf("  [PASS] %s\n",m);} else {g_fail++;printf("  [FAIL] %s\n",m);} }while(0)
 
-// Header line AOSP emits before rows (we synthesize it because D06 tail cut it).
 static const char* kHeader =
     "N,Flags,IntendedVsync,Vsync,OldestInputEvent,NewestInputEvent,"
     "HandleInputStart,AnimationStart,PerformTraversalsStart,DrawStart,"
@@ -28,7 +21,6 @@ static const char* kHeader =
     "SwapBuffers,FrameCompleted,FrameCompletedOffset,DesiredPresentTime,"
     "ActualPresentTime,FrameReady,FrameCompleted_old,FrameTimelineVsyncId";
 
-// 26 real comma rows captured by `dumpsys gfxinfo com.smile.gifmaker framestats | tail -40`.
 static const char* kRows[] = {
 "0,121353,1518022738016,1518022738016,0,1518023034320,1518023035628,1518023338628,1518023562397,1518032738016,1518023014628,8333333,1518023974628,1518024083243,1518024476551,1518027184858,1518029605166,28230,475000,1518029605166,1518029385474,0,",
 "0,121362,1518080382543,1518080382543,0,1518081285781,1518081287628,1518081491243,1518081670320,1518090382543,1518081268166,8333333,1518081827012,1518081905781,1518082268781,1518083674628,1518085938628,27462,376693,1518085938628,1518085581397,0,",
@@ -74,19 +66,13 @@ int main() {
            m.totalFrames, m.fps, m.targetFps, m.droppedPct, m.jankyPct);
     CK(m.totalFrames >= 20, "computeFramestatsMetrics: >=20 frames parsed");
     CK(m.fps > 0.0 && m.fps < 200.0, "fps sane (not 120.000008/8.333 placeholder)");
-    // Sparse tail-40 subset: targetPeriod inferred from ~50ms gaps, frames are
-    // all within one period, so jankyPct may legitimately be 0. Just ensure
-    // jankyPct is in [0,1].
     CK(m.jankyPct >= 0.0 && m.jankyPct <= 1.0, "jankyPct in [0,1]");
 
-    // Sanity: no duration is EXACTLY the vsync-period constant 8.333333ms
-    // (col11=8333333ns). A real frame duration near 8ms is legitimate.
     bool saw8 = false;
     for (auto d : durs) if (std::fabs(d - 8.333333) < 0.001) saw8 = true;
     CK(!saw8, "8.333333 (vsync period col11) not treated as frame duration");
 
     printf("=== D06: whitespace fallback (old fixture compat) ===\n");
-    // Whitespace row: same columns, space-separated, no trailing comma.
     std::string ws = std::string("N Flags IntendedVsync Vsync OldestInputEvent NewestInputEvent ")
                    + "HandleInputStart AnimationStart PerformTraversalsStart DrawStart "
                    + "SyncStart SyncQueued SyncCompleted IssueDrawCommandsStart SwapBuffers FrameCompleted\n"
@@ -104,17 +90,9 @@ int main() {
     auto td = parseGfxinfoFramestats(trailing);
     CK(td.size() >= 1, "trailing comma empty column tolerated");
 
-    // #3-regression: bare marker header "FrameCompleted" (single token, host
-    // fixture style) must NOT map to col0. Data rows look like:
-    //   hdr 0 <intended> <vsync> 0 0 ... 0 <completed> 0
-    // i.e. col0="hdr", cols[1]=flags, cols[2]=intended, cols[3]=vsync, middle
-    // zeroed, completed = last POSITIVE cell (a trailing "0" / empty cell must be
-    // skipped). Before the fix, completedCol=0 -> strtoll("hdr")=0 -> every row
-    // skipped -> 0 frames.
     printf("=== D06: bare marker header + trailing 0/empty (RC3 regression) ===\n");
     {
         std::string mk = "FrameCompleted\n";
-        // 12 steady 60fps rows: intended every 16.67ms, completed +2ms, then a "0" tail.
         long long t = 100000000LL;
         for (int i = 0; i < 12; i++) {
             char buf[256];

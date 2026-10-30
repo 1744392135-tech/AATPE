@@ -1,5 +1,3 @@
-// fz_pm_packages.cpp - fuzz aatpe::frameaware::parsePmPackageList
-// (surface #5: `pm list packages` output "package:com.foo").
 #include <string>
 #include <vector>
 #include "aatped.h"

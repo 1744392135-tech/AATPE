@@ -1,6 +1,3 @@
-// test_ml_hybrid_persist.cpp - v94 hermetic unit tests for aatpe_ml_hybrid_persist.cpp
-// Links all 5 hybrid TUs. Focus: save()/load() round-trip (CRC32 + atomic),
-// magic rejection, version/pool-count validation, topology-mismatch rejection.
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -24,7 +21,6 @@ int main() {
 
     printf("=== HybridPersist: save/load round-trip ===\n");
     L.init(3); L.setEnabled(true);
-    // Drive a few updates so weights are non-default.
     std::vector<uint64_t> cpuRt(8, 0);
     uint64_t runNs = 1000, ts = 1000;
     for (int i = 0; i < 55; i++) {
@@ -38,7 +34,7 @@ int main() {
     CHECK(L.save(path) == true, "save() writes CRC32+atomic file");
 
     HybridLearner L2;
-    L2.init(3);  // matching topology
+    L2.init(3);
     CHECK(L2.load(path) == true, "load() reads the saved file");
     HybridPoolDelta after = L2.getPoolDelta(0);
     CHECK(after.updateCount == before.updateCount, "loaded updateCount matches");
@@ -53,9 +49,6 @@ int main() {
     uint32_t badMagic = 0xDEADBEEF; fwrite(&badMagic, 4, 1, fp); fclose(fp);
     CHECK(L2.load("/tmp/aatpe_hybrid_bad.bin") == false, "bad magic -> rejected");
 
-    // G7 R004-B2 round2: feature normalization was corrected to match
-    // LearningModel::extractFeatures; v1/v2 files carry weights learned on the old
-    // (wrong/constant) distribution and must be rejected so the model cold-starts.
     printf("=== HybridPersist: old v2 weights rejected (feature layout changed) ===\n");
     FILE* v2 = fopen("/tmp/aatpe_hybrid_oldv2.bin", "wb");
     uint32_t magic = 0x4859424D, ver = 2;
@@ -64,46 +57,35 @@ int main() {
           "v2 (old distribution) -> rejected, cold start");
 
     printf("=== HybridPersist: load rejects CRC corruption ===\n");
-    // Flip one byte in the saved file's payload -> stored CRC mismatches calc.
     std::string goodPath = path;
     FILE* g = fopen(goodPath.c_str(), "rb");
     fseek(g, 0, SEEK_END); long sz = ftell(g); fseek(g, 0, SEEK_SET);
     std::vector<unsigned char> buf(sz); fread(buf.data(), 1, sz, g); fclose(g);
-    buf[8] ^= 0xFF;  // corrupt a payload byte
+    buf[8] ^= 0xFF;
     FILE* w = fopen("/tmp/aatpe_hybrid_corrupt.bin", "wb");
     fwrite(buf.data(), 1, sz, w); fclose(w);
     HybridLearner L3; L3.init(3);
     CHECK(L3.load("/tmp/aatpe_hybrid_corrupt.bin") == false, "CRC mismatch -> rejected");
 
-    // ---- G7-002: truncated CRC trailer must now FAIL CLOSED (previously the
-    // integrity check was silently skipped and the body accepted). ----
     printf("=== HybridPersist G7-002: truncated CRC trailer rejected (fail-closed) ===\n");
     for (int cut = 1; cut <= 4; cut++) {
         std::string tpath = "/tmp/aatpe_hybrid_trunc" + std::to_string(cut) + ".bin";
         FILE* tw = fopen(tpath.c_str(), "wb");
-        fwrite(buf.data(), 1, (size_t)(sz - cut), tw);   // drop last `cut` bytes of CRC
+        fwrite(buf.data(), 1, (size_t)(sz - cut), tw);
         fclose(tw);
         HybridLearner Lt; Lt.init(3);
         CHECK(Lt.load(tpath.c_str()) == false,
               ("truncated CRC by " + std::to_string(cut) + " byte(s) -> rejected").c_str());
     }
-    // Sanity: the untouched file still loads (regression guard).
     HybridLearner Lg; Lg.init(3);
     CHECK(Lg.load(path) == true, "full untouched file still loads");
 
-    // ---- ML-07: topology-hash mismatch must reject the file (cold start). ----
     printf("=== HybridPersist ML-07: topology-hash mismatch rejected ===\n");
     {
-        // Re-read the good file we just saved.
         FILE* g = fopen(path, "rb");
         fseek(g, 0, SEEK_END); long sz = ftell(g); fseek(g, 0, SEEK_SET);
         std::vector<unsigned char> buf(sz);
         fread(buf.data(), 1, sz, g); fclose(g);
-        // Layout (v5): magic[0:4] version[4:8] poolCount[8:12] enabled[12:16]
-        //             topoHash[16:24] ... per-pool ... totalUpdates ... CRC[sz-4:sz].
-        // Flip every byte of the embedded topoHash (offset 16..23) so it no longer
-        // matches this host. CRC will now mismatch the recomputed one; recompute
-        // CRC over the tampered body so ONLY the topology check can reject it.
         for (int i = 0; i < 8; i++) buf[16 + i] ^= 0xFF;
         long dataEnd = sz - 4;
         uint32_t crc = 0xFFFFFFFF;
@@ -121,7 +103,6 @@ int main() {
               "topoHash flipped + CRC recomputed -> rejected (topology mismatch)");
     }
 
-    // ---- ML-07: v4 (no topoHash) must be rejected by version gate. ----
     printf("=== HybridPersist ML-07: v4 file rejected (missing topology hash) ===\n");
     {
         FILE* v4 = fopen("/tmp/aatpe_hybrid_v4.bin", "wb");

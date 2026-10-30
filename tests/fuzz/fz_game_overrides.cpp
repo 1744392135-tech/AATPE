@@ -1,5 +1,3 @@
-// fz_game_overrides.cpp - fuzz aatpe::frameaware::parseGameOverridesContent
-// (surface #5: game_overrides.list - blank lines, '#' comments, package tokens).
 #include <string>
 #include <set>
 #include "aatped.h"

@@ -1,15 +1,3 @@
-// fz_threadrules.cpp - R-W3 strengthened: fuzz loadThreadRules() right-anchor
-// parsing with semantic assertions. We write mutated rules content, call the
-// production loadThreadRules(), then compare g_rules against a reference parser
-// that mirrors the production split/right-anchor logic.
-//
-// INVARIANTS:
-//   - g_rules.size() == reference rule count
-//   - For each rule: procPattern/threadPattern/subtype/role/priority match
-//   - <5-token lines skipped (not counted)
-//   - Comments (#) and empty lines skipped
-//   - 6-token lines: middle tokens concatenated into threadPattern
-//   - Bad priority -> default priority
 #include <string>
 #include <vector>
 #include <fstream>
@@ -22,10 +10,7 @@
 #include "fuzz_engine.h"
 
 extern const char* CONF_DIR;
-// g_rulesMutex is static in thread_scan.cpp; in the single-threaded fuzzer
-// we don't need to lock (no concurrent writer after loadThreadRules() returns).
 
-// Mirror the trim() used by loadThreadRules.
 static void refTrim(std::string& s) {
   while (!s.empty() && (s.back()==' '||s.back()=='\t'||s.back()=='\r'||s.back()=='\n'))
     s.pop_back();
@@ -117,7 +102,6 @@ int main(int argc, char** argv) {
     }
     loadThreadRules();
     auto expected = refParse(in);
-    // Read g_rules directly (single-threaded fuzzer, no concurrent writer).
     bool mismatch = false;
     std::string reason;
     if (g_rules.size() != expected.size()) {

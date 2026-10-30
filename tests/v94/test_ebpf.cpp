@@ -1,17 +1,10 @@
-// test_ebpf.cpp - v94 hermetic unit tests for aatpe_ebpf.cpp
-// Constructs EbpfScheduler and exercises its state/query accessors; load()
-// gracefully fails on a host without bpf/tracefs.
 #include <cstdio>
 #include <string>
 #include "aatpe_ebpf.h"
 #include "integrity.h"
 
-// The ebpf host test recipe does not link integrity.cpp. Provide a minimal,
-// test-controlled backing for the G3 integrity gate seam so production
-// aatpe_ebpf.cpp's call to aatpe::integrity::privilegedOpsAllowed() resolves.
-// Default verdict = Ok (1) so the pre-existing load() behavior is unchanged.
 namespace aatpe { namespace integrity {
-static int g_testVerdict = 1;   // 1 == Ok
+static int g_testVerdict = 1;
 static int g_gateCalls   = 0;
 bool privilegedOpsAllowed() { g_gateCalls++; return g_testVerdict == 1; }
 void setIntegrityVerdictForTest(IntegrityVerdict v) { g_testVerdict = (int)v; }
@@ -40,18 +33,14 @@ int main() {
     printf("=== eBPF: load() does not crash on host ===\n");
     bool ok = sched.load();
     CHECK(ok == true || ok == false, "load() returns a bool (graceful on host)");
-    // isActive() must be consistent with whatever load() decided.
     CHECK(sched.isActive() == ok, "isActive() consistent with load() result");
 
     printf("\n=== eBPF: G4-001 offset-degrade vs ring-loss recovery split ===\n");
     {
-        // Offset-caused degradation must NEVER auto-recover to EVENT_DRIVEN, no
-        // matter how loss-free the ring is. The kernel layout does not self-correct.
         sched.g4TestEnterOffsetDegraded();
         CHECK(sched.isOffsetDegraded() == true, "offset-degraded state flagged");
         CHECK(sched.getDetailedStateString() == std::string("DEGRADED_OFFSET"),
               "detailed state reads DEGRADED_OFFSET");
-        // Even with an old (31s) ring-loss stamp, recovery must be refused.
         sched.g4TestStampOldRingLoss();
         sched.g4TickRecovery();
         CHECK(sched.g4ModeIsEventDriven() == false,
@@ -60,32 +49,25 @@ int main() {
               "offset-degraded flag survives a recovery tick");
     }
     {
-        // Ring-loss HYBRID degradation DOES recover after 30s loss-free.
         sched.g4TestEnterRingLossHybrid();
         CHECK(sched.isOffsetDegraded() == false, "ring-loss hybrid not offset-degraded");
-        // First tick seeds the clock (lastLoss==0) -> no immediate flip.
         sched.g4TickRecovery();
         CHECK(sched.g4ModeIsEventDriven() == false,
               "ring-loss hybrid: first tick seeds clock, no immediate recovery");
-        // Stamp a 60s-old loss (well past 30s threshold, avoid boundary flakiness) and tick -> should recover.
         sched.g4TestStampOldRingLoss();
         sched.g4TickRecovery();
         CHECK(sched.g4ModeIsEventDriven() == true && sched.g4StateIsEventDriven() == true,
               "ring-loss hybrid: recovers to EVENT_DRIVEN after 30s loss-free");
-        // G4-001 teardown: the recovery path spawned a poll thread; stop it
-        // explicitly so the host test does not abort on a joinable-thread dtor.
         sched.g4TestStopPollThread();
     }
 
     printf("\n=== eBPF: ROUND-003 F2 offset-verify matrix ===\n");
     {
         using S = aatpe_ebpf::TpOffsetStatus;
-        // Combo 1: known 4.14 family + tracefs unreadable (UNKNOWN) -> trust
-        // built-in offsets, STAY EVENT_DRIVEN, no POLLING latch.
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
-            s.g4TestApplyOffsetStatus(S::UNKNOWN, /*knownFamily=*/true);
+            s.g4TestApplyOffsetStatus(S::UNKNOWN, true);
             CHECK(s.isOffsetDegraded() == false,
                   "known family + UNKNOWN: not offset-degraded");
             CHECK(s.isOffsetUnverifiedButTrusted() == true,
@@ -95,12 +77,10 @@ int main() {
             CHECK(s.getDetailedStateString() == std::string("TRUSTED_BUILTIN"),
                   "known family + UNKNOWN: state reports TRUSTED_BUILTIN");
         }
-        // Combo 2: known family + readable but mismatch (DEGRADED) -> fail-safe
-        // POLLING latch (evidence of a different layout).
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
-            s.g4TestApplyOffsetStatus(S::DEGRADED, /*knownFamily=*/true);
+            s.g4TestApplyOffsetStatus(S::DEGRADED, true);
             CHECK(s.isOffsetDegraded() == true,
                   "known family + MISMATCH: offset-degraded");
             CHECK(s.g4ModeIsEventDriven() == false,
@@ -109,12 +89,10 @@ int main() {
                   "known family + MISMATCH: state reports DEGRADED_OFFSET");
             s.g4TestStopPollThread();
         }
-        // Combo 3: non-known family + tracefs unreadable (UNKNOWN) -> conservative
-        // POLLING (do NOT blindly trust built-in offsets on an unknown kernel).
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
-            s.g4TestApplyOffsetStatus(S::UNKNOWN, /*knownFamily=*/false);
+            s.g4TestApplyOffsetStatus(S::UNKNOWN, false);
             CHECK(s.isOffsetDegraded() == true,
                   "unknown family + UNKNOWN: conservative offset-degrade");
             CHECK(s.isOffsetUnverifiedButTrusted() == false,
@@ -123,12 +101,10 @@ int main() {
                   "unknown family + UNKNOWN: forced to POLLING");
             s.g4TestStopPollThread();
         }
-        // Combo 4: non-known family + mismatch (DEGRADED) -> POLLING (partial
-        // readable mismatch must still fail-safe).
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
-            s.g4TestApplyOffsetStatus(S::DEGRADED, /*knownFamily=*/false);
+            s.g4TestApplyOffsetStatus(S::DEGRADED, false);
             CHECK(s.isOffsetDegraded() == true,
                   "unknown family + MISMATCH: offset-degraded");
             CHECK(s.g4ModeIsEventDriven() == false,
@@ -140,7 +116,6 @@ int main() {
     printf("\n=== eBPF: ROUND-004 config hot-reload convergence ===\n");
     {
         using RC = aatpe_ebpf::EbpfScheduler::EbpfRuntimeConfig;
-        // Case 1: enabled 1 -> 0 safe unload.
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
@@ -149,8 +124,6 @@ int main() {
             CHECK(s.g4IsActive() == false, "1->0: no longer active");
             CHECK(s.g4IsUnloaded() == true, "1->0: resources released (unloaded)");
         }
-        // Case 2: enabled 0 -> 1 with integrity gate Ok: load() is attempted
-        // (gate consulted); on host it cannot attach so it stays non-event-driven.
         {
             aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
             aatpe_ebpf::EbpfScheduler s;
@@ -160,8 +133,6 @@ int main() {
             CHECK(aatpe::integrity::g_gateCalls > before,
                   "0->1 (gate Ok): load() consulted integrity gate");
         }
-        // Case 3: enabled 0 -> 1 with gate Failed: privilege attach refused,
-        // must NOT enter EVENT_DRIVEN (fail-closed preserved).
         {
             aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Failed);
             aatpe_ebpf::EbpfScheduler s;
@@ -170,7 +141,6 @@ int main() {
                   "0->1 (gate Failed): refused, not EVENT_DRIVEN");
             aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
         }
-        // Case 4: identical config twice -> second call is a no-op (no thrash).
         {
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
@@ -179,24 +149,20 @@ int main() {
             CHECK(first == false, "identical cfg: already live -> no-op first");
             CHECK(second == false, "identical cfg: second call also no-op");
         }
-        // Case 5: rapid 1 -> 0 -> 1 sequence must not leak/corrupt state; the
-        // re-enable re-runs load() through the integrity gate.
         {
             aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
             aatpe_ebpf::EbpfScheduler s;
             s.g4TestEnterAttached();
-            (void)s.onConfigReload(RC{false, 64, true});   // 1 -> 0
+            (void)s.onConfigReload(RC{false, 64, true});
             CHECK(s.g4IsUnloaded() == true, "rapid 1->0->1: after disable, unloaded");
             long before = aatpe::integrity::g_gateCalls;
-            bool acted = s.onConfigReload(RC{true, 64, true}); // 0 -> 1
+            bool acted = s.onConfigReload(RC{true, 64, true});
             CHECK(acted == true, "rapid 1->0->1: re-enable reloads");
             CHECK(aatpe::integrity::g_gateCalls > before,
                   "rapid 1->0->1: re-enable consulted integrity gate");
             CHECK(std::string(s.getStateString()).empty() == false,
                   "rapid 1->0->1: scheduler left in a consistent state");
         }
-        // Case 6: integrity FAILED while enabling -> must refuse and stay
-        // non-event-driven (fail-closed on the reload path, same as boot).
         {
             aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Failed);
             aatpe_ebpf::EbpfScheduler s;
@@ -209,36 +175,24 @@ int main() {
 
     printf("\n=== eBPF: G3 integrity gate (privileged attach refused when not OK) ===\n");
     {
-        // Default verdict = Ok: load() consults the gate and proceeds (on host it
-        // still cannot attach, so it falls back to POLLING — never EVENT_DRIVEN).
         aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
         aatpe_ebpf::EbpfScheduler schedOk;
         (void)schedOk.load();
         CHECK(schedOk.g4ModeIsEventDriven() == false,
               "verdict=Ok: load() does not land in EVENT_DRIVEN on host");
 
-        // Verdict = Failed: the gate must short-circuit BEFORE any privileged
-        // attach. The daemon must stay in POLLING/DEGRADED, never EVENT_DRIVEN.
         aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Failed);
         aatpe_ebpf::EbpfScheduler schedBad;
         (void)schedBad.load();
         CHECK(schedBad.g4ModeIsEventDriven() == false,
               "verdict=Failed: load() refuses privileged attach (not EVENT_DRIVEN)");
-        // The gate was consulted at least once on this fresh scheduler's load().
         CHECK(aatpe::integrity::g_gateCalls >= 1, "integrity gate was consulted during load()");
 
-        // Restore Ok so any later teardown/state readers see a sane verdict.
         aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
     }
 
     printf("\n=== eBPF: E-001 retryLoadIfDue backoff + reload (production failure state) ===\n");
     {
-        // Drive the REAL production failure path: with the integrity gate Ok, a
-        // host load() cannot attach any program and lands exactly where a device
-        // whose BPF/tracefs is unavailable lands:
-        //   mode_=POLLING + state_=DEGRADED_RING + no programs attached.
-        // The old gate checked state_==DEGRADED(6), which production never sets,
-        // so retryLoadIfDue() returned early forever and the device stayed stuck.
         aatpe::integrity::setIntegrityVerdictForTest(aatpe::integrity::IntegrityVerdict::Ok);
         aatpe_ebpf::EbpfScheduler s;
         (void)s.load();
@@ -254,20 +208,14 @@ int main() {
         CHECK(s.g4NextRetryDelayMs() >= 1000,
               "E-001: initial backoff delay seeded (>=1s)");
 
-        // The integrity gate is consulted on EVERY load(); use its call counter
-        // as the observable "load() was re-invoked" probe.
         long before = aatpe::integrity::g_gateCalls;
 
-        // (a) Backoff NOT yet elapsed -> must NOT retry.
         s.g4TickRetryLoad();
         CHECK(aatpe::integrity::g_gateCalls == before,
               "E-001: no retry before backoff elapses (gate not consulted again)");
         CHECK(s.g4LoadFailureCount() == 0,
               "E-001: failure counter unchanged while waiting for backoff");
 
-        // (b) Fast-forward the clock past the current backoff delay -> retry must
-        // re-invoke load() (gate consulted again) and advance the exponential
-        // backoff: 1s -> 2s, counter 0 -> 1.
         s.g4TestFastForwardRetryClock(2000);
         s.g4TickRetryLoad();
         CHECK(aatpe::integrity::g_gateCalls > before,
@@ -277,9 +225,6 @@ int main() {
         CHECK(s.g4NextRetryDelayMs() == 2000,
               "E-001: exponential backoff advanced 1000ms -> 2000ms");
 
-        // (c) The reload that just happened again failed on the host, so we must
-        // still be in the production POLLING/DEGRADED_RING failure state (not
-        // EVENT_DRIVEN) and still have no programs attached.
         CHECK(s.g4StateIsDegradedRing() == true,
               "E-001: still DEGRADED_RING after a failed reload on host");
         CHECK(s.g4ModeIsPolling() == true,
@@ -287,15 +232,11 @@ int main() {
         CHECK(s.g4ProgsAttached() == false,
               "E-001: still no programs attached after a failed reload");
 
-        // (d) Negative guard: a load that already SUCCEEDED but degraded (progs
-        // attached, ring-loss / offset-degraded -> POLLING+DEGRADED_RING) must NOT
-        // be torn down by retryLoadIfDue. Attach a sentinel program, force the
-        // offset-degraded POLLING state, fast-forward, and confirm no reload.
         aatpe_ebpf::EbpfScheduler s2;
         s2.g4TestEnterAttached();
         s2.g4TestAttachSentinelProg();
         s2.g4TestApplyOffsetStatus(aatpe_ebpf::TpOffsetStatus::DEGRADED,
-                                  /*knownFamily=*/true);
+ true);
         CHECK(s2.g4ModeIsPolling() == true && s2.g4StateIsDegradedRing() == true,
               "E-001 guard: offset-degraded lands in POLLING/DEGRADED_RING");
         CHECK(s2.g4ProgsAttached() == true,

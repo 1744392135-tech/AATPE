@@ -1,19 +1,4 @@
 #!/bin/bash
-# =============================================================================
-# AATPE SOURCE-LEVEL consistency check (runs on `make all`, works on a CLEAN tree).
-# Single source of truth = ./VERSION (VERSION_NAME / VERSION_CODE).
-#
-# This script deliberately does NOT inspect any binary: it only verifies that the
-# version-bearing SOURCE files agree with each other and that the on-disk mirrors
-# (WebUI x3, aatpe.conf x2) are byte-identical. It MUST pass on a freshly cloned
-# source tree BEFORE `make` has produced system/bin/* binaries — that is the whole
-# point of the split (P0-2 of the round-2 release convergence): the old
-# check_version_consistency.sh demanded packaged binaries that do not exist yet,
-# so a clean `make` always failed.
-#
-# Binary embedding / ELF / SHA256 checks live in check-release-consistency.sh,
-# which runs only after `make && make install` have produced system/bin/*.
-# =============================================================================
 set -e
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -52,12 +37,6 @@ check_contains "uninstall.sh"    "$EXPECTED_VERSION" "uninstall.sh banner"
 check_contains "webroot/index.html" "$EXPECTED_VERSION" "WebUI (webroot)"
 check_contains "webui/index.html"     "$EXPECTED_VERSION" "WebUI (webui)"
 
-# --- WebUI copies byte-identical ----------------------------------------------
-# The committed sources are webui/index.html and webroot/index.html. The third
-# copy under system/etc/aatpe/webui/ is a BUILD/INSTALL artifact (only created by
-# `make install`), NOT source. On a clean tree it legitimately does not exist, so
-# it must NOT turn the clean-tree gate red. We always compare the two committed
-# copies; the system/ mirror is checked ONLY when present (post-install).
 echo ""
 echo "--- WebUI copies ---"
 if ! cmp -s "$SRC_DIR/webui/index.html" "$SRC_DIR/webroot/index.html"; then
@@ -74,9 +53,6 @@ else
     echo "[skip] system/etc/aatpe/webui/index.html absent (build artifact; run 'make install' to verify it)"
 fi
 
-# --- aatpe.conf copies byte-identical -----------------------------------------
-# Root aatpe.conf is the committed source; system/etc/aatpe/aatpe.conf is an
-# install artifact. Compare only when the mirror exists.
 echo ""
 echo "--- aatpe.conf copies ---"
 if [ -f "$SRC_DIR/system/etc/aatpe/aatpe.conf" ]; then
@@ -90,7 +66,6 @@ else
     echo "[skip] system/etc/aatpe/aatpe.conf absent (build artifact; run 'make install' to verify it)"
 fi
 
-# --- eBPF embedded header is committed (deterministic loader) -----------------
 echo ""
 echo "--- eBPF committed embedded header ---"
 if [ -f "$SRC_DIR/ebpf/sched_events_embedded.h" ]; then

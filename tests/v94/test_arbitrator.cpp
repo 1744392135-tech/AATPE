@@ -1,8 +1,3 @@
-// test_arbitrator.cpp - v4.3.7 arbitration layer hermetic host unit test.
-//
-// Links the PURE part of aatped_arbitrator.cpp (arb_runtime_init / arb_compute)
-// plus the four mech .c cores. NO daemon, NO node writes. Asserts the hard
-// contract the v4.3.7 merge was validated for.
 
 #include <cstdio>
 #include <cstring>
@@ -35,7 +30,6 @@ static void settle(ArbRuntime* rt, const ArbSignals& s, int n) {
 int main() {
     printf("=== arbitrator hermetic unit ===\n");
 
-    // fail-safe: no signal -> no action.
     {
         ArbRuntime rt; arb_runtime_init(&rt);
         ArbSignals s; std::memset(&s, 0, sizeof s); s.signals_valid = 0;
@@ -44,7 +38,6 @@ int main() {
               o.efficiency_hint == 0.0f, "fail-safe: signals_valid=0 -> all zero");
     }
 
-    // NaN inputs -> cores treat as no signal, never crash/poison.
     {
         ArbRuntime rt; arb_runtime_init(&rt);
         ArbSignals s = base();
@@ -54,7 +47,6 @@ int main() {
               "nan-inf: outputs stay finite");
     }
 
-    // in-game -> boost, uncap.
     {
         ArbRuntime rt; arb_runtime_init(&rt);
         ArbSignals s = base();
@@ -66,7 +58,6 @@ int main() {
         CHECK(o.frame_cap_hz == 0, "ingame: uncap");
     }
 
-    // hard wall absolute.
     {
         ArbRuntime rt; arb_runtime_init(&rt);
         ArbSignals s = base();
@@ -80,7 +71,6 @@ int main() {
         CHECK(o.frame_cap_hz > 0, "wall: forces low cap");
     }
 
-    // context soft bias only reduces.
     {
         ArbRuntime rd; arb_runtime_init(&rd); ArbSignals d = base();
         d.cpu_util_pct = 85; d.gpu_util_pct = 80; d.touch_events_per_tick = 3;
@@ -93,7 +83,6 @@ int main() {
         CHECK((float)on.boost_vote_pct <= on.raw_perf_vote + 0.5f, "context: never inflates");
     }
 
-    // long-run bounded: 5000 ticks, all outputs finite.
     {
         ArbRuntime rt; arb_runtime_init(&rt);
         ArbSignals s = base();

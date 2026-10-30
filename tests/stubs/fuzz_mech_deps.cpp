@@ -1,4 +1,3 @@
-// Minimal stubs for cgroup/uclamp fuzz targets
 #include <string>
 #include <atomic>
 

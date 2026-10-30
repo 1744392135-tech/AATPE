@@ -1,6 +1,3 @@
-// fz_hmac.cpp - fuzz verifyCommandHmac(command, signature) (surface #10:
-// HMAC / token file-read verification). Split input at first NUL/newline into
-// command and hex signature.
 #include <string>
 #include "aatped_hmac.h"
 #include "fuzz_engine.h"
@@ -24,7 +21,6 @@ int main(int argc, char** argv) {
     std::string cmd = in, sig;
     size_t nl = in.find('\n');
     if (nl != std::string::npos) { cmd = in.substr(0, nl); sig = in.substr(nl + 1); }
-    // invariant: must be fail-CLOSED on empty/garbage; never crash.
     bool ok = verifyCommandHmac(cmd.c_str(), sig.c_str());
     (void)ok;
     if (sig.empty()) {

@@ -1,6 +1,3 @@
-// test_tidy_hardening.cpp — host unit tests for clang-tidy hardening items.
-//   * aatpeErrStr: thread-safe errno->message (reentrant buffer)
-//   * rounding: lround() equivalence for positive fps/pct
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -8,7 +5,6 @@
 #include <thread>
 #include "aatped_logging.h"
 
-// host stubs for logging TU linkage (we only exercise aatpeErrStr)
 const char* RUN_DIR = "/tmp";
 const char* LOG_FILE = "/tmp/aatpe_test.log";
 int mkdirIfNotExist(const char*, unsigned int) { return 0; }
@@ -26,7 +22,6 @@ int main() {
         CHECK(e != nullptr && strstr(e, "No such") != nullptr, "ENOENT message");
         const char* e2 = aatpeErrStr(EPERM);
         CHECK(strstr(e2, "Operation not permitted") != nullptr || strstr(e2, "Not permitted") != nullptr, "EPERM message");
-        // unknown errno -> deterministic fallback, never empty
         const char* e3 = aatpeErrStr(999999);
         CHECK(e3 != nullptr && e3[0] != '\0', "unknown errno fallback non-empty");
     }
@@ -48,7 +43,6 @@ int main() {
     }
     printf("=== tidied rounding lround ===\n");
     {
-        // positive fps/pct: (int)(x+0.5) vs lround(x) agree at typical values
         double vals[] = {59.4, 59.6, 120.0, 60.5, 33.3, 99.9};
         bool agree = true;
         for (double v : vals)

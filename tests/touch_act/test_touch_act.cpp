@@ -1,18 +1,3 @@
-// test_touch_act.cpp — host regression for the v4.3.6 touch per-thread uclamp
-// wiring. Links ONLY the pure decision core (touch_uclamp.c) + the controller
-// (touch_uclamp_act.cpp). The production foreground collector (touch_uclamp_fgscan.cpp,
-// which pulls in g_threads) is exercised on-device; here we feed FgThread arrays
-// directly through a recording fake actuator.
-//
-// Covers the hard acceptance:
-//   - touch -> UI/Render threads SET, BG never touched
-//   - repeat touch re-arms the window
-//   - window expiry -> RELEASE (60->80 / 120->40 / 144->33 ms)
-//   - frame overrun -> +10 pct
-//   - empty thread set -> no per-thread action
-//   - non-finite refresh -> base window (fail-safe)
-//   - pct 0..100 -> kernel 0..1024 (x10.24)
-//   - global floor idle40 / active50 (never maxed 80)
 #include "touch_uclamp_act.h"
 
 #include <cmath>
@@ -61,10 +46,9 @@ bool hasSet(const Rec& r, int tid, unsigned util) {
 int countSetTid(const Rec& r, int tid) {
     int c = 0; for (auto& s : r.sets) if (s.tid == tid) ++c; return c;
 }
-}  // namespace
+}
 
 int main() {
-    // ---- pct -> kernel conversion ------------------------------------------
     CHECK(touchUclampPctToKernel(80.0f) == 819u, "80% -> 819 (80*10.24)");
     CHECK(touchUclampPctToKernel(60.0f) == 614u, "60% -> 614");
     CHECK(touchUclampPctToKernel(100.0f) == 1024u, "100% -> 1024");
@@ -74,7 +58,6 @@ int main() {
           "NaN pct -> 0 fail-safe");
     CHECK(touchUclampPctToKernel(150.0f) == 1024u, "pct>100 clamped to 1024");
 
-    // ---- idle: no touch -> global idle floor 40, no per-thread action -----
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         c.tick(0, false, nullptr, 0, 60.0f, 0.0f, 16.6f);
@@ -84,13 +67,12 @@ int main() {
         CHECK(!c.isBoostLive(), "idle: not live");
     }
 
-    // ---- touch -> UI + Render SET @80, BG never touched -------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[3] = {
-            mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN),   // app main (tid==pid)
-            mkThread(1001, TOUCH_UCLAMP_ROLE_RENDER),    // RenderThread
-            mkThread(1002, TOUCH_UCLAMP_ROLE_BG),        // bg worker
+            mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN),
+            mkThread(1001, TOUCH_UCLAMP_ROLE_RENDER),
+            mkThread(1002, TOUCH_UCLAMP_ROLE_BG),
         };
         c.tick(0, true, ths, 3, 60.0f, 0.0f, 16.6f);
         CHECK(hasSet(r, 1000, 819u), "UI main SET @819 (80%)");
@@ -101,7 +83,6 @@ int main() {
         CHECK(r.globals.back() == 50, "touch: wrote global 50, not 80");
     }
 
-    // ---- high-frame-contribution UNKNOWN thread boosted @60 ---------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(2000, TOUCH_UCLAMP_ROLE_UNKNOWN, 0.8f) };
@@ -110,57 +91,51 @@ int main() {
     }
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
-        // low contribution UNKNOWN -> not boosted
         FgThread ths[1] = { mkThread(2001, TOUCH_UCLAMP_ROLE_UNKNOWN, 0.1f) };
         c.tick(0, true, ths, 1, 60.0f, 0.0f, 16.6f);
         CHECK(countSetTid(r, 2001) == 0, "low-contrib UNKNOWN NOT boosted");
     }
 
-    // ---- repeat touch re-arms the (60Hz, 80ms) window ---------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
-        c.tick(0, true, ths, 1, 60.0f, 0.0f, 16.6f);     // arm, expiry=80
+        c.tick(0, true, ths, 1, 60.0f, 0.0f, 16.6f);
         r.sets.clear(); r.globals.clear();
-        c.tick(40, true, ths, 1, 60.0f, 0.0f, 16.6f);    // re-arm -> expiry=120
-        c.tick(90, false, nullptr, 0, 60.0f, 0.0f, 16.6f); // t=90 < 120 expiry
+        c.tick(40, true, ths, 1, 60.0f, 0.0f, 16.6f);
+        c.tick(90, false, nullptr, 0, 60.0f, 0.0f, 16.6f);
         CHECK(countSetTid(r, 1000) == 0 ||
               true, "re-arm: no RELEASE at t=90 (still within extended window)");
-        // the only per-thread action by t=90 must NOT be a RELEASE(util=0) for 1000
         bool sawRelease = false;
         for (auto& s : r.sets) if (s.tid == 1000 && s.util == 0u) sawRelease = true;
         CHECK(!sawRelease, "re-arm window: no premature RELEASE at t=90");
         CHECK(c.isBoostLive(), "re-arm: still live at t=90");
     }
 
-    // ---- 60Hz window expiry -> RELEASE (util=0) ---------------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
         c.tick(0, true, ths, 1, 60.0f, 0.0f, 16.6f);
         r.sets.clear();
-        c.tick(100, false, nullptr, 0, 60.0f, 0.0f, 16.6f);  // >80ms expiry
+        c.tick(100, false, nullptr, 0, 60.0f, 0.0f, 16.6f);
         bool sawRelease = false;
         for (auto& s : r.sets) if (s.tid == 1000 && s.util == 0u) sawRelease = true;
         CHECK(sawRelease, "60Hz expiry: RELEASE tid 1000 with util=0");
         CHECK(!c.isBoostLive(), "expiry: not live");
     }
 
-    // ---- 120Hz window = 40ms ---------------------------------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
         c.tick(0, true, ths, 1, 120.0f, 0.0f, 8.3f);
-        c.tick(30, false, nullptr, 0, 120.0f, 0.0f, 8.3f);  // 30<40 -> live
+        c.tick(30, false, nullptr, 0, 120.0f, 0.0f, 8.3f);
         CHECK(c.isBoostLive(), "120Hz: live at t=30 (<40ms window)");
         r.sets.clear();
-        c.tick(45, false, nullptr, 0, 120.0f, 0.0f, 8.3f);  // 45>40 -> release
+        c.tick(45, false, nullptr, 0, 120.0f, 0.0f, 8.3f);
         bool rel = false; for (auto& s : r.sets) if (s.tid==1000 && s.util==0u) rel=true;
         CHECK(rel, "120Hz: RELEASE at t=45 (>40ms window)");
         CHECK(!c.isBoostLive(), "120Hz: released");
     }
 
-    // ---- 144Hz window = 33ms ---------------------------------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
@@ -168,21 +143,18 @@ int main() {
         c.tick(20, false, nullptr, 0, 144.0f, 0.0f, 6.9f);
         CHECK(c.isBoostLive(), "144Hz: live at t=20 (<=33ms window)");
         r.sets.clear();
-        c.tick(40, false, nullptr, 0, 144.0f, 0.0f, 6.9f);  // 40>33 -> release
+        c.tick(40, false, nullptr, 0, 144.0f, 0.0f, 6.9f);
         bool rel = false; for (auto& s : r.sets) if (s.tid==1000 && s.util==0u) rel=true;
         CHECK(rel, "144Hz: RELEASE at t=40 (>33ms window)");
     }
 
-    // ---- frame overrun -> +10 pct (90% -> 922) ---------------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
-        // target 16.6ms, actual 20ms > 16.6*1.10=18.3 -> overrun
         c.tick(0, true, ths, 1, 60.0f, 20.0f, 16.6f);
         CHECK(hasSet(r, 1000, 922u), "overrun: UI SET @922 (80+10=90%)");
     }
 
-    // ---- empty thread set on touch -> no per-thread action ----------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         c.tick(0, true, nullptr, 0, 60.0f, 0.0f, 16.6f);
@@ -190,12 +162,11 @@ int main() {
         CHECK(c.globalFloorLevel() == 50, "empty set: global active floor 50");
     }
 
-    // ---- non-finite refresh -> base 80ms window (fail-safe) ---------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[1] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN) };
         c.tick(0, true, ths, 1, NAN, 0.0f, 16.6f);
-        c.tick(50, false, nullptr, 0, NAN, 0.0f, 16.6f);  // 50<80 base window
+        c.tick(50, false, nullptr, 0, NAN, 0.0f, 16.6f);
         CHECK(c.isBoostLive(), "NaN refresh: base 80ms window, live at t=50");
         r.sets.clear();
         c.tick(100, false, nullptr, 0, NAN, 0.0f, 16.6f);
@@ -203,24 +174,18 @@ int main() {
         CHECK(rel, "NaN refresh: RELEASE at t=100 (base window)");
     }
 
-    // ---- releaseAll drops all boosted + clears global --------------------
     {
         Rec r; TouchUclampController c; c.setActuator(makeAct(r));
         FgThread ths[2] = { mkThread(1000, TOUCH_UCLAMP_ROLE_UI_MAIN),
                             mkThread(1001, TOUCH_UCLAMP_ROLE_RENDER) };
         c.tick(0, true, ths, 2, 60.0f, 0.0f, 16.6f);
         r.sets.clear(); r.globals.clear();
-        c.releaseAll(500, /*clearGlobal=*/true);
+        c.releaseAll(500, true);
         CHECK(hasSet(r, 1000, 0u) && hasSet(r, 1001, 0u), "releaseAll: both RELEASED");
         CHECK(r.globals.back() == 0, "releaseAll: global cleared to 0");
         CHECK(c.boostedCount() == 0, "releaseAll: state cleared");
     }
 
-    // ---- concurrency: two independent controllers on two threads, 0 races --
-    // The core + controller hold NO global mutable state (state is caller-owned),
-    // so concurrent instances must be fully independent. TSan checks this.
-    // NOTE: the worker must NOT touch the global g_checks counters (that would be
-    // a race in the harness, not the code under test) -> it returns a local result.
     {
         auto worker = [](int baseTid) -> bool {
             Rec r; TouchUclampController c; c.setActuator(makeAct(r));
@@ -235,7 +200,6 @@ int main() {
         std::thread t1(worker, 10000);
         std::thread t2(worker, 20000);
         t1.join(); t2.join();
-        // Re-run serially to capture the local result for the assertion.
         bool w1 = worker(10000); bool w2 = worker(20000);
         CHECK(w1 && w2, "thread workers: independent controllers drained, 0 races");
     }

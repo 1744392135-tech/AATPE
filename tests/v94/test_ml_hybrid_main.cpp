@@ -1,7 +1,3 @@
-// test_ml_hybrid_main.cpp - v94 hermetic unit tests for aatpe_ml_hybrid_main.cpp
-// Links all 5 hybrid TUs (one HybridLearner class) + log_stub + hybrid_deps.
-// Focus: lifecycle (ctor/init/setEnabled/reset), tick() delta accumulation,
-// getPoolDelta, getStatusString, instance() singleton.
 #include <cstdio>
 #include <vector>
 #include "aatpe_ml_hybrid.h"
@@ -39,7 +35,7 @@ int main() {
     L.tick(snap(100, 6, 2, 1000, 1000), cpuRt, 8);
     CHECK(L.getTotalUpdates() == 0, "first tick: no prev snapshot -> 0 updates");
     cpuRt[6] = 500000;
-    L.tick(snap(100, 6, 2, 2000, 15000000), cpuRt, 8);  // +1000 runNs over 15ms
+    L.tick(snap(100, 6, 2, 2000, 15000000), cpuRt, 8);
     CHECK(L.getTotalUpdates() == 1, "second tick with prev snapshot -> 1 update");
 
     printf("=== HybridMain: getPoolDelta returns delta for valid pool ===\n");
@@ -67,13 +63,6 @@ int main() {
     L.setEnabled(true);
 
     printf("=== ML-03: training sees BOTH current_cpu_match branches ===\n");
-    // The sgd tick runs with tickCount_==2 (first tick increments to 1 with no
-    // prev snapshot; second increments to 2 and performs the sgd). Dropout mask:
-    // f9 = ((tid + tickCount_) & 3) == 0 ? 0.0 : 1.0.
-    //   tid=94 -> (94+2)&3 == 0  -> f9 dropped to 0.0 -> weights[9] untouched.
-    //   tid=100 -> (100+2)&3 == 2 -> f9 == 1.0        -> weights[9] trained.
-    // This locks the train/serve contract: inference hf[9]=0 must be covered by
-    // training, not extrapolated.
     L.reset();
     {
         std::vector<uint64_t> rt(8, 0);

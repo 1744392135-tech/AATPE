@@ -1,11 +1,3 @@
-// test_thermal_p2fix.cpp - host regression tests for the 5 thermal-cluster P2 fixes.
-//
-// THM-01: thermal_source no longer clobbered by refreshThermalHal (path vs label).
-// THM-02: trip_point path derived from zone base (strip "/temp" suffix).
-// THM-03: hwmon-sourced CPU zone temp path is /sys/class/hwmon/<name>_input.
-// THM-04: set_thermal_emergency=<N> must NOT write the threshold to the live
-//         thermal_emergency flag file (which holds "1"/"0").
-// THM-05: battery AC/USB online fallback probes independent power_supply entries.
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -13,7 +5,6 @@
 #include <sys/stat.h>
 #include "aatped.h"
 
-// Host-test local stub (production lives in control_deps).
 void mkdirIfNotExist(const char* path, mode_t mode) { ::mkdir(path, mode); }
 
 namespace aatpe {
@@ -58,7 +49,6 @@ int main() {
         CHECK(b == "/sys/class/hwmon/hwmon0",
               "strip /tempN_input -> hwmon dir");
     }
-    // The actual trip_path built from the base:
     {
         std::string base = aatpe::thermalZoneBaseFromTempPathForTest(
             "/sys/class/thermal/thermal_zone4/temp");
@@ -75,33 +65,23 @@ int main() {
               "ac online path under /sys/class/power_supply/");
         CHECK(std::string(usbPath).rfind("/sys/class/power_supply/", 0) == 0,
               "usb online path under /sys/class/power_supply/");
-        // Verify they are NOT under battery/ (the old buggy path).
         CHECK(std::string(acPath).find("battery/") == std::string::npos,
               "ac online NOT under battery/ subdir (THM-05)");
     }
 
     printf("=== THM-04: live flag file is not written by set_thermal_emergency ===\n");
     {
-        // Pre-seed the live flag file with "0". Then verify the production code
-        // path (after the fix) does NOT write the threshold to it. We exercise
-        // this by calling executeControlLine if available; otherwise we assert
-        // the contract via the pre-seed value surviving a writeFile to g_cfg.
         mkdirIfNotExist(STATE_DIR, 0755);
         std::string flagPath = std::string(STATE_DIR) + "/thermal_emergency";
-        writeFile(flagPath.c_str(), 0);  // live flag = "0"
-        // The production fix removed writeFile(thermal_emergency, t) from the
-        // set_thermal_emergency handler. We simulate the handler's g_cfg write
-        // and assert the flag file was NOT touched by it.
+        writeFile(flagPath.c_str(), 0);
         {
             std::lock_guard<std::mutex> lk(g_cfgMutex);
-            g_cfg.thermalEmergency = 95;  // what the handler now does
+            g_cfg.thermalEmergency = 95;
         }
-        // The live flag file must STILL be "0".
         FILE* f = fopen(flagPath.c_str(), "r");
         if (f) {
             char buf[16] = {0};
             if (fgets(buf, sizeof(buf), f)) {
-                // strip newline
                 for (char* p = buf; *p; ++p) if (*p=='\n'||*p=='\r') *p=0;
                 fclose(f);
                 CHECK(std::string(buf) == "0",
@@ -114,8 +94,6 @@ int main() {
 
     printf("=== THM-01: refreshThermalHal writes thermal_hal_source, not thermal_source ===\n");
     {
-        // Contract: the label goes to thermal_hal_source; the path stays in
-        // thermal_source (owned by readThermal). Verified by source inspection.
         printf("  [INFO] THM-01: thermal_source clobber site moved to thermal_hal_source\n");
     }
 

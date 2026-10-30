@@ -1,15 +1,12 @@
 #!/bin/bash
-# ROUND-003 host state-machine simulation for the bootloop self-disable logic in
-# post-fs-data.sh. Mirrors the exact block (PERSIST_DIR/MODDIR/boot_id injected).
-# Not run on-device; proves the latch + recovery transitions.
 set -u
 fail=0
-check() { # desc actual expected
+check() {
   if [ "$2" = "$3" ]; then echo "PASS  $1 = $2";
   else echo "FAIL  $1: want $3 got $2"; fail=1; fi
 }
 
-run_postfs() { # $1=boot_id  (operates on $MODDIR $PERSIST_DIR)
+run_postfs() {
   local BOOT_MARKER="$PERSIST_DIR/boot_in_progress"
   local FAIL_FILE="$PERSIST_DIR/boot_fail_count"
   local LATCH="$PERSIST_DIR/self_disabled_latch"
@@ -28,7 +25,7 @@ run_postfs() { # $1=boot_id  (operates on $MODDIR $PERSIST_DIR)
   echo "$CUR" > "$BOOT_MARKER"
   return 0
 }
-run_bootcompleted() { # healthy boot endpoint
+run_bootcompleted() {
   rm -f "$PERSIST_DIR/boot_in_progress" "$PERSIST_DIR/self_disabled_latch"
   echo 0 > "$PERSIST_DIR/boot_fail_count"
 }
@@ -45,21 +42,21 @@ check "A: count 0" "$(cat $PERSIST_DIR/boot_fail_count)" "0"
 
 echo "--- Scenario B: 4 incomplete boots (first opens marker, 3 counted) -> self-disabled ---"
 rm -f "$MODDIR/disable"; run_bootcompleted
-run_postfs boot1   # opens marker, count stays 0 (no bootcompleted after)
-run_postfs boot2   # count=1
-run_postfs boot3   # count=2
-run_postfs boot4   # count=3 -> arm
+run_postfs boot1
+run_postfs boot2
+run_postfs boot3
+run_postfs boot4
 rc=$?
 check "B: disable armed after 4 incomplete boots" "$([ -f $MODDIR/disable ] && echo yes || echo no)" "yes"
 check "B: exit rc" "$rc" "2"
 
 echo "--- Scenario C: user re-enables + ONE healthy boot -> recovers, no re-disable ---"
-rm -f "$MODDIR/disable"           # user toggles enable in Manager
-run_postfs bootR                  # recovery branch: stale marker+latch cleared
+rm -f "$MODDIR/disable"
+run_postfs bootR
 check "C: no immediate re-disable" "$([ -f $MODDIR/disable ] && echo yes || echo no)" "no"
 check "C: latch cleared" "$([ -f $PERSIST_DIR/self_disabled_latch ] && echo yes || echo no)" "no"
 check "C: count reset 0" "$(cat $PERSIST_DIR/boot_fail_count)" "0"
-run_bootcompleted                 # the re-enabled boot actually completes
+run_bootcompleted
 check "C: after healthy boot, no disable" "$([ -f $MODDIR/disable ] && echo yes || echo no)" "no"
 
 echo "--- Scenario D: recovered device bootloops again -> re-arms ---"

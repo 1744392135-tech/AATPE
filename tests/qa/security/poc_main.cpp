@@ -1,8 +1,3 @@
-// poc_main.cpp — AATPE WebUI HTTP adversarial PoC harness.
-// Boots the REAL webui_http.cpp server on 127.0.0.1 and issues raw HTTP requests
-// over a loopback TCP socket to verify the auth / parsing / CSRF / path-traversal
-// posture. Prints each request + the observed status line so evidence can be
-// pasted into the security report.
 #include "webui_http.h"
 #include "aatped.h"
 #include "aatped_hmac.h"
@@ -27,8 +22,6 @@ extern std::mutex g_cfgMutex;
 
 static int g_port = 0;
 
-// Minimal blocking HTTP request over a fresh loopback socket.
-// Returns the raw server reply (headers + body).
 static std::string http(const std::string& req) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { return "SOCKET_ERR"; }
@@ -37,7 +30,6 @@ static std::string http(const std::string& req) {
     a.sin_port = htons((uint16_t)g_port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, (struct sockaddr*)&a, sizeof(a)) != 0) { close(fd); return "CONNECT_ERR"; }
-    // set a generous recv timeout
     struct timeval tv; tv.tv_sec = 3; tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ::send(fd, req.data(), req.size(), 0);
@@ -65,26 +57,17 @@ static void check(const char* name, bool cond, const std::string& evidence) {
 }
 
 int main() {
-    // fresh sandbox
     system("rm -rf /tmp/aatpe_poc_state /tmp/aatpe_poc_run /tmp/aatpe_poc_module");
     mkdir("/tmp/aatpe_poc_state", 0755);
     mkdir("/tmp/aatpe_poc_run", 0755);
     mkdir("/tmp/aatpe_poc_module", 0755);
 
-    // Install a KNOWN HMAC key (real verifyCommandHmac will use it).
     {
         std::lock_guard<std::mutex> lk(g_hmacMutex);
         memset(g_hmacKey, 0, sizeof(g_hmacKey));
-        // fill exactly 127 chars + NUL (g_hmacKey is char[128])
         for (int i = 0; i < 127; i++) g_hmacKey[i] = "0123456789abcdef"[i % 16];
         g_hmacKey[127] = 0;
         g_hmacActive = true;
-        // initHmacKey() is never called in this host PoC, so g_hmacReadonly keeps
-        // its fail-closed default (true) and the /control write gate rejects every
-        // command BEFORE HMAC verification. For the real-HMAC end-to-end matrix we
-        // deliberately take the daemon OUT of host read-only mode so the real
-        // computeCommandHmac/verifyCommandHmac path (with the known key above) is
-        // actually exercised. Test harness only; production boot runs initHmacKey().
         g_hmacReadonly = false;
     }
     {
@@ -98,7 +81,6 @@ int main() {
     g_port = aatpe::webui_http::getHttpPort();
     printf("== AATPE WebUI PoC: server on 127.0.0.1:%d ==\n\n", g_port);
 
-    // read the bootstrap daemon token the server minted
     std::string daemonToken;
     {
         int fd = open("/tmp/aatpe_poc_state/daemon_token", O_RDONLY);
@@ -108,7 +90,6 @@ int main() {
     while (!daemonToken.empty() && (daemonToken.back()=='\n'||daemonToken.back()=='\r'||daemonToken.back()==' ')) daemonToken.pop_back();
     printf("daemon_token minted length=%zu (first8=%.8s...)\n\n", daemonToken.size(), daemonToken.c_str());
 
-    // ---- 1. open liveness endpoints (no auth) ----
     std::string r;
     r = http("GET /health HTTP/1.1\r\nHost: x\r\n\r\n");
     check("OPEN GET /health (expect 200)", statusLine(r).find("200")!=npos, statusLine(r)+" | "+bodyOf(r));
@@ -119,15 +100,12 @@ int main() {
     r = http("GET /state/public HTTP/1.1\r\nHost: x\r\n\r\n");
     check("OPEN GET /state/public (expect 200, no token)", statusLine(r).find("200")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // SEC-002: fusion / frame_time are now daemon-token-gated (hardened). No token
-    // -> 401, not an open info-disclosure surface.
     r = http("GET /api/fusion HTTP/1.1\r\nHost: x\r\n\r\n");
     check("GET /api/fusion NO token -> 401 (token-gated, not open)", statusLine(r).find("401")!=npos, statusLine(r)+" | "+bodyOf(r));
 
     r = http("GET /api/frame_time HTTP/1.1\r\nHost: x\r\n\r\n");
     check("GET /api/frame_time NO token -> 401 (token-gated, not open)", statusLine(r).find("401")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // ---- 2. protected state requires token ----
     r = http("GET /state/all HTTP/1.1\r\nHost: x\r\n\r\n");
     check("PROTECTED GET /state/all NO token -> 401", statusLine(r).find("401")!=npos, statusLine(r));
 
@@ -143,41 +121,28 @@ int main() {
     }
     check("PROTECTED GET /state/all correct X-Daemon-Token -> 200", statusLine(r).find("200")!=npos, statusLine(r)+" | "+bodyOf(r).substr(0,80));
 
-    // ---- 3. daemon_token bootstrap over HTTP must be refused ----
     r = http("GET /api/daemon_token HTTP/1.1\r\nHost: x\r\n\r\n");
     check("GET /api/daemon_token over TCP -> 403 (not leaked to local apps)", statusLine(r).find("403")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // ---- 4. CSRF on /control ----
-    // cross-origin form POST, text/plain, no custom header, no allowlisted Origin
     r = http("POST /control HTTP/1.1\r\nHost: x\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nset_profile=gaming");
     check("CSRF cross-origin text/plain POST /control unsigned -> blocked (403/405)",
           statusLine(r).find("403")!=npos || statusLine(r).find("405")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // cross-origin GET (like <img src>): unsigned /control requires HMAC -> 403.
     r = http("GET /control?cmd=set_profile=gaming HTTP/1.1\r\nHost: x\r\n\r\n");
     check("CSRF cross-origin GET /control?cmd=... unsigned -> blocked (403/405)",
           statusLine(r).find("403")!=npos || statusLine(r).find("405")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // JSON content-type POST alone: csrfSafe true, but HMAC still required -> 403
     r = http("POST /control HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 19\r\n\r\nset_profile=gaming");
     check("POST application/json unsigned (no sig) -> 403 (HMAC still required)",
           statusLine(r).find("403")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // ---- 5. HMAC auth ----
-    // forged signature
     r = http("POST /control HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 60\r\n\r\nset_profile=gaming.ts=9999999999.sig=deadbeefdeadbeef");
     check("POST /control with FORGED .sig -> 403", statusLine(r).find("403")!=npos, statusLine(r)+" | "+bodyOf(r));
 
-    // correct signature, computed the same way the server does.
-    // LED-154: .nonce=<hex> is now MANDATORY on the HMAC control path and is bound
-    // into the signed data. The server strips suffixes in the order .sig/.ts/.nonce,
-    // each truncating from the marker onward, so the WIRE order must put .nonce
-    // BEFORE .ts:  cmd.nonce=<hex>.ts=<ts>.sig=<sig>. The signed/verified logical
-    // string remains cmd + ".ts=" + ts + ".nonce=" + nonce.
     {
         std::string actualCmd = "set_profile=gaming";
         int64_t ts = (int64_t)time(nullptr);
-        std::string nonce = "a1b2c3d4e5f60718";   // fresh per request
+        std::string nonce = "a1b2c3d4e5f60718";
         std::string signedData = actualCmd + ".ts=" + std::to_string(ts) + ".nonce=" + nonce;
         std::string sig = computeCommandHmac(signedData.c_str());
         std::string body = actualCmd + ".nonce=" + nonce + ".ts=" + std::to_string(ts) + ".sig=" + sig;
@@ -187,8 +152,6 @@ int main() {
     }
     check("POST /control with VALID HMAC+nonce -> 200 queued", statusLine(r).find("200")!=npos, statusLine(r)+" | "+bodyOf(r).substr(0,120));
 
-    // replay the SAME (cmd,nonce,ts,sig) triple verbatim -> must now be rejected 403
-    // by the nonce replay cache (pre-LED-154 this used to be accepted).
     {
         std::string actualCmd = "set_mode=passive";
         int64_t ts = (int64_t)time(nullptr);
@@ -198,18 +161,16 @@ int main() {
         std::string body = actualCmd + ".nonce=" + nonce + ".ts=" + std::to_string(ts) + ".sig=" + sig;
         std::string req = "POST /control HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: "
                         + std::to_string(body.size()) + "\r\n\r\n" + body;
-        http(req);            // first use: accepted (200)
-        r = http(req);        // verbatim replay: replay cache must reject (403)
+        http(req);
+        r = http(req);
     }
     check("REPLAY verbatim (cmd,nonce,ts,sig) -> 403 (nonce replay cache)", statusLine(r).find("403")!=npos,
           statusLine(r)+" | "+bodyOf(r).substr(0,120));
 
-    // ---- 6. path traversal on /api/command/<id> ----
     r = http("GET /api/command/..%2f..%2f..%2fetc%2fpasswd HTTP/1.1\r\nHost: x\r\n\r\n");
     check("PATH traversal /api/command/<traversal> -> 400/401 (not file read)",
           statusLine(r).find("400")!=npos || statusLine(r).find("401")!=npos, statusLine(r));
 
-    // ---- 7. oversized body ----
     {
         std::string big(70000, 'a');
         std::string req = "POST /control HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: "
@@ -218,11 +179,9 @@ int main() {
     }
     check("OVERSIZE body (>64KB) -> 413", statusLine(r).find("413")!=npos, statusLine(r));
 
-    // ---- 8. bad method ----
     r = http("DELETE /health HTTP/1.1\r\nHost: x\r\n\r\n");
     check("DELETE /health (non-GET) -> 405", statusLine(r).find("405")!=npos, statusLine(r));
 
-    // ---- 9. HMAC key endpoint requires token ----
     r = http("GET /api/hmac_key HTTP/1.1\r\nHost: x\r\n\r\n");
     check("GET /api/hmac_key NO token -> 401 (HMAC key not leaked)", statusLine(r).find("401")!=npos, statusLine(r));
     {

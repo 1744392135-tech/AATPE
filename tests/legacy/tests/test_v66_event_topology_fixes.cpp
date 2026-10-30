@@ -1,9 +1,3 @@
-// tests/test_v66_event_topology_fixes.cpp - Unit tests for v66 event/topology fixes
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// v94 fix / 问题34: 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Verifies: Problem 1 (jank gfxinfo fallback), Problem 2 (app switch forceRefresh),
-//           Problem 3 (CPU topology auto-detection), cpu_topology JSON format
-// Compile: g++ -std=c++17 -Wall -Wextra -Werror test_v66_event_topology_fixes.cpp -o test_v66_event_topology_fixes
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -30,16 +24,12 @@ static float aatpeFirstFloat(const std::string& s) {
     return (i < s.size()) ? atof(s.c_str() + i) : 0.0f;
 }
 
-// ============================================================================
-// Problem 1: Jank detection - gfxinfo fallback parsing
-// ============================================================================
 struct GfxInfoResult {
     int p50 = 0, p95 = 0, p99 = 0;
     bool valid = false;
     int avgLatUs = 0, maxLatUs = 0;
 };
 
-// Replicates the gfxinfo parsing logic added to aatpeDetectSFLatency()
 static GfxInfoResult parseGfxInfoLatency(const std::string& gfxOut) {
     GfxInfoResult r;
     if (gfxOut.empty()) return r;
@@ -123,7 +113,6 @@ static void test_gfxinfo_parsing_empty() {
     GfxInfoResult r2 = parseGfxInfoLatency("some random text\nno percentiles here\n");
     CHECK(!r2.valid, "no percentile lines -> invalid");
 
-    // p50=0 should not mark valid
     GfxInfoResult r3 = parseGfxInfoLatency("50th percentile: 0ms\n95th percentile: 5ms\n");
     CHECK(!r3.valid, "p50=0 -> invalid (no real frame data)");
 }
@@ -140,7 +129,6 @@ static void test_gfxinfo_parsing_decimal_ms() {
     CHECK(r.avgLatUs == 8000, "avgLat=8000us");
 }
 
-// Jank threshold computation (replicates readSurfaceFlinger logic)
 static bool computeJankDetected(int avgLat, int maxLat, int frameTimeUs, float thresholdPercent, bool sfLatValid) {
     if (!sfLatValid || thresholdPercent <= 0.0f) return false;
     int jankThresholdUs = (int)(frameTimeUs * (1.0f + thresholdPercent / 100.0f));
@@ -149,7 +137,6 @@ static bool computeJankDetected(int avgLat, int maxLat, int frameTimeUs, float t
 
 static void test_jank_threshold_logic() {
     printf("\n=== P1: jank threshold computation ===\n");
-    // 60Hz: frameTime=16667us, threshold=3% -> jankThreshold=17167us
     int frame60 = 16667;
     CHECK(computeJankDetected(8000, 32000, frame60, 3.0f, true),
           "avg=8ms max=32ms at 60Hz -> jank (max>1.5x threshold)");
@@ -160,7 +147,6 @@ static void test_jank_threshold_logic() {
     CHECK(!computeJankDetected(8000, 32000, frame60, 0.0f, true),
           "thresholdPercent=0 -> never jank");
 
-    // 120Hz: frameTime=8333us, threshold=3% -> jankThreshold=8583us
     int frame120 = 8333;
     CHECK(computeJankDetected(9000, 9000, frame120, 3.0f, true),
           "avg=9ms at 120Hz -> jank (avg>threshold)");
@@ -168,9 +154,6 @@ static void test_jank_threshold_logic() {
           "avg=8ms max=12ms at 120Hz -> no jank");
 }
 
-// ============================================================================
-// Problem 2: App switch - forceRefresh cache bypass
-// ============================================================================
 struct ForegroundCache {
     std::string cachedApp = "unknown";
     time_t cacheTime = 0;
@@ -178,7 +161,6 @@ struct ForegroundCache {
     std::string lastDetected = "unknown";
 };
 
-// Replicates aatpeDetectForegroundApp cache logic
 static std::string detectForeground(ForegroundCache& fc, bool forceRefresh, time_t now, const std::string& actualApp) {
     if (!forceRefresh && fc.cached && (now - fc.cacheTime) < 3) {
         return fc.cachedApp;
@@ -190,7 +172,6 @@ static std::string detectForeground(ForegroundCache& fc, bool forceRefresh, time
     return actualApp;
 }
 
-// Replicates app switch detection logic in daemonLoop
 static int detectAppSwitches(ForegroundCache& fc, bool useForceRefresh,
                               const std::vector<std::pair<long long, std::string>>& timeline) {
     std::string prevFg = "";
@@ -212,18 +193,14 @@ static int detectAppSwitches(ForegroundCache& fc, bool useForceRefresh,
 static void test_app_switch_force_refresh() {
     printf("\n=== P2: app switch - forceRefresh cache bypass ===\n");
 
-    // Timeline: rapid switches within 3 seconds
-    // t=0: appA, t=1: appB, t=2: appC, t=4: appD
     std::vector<std::pair<long long, std::string>> timeline = {
         {0, "com.app.A"}, {1, "com.app.B"}, {2, "com.app.C"}, {4, "com.app.D"}
     };
 
-    // Without forceRefresh (cached for 3s): only detects A->D (B and C missed)
     ForegroundCache fc1;
     int switchesCached = detectAppSwitches(fc1, false, timeline);
     CHECK(switchesCached == 1, "cached mode: rapid switches missed (only 1 detected)");
 
-    // With forceRefresh: detects A->B, B->C, C->D (3 switches)
     ForegroundCache fc2;
     int switchesFresh = detectAppSwitches(fc2, true, timeline);
     CHECK(switchesFresh == 3, "forceRefresh mode: all 3 switches detected");
@@ -249,15 +226,11 @@ static void test_app_switch_unknown_not_reset() {
     CHECK(switches == 1, "transient unknown skipped, A->B still detected as 1 switch");
 }
 
-// ============================================================================
-// Problem 3: CPU topology auto-detection
-// ============================================================================
 struct TopologyResult {
     std::vector<int> little, mid, big;
     std::string detectionMethod;
 };
 
-// Replicates classifyCpuPools strategy 1 (capacity ratio)
 static TopologyResult classifyByCapacity(const std::vector<int>& cpuIds, const std::vector<int>& caps) {
     TopologyResult r;
     int maxCap = 0;
@@ -279,7 +252,6 @@ static TopologyResult classifyByCapacity(const std::vector<int>& cpuIds, const s
     return r;
 }
 
-// Replicates classifyCpuPools strategy 3 (default numbered layout)
 static TopologyResult defaultLayout(const std::vector<int>& cpuIds) {
     TopologyResult r;
     int n = (int)cpuIds.size();
@@ -300,28 +272,20 @@ static TopologyResult defaultLayout(const std::vector<int>& cpuIds) {
     return r;
 }
 
-// Replicates detectCpuTopology decision: if config pools empty -> auto-detect
 static TopologyResult detectTopology(const std::vector<int>& cpuIds, const std::vector<int>& caps,
                                       const std::string& cfgLittle, const std::string& cfgMid, const std::string& cfgBig) {
     if (!cfgLittle.empty() && !cfgMid.empty() && !cfgBig.empty()) {
-        // Config override (hardcoded) - this is the BUG being fixed
         TopologyResult r;
         r.detectionMethod = "config_override";
         return r;
     }
-    // Auto-detection path
     TopologyResult r = classifyByCapacity(cpuIds, caps);
     if (r.detectionMethod == "capacity") return r;
-    // Fallback to default layout
     return defaultLayout(cpuIds);
 }
 
 static void test_topology_auto_detect_snapdragon8gen1() {
     printf("\n=== P3: topology auto-detect - Snapdragon 8 Gen 1 (4+3+1) ===\n");
-    // Realistic cpu_capacity values (scaled to 1024):
-    // A510 (little): cap=281 (ratio 27% <= 45 -> LITTLE)
-    // A710 (mid):    cap=512 (ratio 50% <= 75 -> MID)
-    // X2 (big):      cap=1024 (ratio 100% > 75 -> BIG)
     std::vector<int> ids = {0,1,2,3,4,5,6,7};
     std::vector<int> caps = {281,281,281,281, 512,512,512, 1024};
     TopologyResult r = detectTopology(ids, caps, "", "", "");
@@ -342,7 +306,6 @@ static void test_topology_auto_detect_snapdragon8gen1() {
 
 static void test_topology_auto_detect_dimensity8100() {
     printf("\n=== P3: topology auto-detect - Dimensity 8100 (4+4) ===\n");
-    // Dimensity 8100: 4x A55 (cap low) + 4x A78 (cap high), no mid tier
     std::vector<int> ids = {0,1,2,3,4,5,6,7};
     std::vector<int> caps = {78,78,78,78, 256,256,256,256};
     TopologyResult r = detectTopology(ids, caps, "", "", "");
@@ -356,10 +319,8 @@ static void test_topology_config_override_bug() {
     printf("\n=== P3: topology - config override bug (before fix) ===\n");
     std::vector<int> ids = {0,1,2,3,4,5,6,7};
     std::vector<int> caps = {145,145,145,145, 241,241,241, 302};
-    // With hardcoded config values (the bug), auto-detection is skipped
     TopologyResult r = detectTopology(ids, caps, "0-3", "4-6", "7");
     CHECK(r.detectionMethod == "config_override", "non-empty config -> hardcoded override (BUG)");
-    // After fix: config values are empty, so auto-detection runs
     TopologyResult r2 = detectTopology(ids, caps, "", "", "");
     CHECK(r2.detectionMethod == "capacity", "empty config -> auto-detection (FIXED)");
 }
@@ -367,7 +328,7 @@ static void test_topology_config_override_bug() {
 static void test_topology_default_fallback() {
     printf("\n=== P3: topology - default layout fallback (no sysfs capacity) ===\n");
     std::vector<int> ids = {0,1,2,3,4,5,6,7};
-    std::vector<int> caps = {0,0,0,0,0,0,0,0}; // all zero = sysfs unavailable
+    std::vector<int> caps = {0,0,0,0,0,0,0,0};
     TopologyResult r = detectTopology(ids, caps, "", "", "");
     CHECK(r.detectionMethod == "default_layout", "zero capacity -> default layout fallback");
     CHECK(r.little.size() == 4, "default 8-core: LITTLE=4");
@@ -385,9 +346,6 @@ static void test_topology_all_same_capacity() {
     CHECK(r.big.size() == 1, "homogeneous 8-core: BIG=1 (default split)");
 }
 
-// ============================================================================
-// cpu_topology JSON format verification
-// ============================================================================
 static std::string generateTopologyJson(int cpuCount, uint64_t generation,
                                          const std::vector<int>& little,
                                          const std::vector<int>& mid,
@@ -410,7 +368,6 @@ static void test_topology_json_format() {
     std::vector<int> big = {7};
     std::string json = generateTopologyJson(8, 1, little, mid, big);
 
-    // Verify key structure
     CHECK(json.find("\"cpus\":8") != std::string::npos, "JSON contains cpus:8");
     CHECK(json.find("\"little\":[0,1,2,3]") != std::string::npos, "JSON contains little pool");
     CHECK(json.find("\"mid\":[4,5,6]") != std::string::npos, "JSON contains mid pool");
@@ -418,7 +375,6 @@ static void test_topology_json_format() {
     CHECK(json.find("\"prime\":[]") != std::string::npos, "JSON contains prime:[]");
     CHECK(json[0] == '{' && json.back() == '}', "JSON is valid object wrapper");
 
-    // Empty pools (e.g., 4+4 topology with no mid)
     std::vector<int> little2 = {0,1,2,3};
     std::vector<int> mid2 = {};
     std::vector<int> big2 = {4,5,6,7};
@@ -427,12 +383,7 @@ static void test_topology_json_format() {
     CHECK(json2.find("\"big\":[4,5,6,7]") != std::string::npos, "4-core big pool serializes correctly");
 }
 
-// ============================================================================
-// Config parsing: empty pool values trigger auto-detect
-// ============================================================================
 static bool shouldAutoDetect(const std::string& little, const std::string& mid, const std::string& big) {
-    // Replicates detectCpuTopology line 2523:
-    // if (g_cfg.littlePool.empty() || g_cfg.midPool.empty() || g_cfg.bigPool.empty())
     return little.empty() || mid.empty() || big.empty();
 }
 
@@ -444,16 +395,12 @@ static void test_config_empty_pools_trigger_autodetect() {
     CHECK(shouldAutoDetect("", "4-6", "7"), "little empty -> auto-detect");
 }
 
-// ============================================================================
-// Main
-// ============================================================================
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     printf("===========================================================\n");
     printf("  AATPE v66 Event/Topology Fixes - Unit Test Suite\n");
     printf("===========================================================\n");
 
-    // Problem 1: Jank
     test_gfxinfo_parsing_normal();
     test_gfxinfo_parsing_120hz();
     test_gfxinfo_parsing_missing_p99();
@@ -461,12 +408,10 @@ int main() {
     test_gfxinfo_parsing_decimal_ms();
     test_jank_threshold_logic();
 
-    // Problem 2: App switch
     test_app_switch_force_refresh();
     test_app_switch_first_not_counted();
     test_app_switch_unknown_not_reset();
 
-    // Problem 3: Topology
     test_topology_auto_detect_snapdragon8gen1();
     test_topology_auto_detect_dimensity8100();
     test_topology_config_override_bug();

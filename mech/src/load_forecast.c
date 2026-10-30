@@ -4,7 +4,7 @@
 
 static float sanf_util(float v)
 {
-    if (!isfinite(v)) return -1.0f; /* sentinel: invalid */
+    if (!isfinite(v)) return -1.0f;
     if (v < 0.0f) return 0.0f;
     if (v > 100.0f) return 100.0f;
     return v;
@@ -53,10 +53,6 @@ void load_forecast_state_init(LoadForecastState *st)
     st->initialised = 0;
 }
 
-/* Holt's linear update for one series.
- * level_t = alpha * x_t + (1-alpha) * (level_{t-1} + trend_{t-1})
- * trend_t = beta * (level_t - level_{t-1}) + (1-beta) * trend_{t-1}
- */
 static void holt_update(float x, float alpha, float beta,
                          float *level, float *trend)
 {
@@ -75,7 +71,7 @@ void load_forecast_step(const LoadObservation *obs,
                          LoadForecastState *st,
                          LoadForecast *out)
 {
-    /* Zero output. */
+
     if (out) {
         for (uint32_t i = 0; i < LF_MAX_FORECAST_WINDOWS; i++) {
             out->cpu_forecast[i]   = 0.0f;
@@ -91,20 +87,17 @@ void load_forecast_step(const LoadObservation *obs,
     }
     if (!obs || !cfg || !st || !out) return;
 
-    /* Sanitise inputs. */
     float cpu  = sanf_util(obs->cpu_util_pct);
     float gpu  = sanf_util(obs->gpu_util_pct);
     float frame = sanf_frame(obs->frame_time_ms);
-    (void)sanf_util(obs->psi_cpu_avg10); /* reserved: could be its own series */
+    (void)sanf_util(obs->psi_cpu_avg10);
 
-    /* Count valid samples (at least one of cpu/gpu/frame non-invalid). */
     int any_valid = (cpu >= 0.0f) || (gpu >= 0.0f) || (frame >= 0.0f);
     if (any_valid) {
         st->valid_samples++;
         st->initialised = 1;
     }
 
-    /* Update Holt's state for each series (skip invalid values). */
     if (cpu >= 0.0f)
         holt_update(cpu, cfg->level_alpha, cfg->trend_beta,
                     &st->cpu_level, &st->cpu_trend);
@@ -115,10 +108,9 @@ void load_forecast_step(const LoadObservation *obs,
         holt_update(frame, cfg->level_alpha, cfg->trend_beta,
                     &st->frame_level, &st->frame_trend);
 
-    /* --- confidence --- */
     if (st->valid_samples < cfg->min_samples) {
         out->confidence = 0.0f;
-        /* Still output "now" as prediction = current level. */
+
         uint32_t n = (cfg->horizon_windows < LF_MAX_FORECAST_WINDOWS)
                      ? cfg->horizon_windows : LF_MAX_FORECAST_WINDOWS;
         out->num_windows = n;
@@ -131,16 +123,13 @@ void load_forecast_step(const LoadObservation *obs,
         return;
     }
 
-    /* --- generate forecasts: level + k * trend --- */
     uint32_t horizon = cfg->horizon_windows;
     if (horizon > LF_MAX_FORECAST_WINDOWS) horizon = LF_MAX_FORECAST_WINDOWS;
-    /* RC6 (C1): horizon_windows==0 leaves horizon==0; the unsigned index
-       cpu_forecast[horizon-1] then wraps to UINT32_MAX and reads OOB. Clamp >=1. */
     if (horizon < 1u) horizon = 1u;
     out->num_windows = horizon;
 
     for (uint32_t k = 0; k < horizon; k++) {
-        float hk = (float)(k + 1); /* k=0 => next window, so h=1 */
+        float hk = (float)(k + 1);
         out->cpu_forecast[k] = clampf(st->cpu_level + hk * st->cpu_trend,
                                        0.0f, cfg->max_util_pct);
         out->gpu_forecast[k] = clampf(st->gpu_level + hk * st->gpu_trend,
@@ -149,11 +138,6 @@ void load_forecast_step(const LoadObservation *obs,
                                          cfg->min_frame_ms, cfg->max_frame_ms);
     }
 
-    /* --- confidence: grows with sample count, capped at 1.0 --- */
-    /* R2-L5: an external config override can set min_samples=0; dividing by
-       (min_samples*2)==0 produces inf/NaN confidence (and a float div-by-zero).
-       Fail-safe, matching the other guards in this file: treat an invalid
-       min_samples (<=0) as zero confidence (conservative), never inf/NaN. */
     if (cfg->min_samples <= 0) {
         out->confidence = 0.0f;
     } else {
@@ -162,7 +146,6 @@ void load_forecast_step(const LoadObservation *obs,
         out->confidence = clampf(conf, 0.0f, 1.0f);
     }
 
-    /* --- trend direction --- */
     if (st->cpu_trend > cfg->trend_rising_margin ||
         st->gpu_trend > cfg->trend_rising_margin)
         out->trend_rising = 1;
@@ -170,8 +153,6 @@ void load_forecast_step(const LoadObservation *obs,
         st->gpu_trend < -cfg->trend_falling_margin)
         out->trend_falling = 1;
 
-    /* --- boost / deboost hints (proactive) --- */
-    /* Look at the furthest-ahead forecast for CPU. */
     float far_cpu = out->cpu_forecast[horizon - 1];
     if (far_cpu >= cfg->cpu_boost_threshold && out->trend_rising)
         out->boost_hint = 1;

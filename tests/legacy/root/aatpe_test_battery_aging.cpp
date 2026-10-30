@@ -1,14 +1,3 @@
-// AATPE v66: Battery Aging Protection Unit Test
-// [LEGACY-TEST v66-v74] 历史遗留测试：部分金值断言(eBPF 字节码偏移/map 数量/文件 md5/硬编码版本号)可能已过时；其失败不一定代表生产 bug。
-// 见 tests/README.md 中"测试失败分类指南"。请勿删除(有考古价值)。
-// Verifies that getBatteryAgePenalty() returns 0 when the protection
-// toggle is disabled, and applies correct penalties when enabled.
-//
-// This test is self-contained: it defines the minimal stubs (CpuPool,
-// Config, pool vectors, getPoolForCpu) and an exact copy of
-// getBatteryAgePenalty() from aatped.cpp (including the v66 guard).
-// Testing the function in isolation avoids pulling in the full daemon
-// (which has main() and dozens of Android-only dependencies).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -16,9 +5,6 @@
 #include <vector>
 #include <algorithm>
 
-// ---------------------------------------------------------------------------
-// Minimal stubs matching aatped.h / aatped.cpp definitions
-// ---------------------------------------------------------------------------
 enum class CpuPool {
     UNKNOWN = -1,
     LITTLE = 0,
@@ -27,7 +13,6 @@ enum class CpuPool {
 };
 
 struct Config {
-    // Battery aging protection toggle (默认关闭, 与 aatpe.conf BATTERY_AGING_PROTECTION=0 对齐)
     bool batteryAgingProtection = false;
 };
 
@@ -48,22 +33,15 @@ CpuPool getPoolForCpu(int cpu) {
     return CpuPool::UNKNOWN;
 }
 
-// ---------------------------------------------------------------------------
-// EXACT COPY of getBatteryAgePenalty() from aatped.cpp (v66 with guard)
-// ---------------------------------------------------------------------------
 int getBatteryAgePenalty(int cpuId) {
     if (!g_cfg.batteryAgingProtection) return 0;
     if (!g_batteryAged) return 0;
-    // Aged battery: penalize BIG cores more to reduce stress
     CpuPool pool = getPoolForCpu(cpuId);
     if (pool == CpuPool::BIG) return 50;
     if (pool == CpuPool::MID) return 20;
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Test harness
-// ---------------------------------------------------------------------------
 static int g_pass = 0;
 static int g_fail = 0;
 
@@ -78,7 +56,6 @@ static int g_fail = 0;
     else { g_fail++; printf("  [FAIL] %s (got %d, expected %d)\n", msg, _a, _e); } \
 } while(0)
 
-// Test 1: Protection DISABLED + battery AGED → must return 0 for all pools
 static void test_protection_disabled_aged_battery() {
     printf("\n=== Test: Protection DISABLED + Aged Battery (must return 0) ===\n");
     g_cfg.batteryAgingProtection = false;
@@ -91,7 +68,6 @@ static void test_protection_disabled_aged_battery() {
     ASSERT_EQ(getBatteryAgePenalty(-1), 0, "Unknown cpu penalty = 0 when disabled");
 }
 
-// Test 2: Protection ENABLED + battery AGED → correct per-pool penalties
 static void test_protection_enabled_aged_battery() {
     printf("\n=== Test: Protection ENABLED + Aged Battery (correct penalties) ===\n");
     g_cfg.batteryAgingProtection = true;
@@ -105,7 +81,6 @@ static void test_protection_enabled_aged_battery() {
     ASSERT_EQ(getBatteryAgePenalty(-1), 0, "Unknown cpu penalty = 0");
 }
 
-// Test 3: Protection ENABLED + battery NOT aged → must return 0 for all pools
 static void test_protection_enabled_healthy_battery() {
     printf("\n=== Test: Protection ENABLED + Healthy Battery (must return 0) ===\n");
     g_cfg.batteryAgingProtection = true;
@@ -115,7 +90,6 @@ static void test_protection_enabled_healthy_battery() {
     ASSERT_EQ(getBatteryAgePenalty(0), 0, "LITTLE core penalty = 0 when healthy");
 }
 
-// Test 4: Protection DISABLED + battery NOT aged → must return 0
 static void test_protection_disabled_healthy_battery() {
     printf("\n=== Test: Protection DISABLED + Healthy Battery (must return 0) ===\n");
     g_cfg.batteryAgingProtection = false;
@@ -125,7 +99,6 @@ static void test_protection_disabled_healthy_battery() {
     ASSERT_EQ(getBatteryAgePenalty(0), 0, "LITTLE core penalty = 0 when disabled+healthy");
 }
 
-// Test 5: Toggle transition — enabled→disabled must immediately zero out penalty
 static void test_toggle_transition() {
     printf("\n=== Test: Toggle Transition (enabled -> disabled immediate effect) ===\n");
     g_cfg.batteryAgingProtection = true;
@@ -140,7 +113,6 @@ static void test_toggle_transition() {
     ASSERT_EQ(restored, 50, "BIG penalty = 50 after toggle back on");
 }
 
-// Test 6: Default config value is false (protection disabled by default, matches aatpe.conf BATTERY_AGING_PROTECTION=0)
 static void test_default_config_disabled() {
     printf("\n=== Test: Default Config (batteryAgingProtection = false) ===\n");
     Config defaultCfg;

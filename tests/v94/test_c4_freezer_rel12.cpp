@@ -1,20 +1,3 @@
-// test_c4_freezer_rel12.cpp — rel12 Bug6 regression.
-//
-// On the rel14 device the C4 panel read "freezer: 不可用" even though the
-// diagnostic (c4_rootcause.txt) proved the v1 freezer hierarchy IS present and
-// mounted (/sys/fs/cgroup/freezer). The conflation: "freezer backend available"
-// was derived from "we currently have a freezable BACKGROUND target". With the
-// foreground being the SukiSU WebUI itself (non_game), there is no target, so the
-// UI read as "不可用" -- which the user reasonably interpreted as "the freezer
-// driver is missing", when it actually means "nothing to freeze right now".
-//
-// This test proves the production c4FreezerStateJson reports the v1 backend as
-// AVAILABLE (freezerAvailable=true, freezerBackend="v1") even when NO game has
-// ever been foregrounded (target empty). The only degraded reason may then be
-// "no-game-target", never "no-freezer-controller".
-//
-// Compiled in production mode (-UAATPE_HOST_TEST -DC4_FREEZER_TEST_SEAM) so the
-// real c4FreezerTick / c4FreezerStateJson bodies run.
 
 #include <cstdio>
 #include <cstring>
@@ -40,7 +23,7 @@ extern std::atomic<int> g_c4freezerLockDepth;
 void c4FreezerTestSetMountRoot(const std::string& root);
 }}
 
-static std::string g_fg = "com.sukisu.ultra";  // the WebUI itself, NOT a game
+static std::string g_fg = "com.sukisu.ultra";
 static bool        g_fgIsGame = false;
 
 ForegroundManager& ForegroundManager::instance() {
@@ -55,12 +38,10 @@ namespace aatpe { namespace gamelist {
 bool isManualGame(const std::string&) { return g_fgIsGame; }
 }}
 
-// v6.0.1: C4 now also consults the config game list (global namespace).
 bool isPackageInGameList(const std::string&) { return false; }
 
 std::string aatpeExec(const std::string& cmd, const char*) {
-    (void)cmd;  // no game -> no uid resolution needed
-    // media_session shows nothing playing for our target.
+    (void)cmd;
     return "Session #1:\n  package=com.music.app\n  playback state=2\n";
 }
 
@@ -92,13 +73,11 @@ static void rmrf(const std::string& path) { std::string cmd = "rm -rf " + path; 
 int main() {
     printf("=== C4 rel12 Bug6: v1 freezer present, NO game target ===\n");
 
-    // Fake v1 freezer hierarchy (v2 absent). Proves v1FreezerPresent().
     std::string root = "/tmp/aatpe_c4rel12_fakecg";
     rmrf(root);
     mkdir(root.c_str(), 0755);
     mkdir((root + "/freezer").c_str(), 0755);
     writeFileStd(root + "/freezer/freezer.state", "THAWED\n");
-    // NO v2 nodes -> v2 unavailable, v1 is the backend.
 
     c4FreezerTestSetMountRoot(root);
 
@@ -107,7 +86,6 @@ int main() {
     setC4FreezerEnabled(true);
     CHECK(c4FreezerEnabled(), "freezer enabled");
 
-    // Foreground = WebUI itself (non_game). Tick. There is NO game target.
     g_fg = "com.sukisu.ultra";
     g_fgIsGame = false;
     c4FreezerTick();
@@ -115,13 +93,10 @@ int main() {
     std::string j = c4FreezerStateJson();
     printf("  snapshot: %s\n", j.c_str());
 
-    // The v1 backend must be reported as AVAILABLE despite the empty target.
     CHECK(j.find("\"freezerAvailable\":true") != std::string::npos,
           "Bug6: freezerAvailable=true even with no freezable target");
     CHECK(j.find("\"freezerBackend\":\"v1\"") != std::string::npos,
           "Bug6: freezerBackend=v1 (independent of current target)");
-    // No target -> degraded may be "no-game-target", but must NOT claim the
-    // freezer controller itself is missing.
     CHECK(j.find("no-freezer-controller") == std::string::npos,
           "Bug6: degraded is not 'no-freezer-controller' (v1 really is present)");
     CHECK(j.find("\"target\":\"\"") != std::string::npos,

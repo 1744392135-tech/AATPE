@@ -1,7 +1,3 @@
-// test_ml_hybrid_train.cpp - v94 hermetic unit tests for aatpe_ml_hybrid_train.cpp
-// Links all 5 hybrid TUs. Focus: SGD training (sgdUpdate/dotProduct/clampWeight)
-// as observed through tick() — repeated ticks raise updateCount, weights stay
-// within the clamp band, and a deterministic input moves the learned weights.
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -20,8 +16,6 @@ int main() {
     HybridLearner& L = instance();
     L.reset(); L.init(1); L.setEnabled(true);
     std::vector<uint64_t> cpuRt(8, 0);
-    // Feed the SAME thread with monotonically increasing run/time so every
-    // tick produces one training update on pool 0.
     uint64_t runNs = 1000; uint64_t ts = 1000;
     for (int i = 0; i < 60; i++) {
         runNs += 1000; ts += 15000000;

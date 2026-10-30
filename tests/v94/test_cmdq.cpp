@@ -1,15 +1,3 @@
-// test_cmdq.cpp - round-4 P1 #1/#2 hermetic unit test.
-//
-// Exercises the real command queue (/dev/aatpe/commands/):
-//   - enqueue writes a uniquely-named cmd-NNNNNN file (atomic rename),
-//   - depth counter reflects queued files,
-//   - drain() executes in FIFO order and records success/failed status,
-//   - commandStatusJson() reports queued -> executing -> success lifecycle,
-//   - unknown/expired id reports "unknown".
-//
-// RUN_DIR is provided by tests/stubs/control_deps.cpp (/tmp/aatpe_v94_run).
-// executeControlLine() is the real production command table (linked from
-// aatped_control.cpp) so drain exercises the real dispatch path.
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -17,7 +5,6 @@
 #include <unistd.h>
 #include "aatpe_command_queue.h"
 
-// RUN_DIR is the per-process unique dir from tests/stubs/control_deps.cpp.
 extern const char* RUN_DIR;
 
 static int g_pass = 0, g_fail = 0;
@@ -28,7 +15,6 @@ static int g_pass = 0, g_fail = 0;
 
 int main() {
     printf("=== cmdq: enqueue creates a uniquely-named queue file ===\n");
-    // Start from a clean commands dir (RUN_DIR itself is a fresh mkdtemp).
     { std::string rm = std::string("rm -rf ") + RUN_DIR + "/commands"; system(rm.c_str()); }
     mkdir(RUN_DIR, 0755);
 

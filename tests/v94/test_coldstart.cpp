@@ -1,4 +1,3 @@
-// test_coldstart.cpp - v94 hermetic unit tests for cold_start_rules.cpp
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -6,7 +5,6 @@
 #include "aatped.h"
 #include "cold_start_rules.h"
 
-// Log stubs
 std::atomic<int> g_logLevel{3};
 void logFlush() {}
 
@@ -16,10 +14,8 @@ static int g_pass = 0, g_fail = 0;
     else   { g_fail++; printf("  [FAIL] %s\n", m); } \
 } while(0)
 
-// Stub for aatped_config.cpp:isPackageInGameList
 bool isPackageInGameList(const std::string& pkg) { return pkg == "com.test.game"; }
 
-// Recording hook for aatpeSetThreadPriority
 struct PrioCall { int tid; ThreadRole role; int level; };
 static std::vector<PrioCall> g_prioCalls;
 
@@ -28,9 +24,6 @@ namespace aatpe_priority {
         g_prioCalls.push_back({tid, role, level});
         return true;
     }
-    // #1/#2 fix: release now goes through the UNGATED restore channel
-    // (aatpeRestoreThreadPriority), NOT aatpeSetThreadPriority(level=0). Record the
-    // tids that were actually restored so the F-11 assertions pin the new contract.
     std::vector<int> g_restoredTids;
     bool aatpeRestoreThreadPriority(int tid) {
         g_restoredTids.push_back(tid);
@@ -38,7 +31,6 @@ namespace aatpe_priority {
     }
 }
 
-// Test seams (namespace aatpe, AATPE_HOST_TEST)
 namespace aatpe {
     void coldStartSetNowForTest(long long (*fn)());
     void coldStartSetJankForTest(bool (*fn)());
@@ -71,7 +63,6 @@ int main() {
     coldStartSetThermalFreeze(false);
     coldStartSetIoPressure(false);
 
-    // Install test seams
     coldStartSetNowForTest(clkFn);
     coldStartSetJankForTest(jankFn);
     coldStartSetDisplayedForTest(displayedFn);
@@ -99,19 +90,14 @@ int main() {
 
     coldStartOnForegroundSwitch("com.test.game");
     CHECK(coldStartActive() == false, "F-8: arm 4 within 60s window -> refused");
-    // v4.2 Batch C2: the refused arm must increment the one-way cold_start_rejected
-    // counter (and mirror it to STATE_DIR/cold_start_rejected). Exactly 1 refusal so
-    // far (the successful arms 1-3 do not count).
     CHECK(coldStartRejectedCountForTest() == 1, "F-8: cold_start_rejected == 1 after 4th arm refused");
 
     s_clk += 60001;
     coldStartOnForegroundSwitch("com.test.game");
     CHECK(coldStartActive() == true, "F-8: arm after 60s window -> active (history pruned)");
-    // The window-pruned arm is ACCEPTED, so the refusal counter must NOT grow.
     CHECK(coldStartRejectedCountForTest() == 1, "F-8: accepted arm after window does not bump rejected");
 
     printf("=== F-11: convergence/elapse exit symmetrically releases RT ===\n");
-    // Disarm any existing state first
     coldStartOnForegroundSwitch("com.other.app");
     g_threadsMutex.lock();
     g_threads.clear();
@@ -164,7 +150,6 @@ int main() {
     CHECK(noRelease999, "F-11: dead tid 999 NOT touched");
     CHECK(noRelease200, "F-11: other pkg tid 200 NOT touched");
 
-    // Re-arm, then leave foreground (disarm path)
     s_clk += 60001;
     coldStartOnForegroundSwitch("com.test.game");
     CHECK(coldStartActive() == true, "F-11: re-armed after window");

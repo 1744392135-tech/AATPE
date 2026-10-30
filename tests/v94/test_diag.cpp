@@ -1,5 +1,3 @@
-// test_diag.cpp - hermetic unit tests for aatpe_diag.cpp real parsing.
-// Uses diag::setTestRoot to redirect /proc /sys into a temp dir.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,7 +8,6 @@
 #include <unistd.h>
 #include "aatpe_diag.h"
 
-// Host stub for atomicWriteFile (defined in aatpe_diag.cpp extern decl).
 bool atomicWriteFile(const char* path, const std::string& content) {
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open()) return false;
@@ -34,14 +31,10 @@ static void mkdirp(const std::string& p) {
 static void writeFile(const std::string& path, const std::string& content) {
     std::ofstream f(path); f << content;
 }
-// Simulate a read-only sysfs node (0444): on-device the daemon owns it, so
-// access(W_OK) must be false. ofstream makes 0644; chmod to 0444.
 static void writeRo(const std::string& path, const std::string& content) {
     writeFile(path, content);
     chmod(path.c_str(), 0444);
 }
-// extract a key=value from a one-line, ';'-separated state record (bounded by
-// ';' or line start so 'governor=' is not matched inside 'gpu_freq=').
 static std::string kv(const std::string& line, const std::string& key) {
     std::string tok = key + "=";
     size_t pos = 0;
@@ -88,10 +81,8 @@ int main() {
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
         mkdirp(root + "/proc/pressure");
-        // Real Android cpu file: "some" only, NO "full" line.
         writeFile(root + "/proc/pressure/cpu",
                   "some avg10=7.00 avg60=3.50 avg300=1.20 total=98765\n");
-        // io/mem exist but show 0% pressure (no IO stalls / no memory reclaim).
         writeFile(root + "/proc/pressure/io",
                   "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
                   "full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
@@ -116,7 +107,6 @@ int main() {
         mkdirp(root + "/proc/pressure");
         writeFile(root + "/proc/pressure/cpu",
                   "some avg10=2.50 total=111\n");
-        // NO io/mem files at all.
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
         auto s = aatpe::diag::getSystemPressureSnapshot();
@@ -165,7 +155,6 @@ int main() {
         char tmp[] = "/tmp/diag_none_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // empty tree
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
         auto s = aatpe::diag::getSystemPressureSnapshot();
@@ -225,7 +214,6 @@ int main() {
         char tmp[] = "/tmp/diag_ctrl0_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // ONLY the MTK ged/hal utilization node exists — no devfreq, no ged freq.
         mkdirp(root + "/sys/kernel/ged/hal");
         writeFile(root + "/sys/kernel/ged/hal/gpu_utilization", "gpu_utilization: 30\n");
         mkdirp(root + "/state");
@@ -249,7 +237,7 @@ int main() {
         std::string root = tmp;
         mkdirp(root + "/sys/kernel/ged/hal");
         writeRo(root + "/sys/kernel/ged/hal/gpu_utilization", "gpu_utilization: 42\n");
-        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "700\n");      // 700 MHz -> kHz
+        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "700\n");
         writeRo(root + "/sys/kernel/ged/hal/previous_freqency", "650\n");
         writeRo(root + "/sys/kernel/ged/hal/total_gpu_freq_level_count", "12\n");
         mkdirp(root + "/state");
@@ -281,8 +269,8 @@ int main() {
         std::string root = tmp;
         mkdirp(root + "/sys/kernel/ged/hal");
         writeRo(root + "/sys/kernel/ged/hal/gpu_utilization", "gpu_utilization: 55\n");
-        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "400000\n");  // already kHz
-        writeFile(root + "/sys/kernel/ged/hal/custom_boost_gpu_freq", "700000\n"); // owner-writable
+        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "400000\n");
+        writeFile(root + "/sys/kernel/ged/hal/custom_boost_gpu_freq", "700000\n");
         mkdirp(root + "/state");
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
@@ -321,7 +309,7 @@ int main() {
         std::string root = tmp;
         mkdirp(root + "/sys/kernel/ged/hal");
         writeRo(root + "/sys/kernel/ged/hal/gpu_utilization", "gpu_utilization: 10\n");
-        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "3\n");  // OPP index
+        writeRo(root + "/sys/kernel/ged/hal/current_freqency", "3\n");
         mkdirp(root + "/state");
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
@@ -341,33 +329,25 @@ int main() {
         char tmp[] = "/tmp/diag_cpu_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // cpu0 and cpu2 have cpufreq; cpu1 is ABSENT (offline / vendor quirk).
         mkdirp(root + "/sys/devices/system/cpu/cpu0/cpufreq");
         writeFile(root + "/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "2000000\n");
         writeFile(root + "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq", "2000000\n");
-        // cpu1 deliberately missing
         mkdirp(root + "/sys/devices/system/cpu/cpu2/cpufreq");
         writeFile(root + "/sys/devices/system/cpu/cpu2/cpufreq/cpuinfo_max_freq", "2500000\n");
         writeFile(root + "/sys/devices/system/cpu/cpu2/cpufreq/scaling_max_freq", "2500000\n");
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
         auto s = aatpe::diag::getSystemPressureSnapshot();
-        // With the old `break`, cpu2 (the higher core) was never scanned ->
-        // hwMax would wrongly be 2000000. continue() scans it -> 2500000.
         CHECK(s.cpuHwMaxKhz == 2500000, "WD-03: cpu2 scanned despite missing cpu1 (hwMax=2.5GHz)");
         CHECK(s.cpuCapKhz == 2000000, "WD-03: curCap=min scaling_max across scanned cores (2.0GHz)");
     }
 
     printf("\n=== Diag WD-07: online CPU enumeration (no hardcoded cpu<16) ===\n");
     {
-        // Build a 20-core fake sysfs. The old `for(cpu=0; cpu<16; cpu++)` loop
-        // would NEVER scan cpu16..cpu19. The new enumerateOnlineCpus() reads
-        // /sys/devices/system/cpu/online ("0-19") and scans all 20.
         char tmp[] = "/tmp/diag_cpuN_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
         mkdirp(root + "/sys/devices/system/cpu");
-        // Write the online mask first so enumerateOnlineCpus prefers it.
         writeFile(root + "/sys/devices/system/cpu/online", "0-19\n");
         for (int c = 0; c < 20; c++) {
             mkdirp(root + "/sys/devices/system/cpu/cpu" + std::to_string(c) + "/cpufreq");
@@ -376,15 +356,12 @@ int main() {
             writeFile(root + "/sys/devices/system/cpu/cpu" + std::to_string(c) + "/cpufreq/scaling_max_freq",
                       "2000000\n");
         }
-        // Mark cpu19 with a HIGHER hw max (3.0GHz) — only scanned if enumeration
-        // goes past cpu15.
         writeFile(root + "/sys/devices/system/cpu/cpu19/cpufreq/cpuinfo_max_freq", "3000000\n");
         writeFile(root + "/sys/devices/system/cpu/cpu19/cpufreq/scaling_max_freq", "2500000\n");
 
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
         auto s = aatpe::diag::getSystemPressureSnapshot();
-        // Old loop would cap at cpu15 -> hwMax stuck at 2000000.
         CHECK(s.cpuHwMaxKhz == 3000000,
               "WD-07: cpu19 scanned (hwMax=3.0GHz from >16-core part)");
         CHECK(s.cpuCapKhz == 2000000,
@@ -393,7 +370,6 @@ int main() {
 
     printf("\n=== Diag WD-07b: online mask with gaps (\"0-3,7,16-19\") ===\n");
     {
-        // Verify range-list parsing: sparse online CPUs.
         char tmp[] = "/tmp/diag_cpuG_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
@@ -407,7 +383,6 @@ int main() {
             writeFile(root + "/sys/devices/system/cpu/cpu" + std::to_string(c) + "/cpufreq/scaling_max_freq",
                       "2200000\n");
         }
-        // cpu19 highest
         writeFile(root + "/sys/devices/system/cpu/cpu19/cpufreq/cpuinfo_max_freq", "3100000\n");
         aatpe::diag::setTestRoot(root);
         aatpe::diag::collect();
@@ -422,19 +397,16 @@ int main() {
         std::string root = tmp;
         mkdirp(root + "/state");
         aatpe::diag::setTestRoot(root);
-        // Caller publishes its key threads' top-N runnable-wait.
         std::vector<aatpe::diag::SystemPressure::RqWaitEntry> top;
         top.push_back({4821, 120});
         top.push_back({910, 45});
         aatpe::diag::setRqWaitTop(top);
-        // A collect() cycle must PRESERVE the caller-populated rqWaitTop (WD-04).
         aatpe::diag::collect();
         aatpe::diag::writeStateFiles((root + "/state").c_str());
         std::string line = readAll(root + "/state/rq_wait_top");
         printf("  rq_wait_top: %s\n", line.c_str());
         CHECK(line.find("4821:120") != std::string::npos, "WD-04: rq_wait_top carries tid 4821 wait 120ms");
         CHECK(line.find("910:45") != std::string::npos, "WD-04: rq_wait_top carries tid 910 wait 45ms");
-        // Clear path works.
         aatpe::diag::setRqWaitTop({});
         aatpe::diag::writeStateFiles((root + "/state").c_str());
         std::string cleared = readAll(root + "/state/rq_wait_top");

@@ -1,5 +1,3 @@
-// fz_affinity_mask.cpp - fuzz parseAffinityMask (surface #7: cpuset /
-// cpu topology text: "0-3,7", hex bitmask "0f", singles, garbage).
 #include <string>
 #include <set>
 #include "aatped.h"

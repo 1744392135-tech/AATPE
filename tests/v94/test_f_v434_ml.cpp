@@ -1,13 +1,3 @@
-// test_f_v434_ml.cpp — v4.3.4 F-group regression tests for ML core:
-//   F-001: >7-day stale model must decay the GLOBAL fusion weight (alpha),
-//          not just per-pool sample counts. Old code had `alpha *= 0.5f` dead
-//          because recomputeAllAlphas() overwrote global alpha from the
-//          un-decayed total_samples. We assert alpha after stale-load is
-//          strictly less than alpha after fresh-load.
-//   F-003: v1/v2 back-compat load clears the P3-45 m_anomalyLatched diagnostic
-//          latch so a stale latched flag from a previous run does not persist.
-//
-// Links aatpe_ml.cpp + ml_deps stub.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,7 +26,6 @@ static std::string makeTempPath(const char* prefix) {
     else   { g_fail++; printf("  [FAIL] %s\n", m); } \
 } while(0)
 
-// Backdate a file's mtime (and atime) by the given number of seconds.
 static void backdateMtime(const char* path, time_t secondsAgo) {
     struct stat st;
     stat(path, &st);
@@ -49,16 +38,11 @@ static void backdateMtime(const char* path, time_t secondsAgo) {
 }
 
 int main() {
-    // ==================================================================
-    // F-001: stale-decay must reduce GLOBAL alpha (not just per-pool)
-    // ==================================================================
     printf("=== F-001: stale (>7d) model decays global fusion alpha ===\n");
     {
         LearningModel m; m.init(1); m.setEnabled(true);
         ThreadFeatures f = LearningModel::extractFeatures(
             0, 0, 50, 0, -20, false, 0, 512, true, 0);
-        // Train enough samples to saturate global alpha (cold_start=50,
-        // full saturation at ~550 total_samples). Use 700 to be safe.
         for (int i = 0; i < 700; i++) m.update(0, f, 0.8f);
         float alphaTrained = m.getAlpha();
         printf("  trained total_samples=%d alpha=%.4f\n",
@@ -68,19 +52,15 @@ int main() {
         std::string p = makeTempPath("aatpe_f001");
         m.save(p.c_str());
 
-        // Fresh load (file mtime = now, NOT stale) -> alpha should match.
         LearningModel mFresh; mFresh.init(1); mFresh.setEnabled(true);
         CHECK(mFresh.load(p.c_str()) == true, "F-001: fresh load ok");
         float alphaFresh = mFresh.getAlpha();
         printf("  fresh-load alpha=%.4f (total_samples=%d)\n",
                (double)alphaFresh, mFresh.getTotalSamples());
-        // Fresh load should preserve alpha (within numerical tolerance).
         CHECK(alphaFresh > 0.25f, "F-001: non-stale load keeps global alpha saturated");
 
-        // Backdate the model file to 30 days ago (> 7 day threshold).
         backdateMtime(p.c_str(), 30 * 24 * 3600);
 
-        // Stale load: global alpha must DECAY (old code did NOT decay it).
         LearningModel mStale; mStale.init(1); mStale.setEnabled(true);
         CHECK(mStale.load(p.c_str()) == true, "F-001: stale load ok");
         float alphaStale = mStale.getAlpha();
@@ -90,7 +70,6 @@ int main() {
               "F-001: stale global alpha decayed (< 80% of fresh)");
         CHECK(alphaStale > 0.0f, "F-001: stale alpha not zero (partial decay, not reset)");
 
-        // Per-pool sample count must also be decayed (existing behavior).
         int poolSamplesStale = mStale.getPoolModel(0).sample_count;
         printf("  stale pool[0].sample_count=%d (was 700)\n", poolSamplesStale);
         CHECK(poolSamplesStale < 700, "F-001: per-pool sample_count decayed too");
@@ -98,25 +77,15 @@ int main() {
         unlink(p.c_str());
     }
 
-    // ==================================================================
-    // F-003: v1 back-compat load clears m_anomalyLatched
-    // ==================================================================
     printf("=== F-003: v1 load clears m_anomalyLatched diagnostic latch ===\n");
     {
-        // Craft a minimal v1 model file by hand.
-        // v1 layout (from aatpe_ml.cpp load() is_v1 else branch):
-        //   magic[8]  = "AATPEML1"
-        //   num_cpus(4)
-        //   total_samples(4) alpha(4) max_alpha(4) initial_lr(4)
-        //   lr_decay(4) weight_clamp(4) cold_start_samples(4)
-        //   per cpu: weights[11] float, learning_rate(4), sample_count(4)
         std::string p = makeTempPath("aatpe_f003");
         FILE* fp = fopen(p.c_str(), "wb");
         char magic[8] = {'A','A','T','P','E','M','L','1'};
         fwrite(magic, 1, 8, fp);
         int num_cpus = 2;
         fwrite(&num_cpus, sizeof(int), 1, fp);
-        int   ts = 200;                 // total_samples
+        int   ts = 200;
         float alpha = 0.2f, max_alpha = 0.3f, init_lr = 0.01f;
         float lr_decay = 0.999f, wclamp = 10.0f;
         int   cold = 50;
@@ -137,14 +106,7 @@ int main() {
         }
         fclose(fp);
 
-        // Pre-seed m_anomalyLatched=true on a fresh model (simulating a previous
-        // run that hit the P3-45 validateParameters latch).
         LearningModel m; m.init(3); m.setEnabled(true);
-        // We can't directly set m_anomalyLatched from outside; simulate the
-        // latched state by triggering validateParameters failure, then clear
-        // enabled. But for F-003 we just need to verify that a SUCCESSFUL v1
-        // load does not leave a latched flag behind. Since the default is false,
-        // we assert it stays false after load (regression guard).
         bool loaded = m.load(p.c_str());
         CHECK(loaded, "F-003: v1 crafted model loads ok");
         CHECK(m.isAnomalyLatched() == false,

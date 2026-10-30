@@ -13,9 +13,9 @@ int main(){
         std::vector<std::vector<ZoneReading>> seq = {
             {{"z1","mtktsap",53,true},{"z4","mtktscpu",63,true}},
             {{"z1","mtktsap",54,true},{"z4","mtktscpu",62,true}},
-            {{"z1","mtktsap",55,true},{"z4","mtktscpu",INT_MIN,false}}, // -1
+            {{"z1","mtktsap",55,true},{"z4","mtktscpu",INT_MIN,false}},
             {{"z1","mtktsap",60,true},{"z4","mtktscpu",73,true}},
-            {{"z1","mtktsap",65,true},{"z4","mtktscpu",INT_MIN,false}}, // -1 again
+            {{"z1","mtktsap",65,true},{"z4","mtktscpu",INT_MIN,false}},
             {{"z1","mtktsap",71,true},{"z4","mtktscpu",87,true}},
         };
         int trustedEnd=0, anyEnd=0;
@@ -53,7 +53,6 @@ int main(){
     {
         std::map<std::string, ZoneHist> h;
         SelectResult r;
-        // smooth load ramp: little 55->65, big 70->85, both clean
         std::vector<std::vector<ZoneReading>> seq = {
             {{"little","cpu-little",55,true},{"big","cpu-big",70,true}},
             {{"little","cpu-little",60,true},{"big","cpu-big",78,true}},
@@ -80,10 +79,10 @@ int main(){
         std::map<std::string, ZoneHist> h;
         std::vector<std::vector<ZoneReading>> seq = {
             {{"z1","mtktsap",55,true},{"z4","mtktscpu",60,true}},
-            {{"z1","mtktsap",56,true},{"z4","mtktscpu",INT_MIN,false}}, // -1
-            {{"z1","mtktsap",57,true},{"z4","mtktscpu",INT_MIN,false}}, // -1 (badStreak=2 -> rogue)
-            {{"z1","mtktsap",58,true},{"z4","mtktscpu",62,true}},      // valid recovery
-            {{"z1","mtktsap",59,true},{"z4","mtktscpu",63,true}},      // valid (goodStreak decays badStreak)
+            {{"z1","mtktsap",56,true},{"z4","mtktscpu",INT_MIN,false}},
+            {{"z1","mtktsap",57,true},{"z4","mtktscpu",INT_MIN,false}},
+            {{"z1","mtktsap",58,true},{"z4","mtktscpu",62,true}},
+            {{"z1","mtktsap",59,true},{"z4","mtktscpu",63,true}},
             {{"z1","mtktsap",60,true},{"z4","mtktscpu",64,true}},
         };
         bool z4TrustedAtEnd=false;
@@ -107,18 +106,10 @@ int main(){
 
     printf("\n=== T9 (D-005): lone-CPU-zone ramps must NOT pollute spikeStreak ===\n");
     {
-        // A single-zone device ramps hard (50 -> 90 -> 95, each scan >25C slew).
-        // Before the fix others==0 forced every such slew to be flagged an
-        // "unfollowed spike" and spikeStreak climbed. Later a SECOND CPU zone
-        // hot-plugs in cool (50C): the polluted z4 then looks timeBad AND
-        // divergent from the new median (|95-50|=45 > 12) and gets judged ROGUE —
-        // rejecting the REAL hot die. After the fix single-zone scans skip spike
-        // detection entirely, so spikeStreak stays 0 and z4 survives.
         std::map<std::string, ZoneHist> h;
         SelectResult a = select({{"z4","mtktscpu",50,true}}, h);
         SelectResult b = select({{"z4","mtktscpu",90,true}}, h);
         SelectResult c = select({{"z4","mtktscpu",95,true}}, h);
-        // Now a second CPU zone appears cool at 50C.
         SelectResult r = select({{"z4","mtktscpu",95,true},{"z1","mtktsap",50,true}}, h);
         bool z4Rogue = (std::find(r.rogueNames.begin(),r.rogueNames.end(),"z4")!=r.rogueNames.end());
         CK(!z4Rogue, "T9: z4 NOT rogue after 2nd zone hot-plugs (spikeStreak was not polluted)");

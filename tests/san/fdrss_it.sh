@@ -1,6 +1,4 @@
 #!/bin/bash
-# Run integration scenario(s) under ASan while sampling fd count + VmRSS.
-# Usage: AATPE_ONLY="S3_MLLearningLoop" TAG=s3 fdrss_it.sh
 set -u
 SANDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$SANDIR/../.." && pwd)"

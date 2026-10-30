@@ -1,8 +1,3 @@
-// test_audio.cpp - v94 hermetic unit tests for aatped_audio.cpp
-// Links aatped_audio.cpp + audio_deps (see build.sh recipe).
-// Covers: isAudioThread name matching (positive/negative/null),
-// getAudioThreadMigrationPenalty (gated on audio mode), detectAudioPlayback
-// graceful false on a host without an audioserver.
 #include <cstdio>
 #include "aatped.h"
 #include "aatped_audio.h"
@@ -36,7 +31,6 @@ int main() {
     CHECK(ap == false, "no audioserver process on host -> false");
     CHECK(g_audioModeActive == false, "mode stays inactive");
 
-    // C-006: active-track evidence (not mere server liveness) gates audio mode.
     printf("=== Audio: C-006 active-track detection (conservative) ===\n");
     CHECK(aatpeAudioDumpShowsActiveTrack("") == false, "C-006: empty dump -> no active track");
     CHECK(aatpeAudioDumpShowsActiveTrack("AudioFlinger pid: 1234\nMixer threads: 1\n") == false,

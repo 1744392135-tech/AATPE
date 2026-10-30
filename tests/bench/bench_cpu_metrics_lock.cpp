@@ -1,27 +1,3 @@
-// AATPE v6.0.0 round3 g_cpuMetrics short-lock microbenchmark (host, self-contained).
-//
-// Models the round3 concurrency fix in aatped_main.cpp: g_cpuMetrics is a small
-// per-CPU metrics map mutated by the aux collection thread (writer) and read by
-// the main scheduling loop under 5 short std::lock_guard critical sections.
-//
-//   CpuMetrics { int capacity, curFreq, maxFreq, freqPct, util, temp; }  (24 bytes,
-//                matches aatped_types.h:151)
-//   g_cpuMetrics : map keyed by cpuId, ~8 entries on an arm64 phone.
-//
-// The 5 reader critical sections (mirroring aatped_main.cpp sites):
-//   R1 loopAuxScan avg load   (~2702): iterate whole map, sum util.
-//   R2 outcome batch freq     (~3377): find(current)+find(target), copy curFreq/maxFreq.
-//   R3 baseline duty          (~3655): find(current), copy curFreq/maxFreq.
-//   R4 placement beforeFreq    (~4020): find(current), copy curFreq.
-//   R5 placement currentUtil   (~4053): find(current), copy util.
-//
-// Writer (mirrors readCpuMetrics ~1126): unique_lock, update all ~8 entries.
-//
-// NO real-device sysfs. Single-file g++/clang++. Uses std::unordered_map as the
-// task specifies; find() on ~8 entries is cache-hot either way.
-//
-// Build: g++ -std=c++17 -O3 -pthread -DAATPE_HOST_TEST bench_cpu_metrics_lock.cpp -o bench_cpu_metrics_lock
-// Run (pinned): taskset -c 0 ./bench_cpu_metrics_lock
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -43,12 +19,11 @@ struct CpuMetrics {
     int temp = 0;
 };
 
-static constexpr int NCPU = 8;  // typical arm64 big.LITTLE phone.
+static constexpr int NCPU = 8;
 
 static std::unordered_map<int, CpuMetrics> g_cpuMetrics;
 static std::mutex g_cpuMetricsMutex;
 
-// ---------------- reader critical sections (locked) ----------------
 static inline int read_R1_avgLoad() {
     std::lock_guard<std::mutex> lk(g_cpuMetricsMutex);
     long long sum = 0; int n = 0;
@@ -86,7 +61,6 @@ static inline int read_R5_curUtil(int cur) {
     return u;
 }
 
-// ---------------- same critical sections WITHOUT the lock (control) ----
 static inline int read_R1_avgLoad_nolock() {
     long long sum = 0; int n = 0;
     for (auto& kv : g_cpuMetrics) { if (kv.second.util >= 0) { sum += kv.second.util; ++n; } }
@@ -131,7 +105,6 @@ static double percentile(std::vector<double>& v, double p) {
 static long g_sink = 0;
 
 int main() {
-    // seed the map
     for (int c = 0; c < NCPU; ++c) {
         CpuMetrics m; m.curFreq = 800 + c * 100; m.maxFreq = 2400; m.util = 30 + c; m.temp = 40;
         g_cpuMetrics[c] = m;
@@ -139,10 +112,6 @@ int main() {
 
     std::printf("=== g_cpuMetrics short-lock microbench (NCPU=%d, O3, pinned) ===\n", NCPU);
 
-    // =====================================================================
-    // PART 1: uncontended single-thread critical-section hold time.
-    // Time the locked section vs the unlocked section; delta = lock overhead.
-    // =====================================================================
     const int N = 2000000;
     struct Sec { const char* name; std::vector<double> locked, nolock; };
     Sec secs[5] = {
@@ -153,7 +122,6 @@ int main() {
         {"R5 curUtil",              {}, {}},
     };
     auto bench = [&](int idx) {
-        // warmup
         for (int i = 0; i < 20000; ++i) {
             switch (idx) {
                 case 0: g_sink += read_R1_avgLoad(); break;
@@ -176,7 +144,6 @@ int main() {
             secs[idx].locked.push_back(ns_since(t0));
             g_sink += r;
         }
-        // unlocked control
         for (int i = 0; i < 20000; ++i) {
             switch (idx) {
                 case 0: g_sink += read_R1_avgLoad_nolock(); break;
@@ -218,19 +185,12 @@ int main() {
     std::printf("%-24s | %10.1f | %10.1f | %10.1f | %10.1f | %10.1f\n",
                 "SUM (5 locks/cycle)", lock_p50_sum, 0.0, 0.0, delta_p50_sum, 0.0);
 
-    // =====================================================================
-    // PART 2: 1 writer + 4 readers concurrency. Measure decision-cycle
-    // throughput (5 reader critical sections per cycle) and reader lock
-    // acquire-wait (contention) P99.
-    // =====================================================================
     std::printf("\n--- PART2: 1 writer + 4 readers concurrency ---\n");
     std::atomic<bool> stop{false};
     std::atomic<long long> cycles{0};
-    // per-reader acquire-wait samples (ns spent blocked trying to take the lock)
     static std::vector<std::vector<double>> waitSamples(4);
 
     auto writer = [&]() {
-        // mirrors readCpuMetrics: unique_lock, update all NCPU entries.
         int tick = 0;
         while (!stop.load(std::memory_order_relaxed)) {
             {
@@ -240,8 +200,6 @@ int main() {
                     g_cpuMetrics[c].curFreq = 800 + ((tick + c) % 16) * 100;
                 }
             }
-            // production cadence ~2s; for measurable contention we speed up,
-            // but keep it short relative to reader bursts.
             std::this_thread::sleep_for(std::chrono::microseconds(200));
             ++tick;
         }
@@ -249,14 +207,11 @@ int main() {
     auto reader = [&](int idx) {
         long long local = 0;
         while (!stop.load(std::memory_order_relaxed)) {
-            // one "decision cycle" = 5 reader critical sections
             for (int k = 0; k < 5; ++k) {
                 auto t0 = clk::now();
-                // measure ONLY the acquire-wait: from lock() call to lock held.
                 g_cpuMetricsMutex.lock();
                 double wait = ns_since(t0);
                 waitSamples[idx].push_back(wait);
-                // do the tiny find+copy work under the lock (like production)
                 int cur = k % NCPU;
                 auto it = g_cpuMetrics.find(cur);
                 int v = (it != g_cpuMetrics.end()) ? it->second.util : 0;
@@ -272,7 +227,6 @@ int main() {
     std::vector<std::thread> readers;
     for (int i = 0; i < 4; ++i) readers.emplace_back(reader, i);
 
-    // run for a fixed wall window
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     auto tw0 = clk::now();
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
@@ -287,7 +241,6 @@ int main() {
     std::printf("throughput: %.0f decision cycles/s across 4 readers (%.0f reader-locks/s)\n",
                 cycles_per_sec, cycles_per_sec * 5);
 
-    // aggregate acquire-wait
     std::vector<double> allWait;
     for (auto& v : waitSamples) allWait.insert(allWait.end(), v.begin(), v.end());
     if (allWait.empty()) {
@@ -302,12 +255,9 @@ int main() {
                     allWait.size(), mean, wp50, wp95, wp99, wmax);
     }
 
-    // =====================================================================
-    // PART 3: cost amortized over a real 500ms decision cycle.
-    // =====================================================================
     std::printf("\n--- PART3: lock cost vs 500ms decision cycle ---\n");
-    double per_cycle_ns = delta_p50_sum;       // added lock overhead across the 5 locks
-    double cycle_period_ns = 500.0 * 1e6;       // 500 ms
+    double per_cycle_ns = delta_p50_sum;
+    double cycle_period_ns = 500.0 * 1e6;
     double frac = per_cycle_ns / cycle_period_ns * 100.0;
     std::printf("added lock overhead per 500ms decision cycle: %.1f ns = %.3f us\n",
                 per_cycle_ns, per_cycle_ns / 1e3);

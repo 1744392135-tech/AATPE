@@ -1,10 +1,3 @@
-// v4.1.2 hotfix host test: aatpe_diag GPU node-access + empty-freq behavior.
-// Reproduces the on-device scenario (Redmi chopin, KSU uid=0, SELinux enforcing):
-//   - gpu_utilization reads a non-empty value  -> must count as R
-//   - current_freqency reads EMPTY (SELIMNUX returns empty under root shell)
-//     -> must NOT be treated as an available frequency (no fake 0/0MHz)
-//   - under forced-root, access(W_OK) must NOT be trusted -> no node judged W,
-//     gpu ctrl must stay 0. We never write to a node.
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -14,12 +7,10 @@
 #include <unistd.h>
 #include "aatpe_diag.h"
 
-// ---- stubs for deps not under test ----
 std::atomic<int> g_logLevel{0};
 std::atomic<unsigned int> g_debugSampleCounter{0};
 void logMsg(int, const char*, ...) {}
 void logInit() {} void logReinit() {} void logFlush() {} void logShutdown() {} void logClear() {}
-// atomicWriteFile stub: just remember it was called, do not actually write.
 bool atomicWriteFile(const char* path, const std::string& content) {
     (void)path; (void)content; return true;
 }
@@ -38,7 +29,6 @@ static void writeFile(const std::string& path, const std::string& content) {
 }
 static void mkDir(const std::string& p) { mkdir(p.c_str(), 0755); }
 
-// Count R/W/N occurrences in a probe line "name=R;name=W:...".
 static void countProbe(const std::string& probe, int& r, int& w, int& n) {
     r = w = n = 0;
     size_t pos = 0;
@@ -57,7 +47,6 @@ static void countProbe(const std::string& probe, int& r, int& w, int& n) {
 
 int main() {
     const char* root = "v412_testroot";
-    // Build fake sys tree.
     mkDir(root);
     mkDir(std::string(root) + "/sys");
     mkDir(std::string(root) + "/sys/fs");
@@ -67,12 +56,9 @@ int main() {
     mkDir(std::string(root) + "/sys/kernel/ged/hal");
     mkDir(std::string(root) + "/proc");
 
-    // ---- Scenario A: forced root + SELinux enforcing (the real device) ----
-    writeFile(std::string(root) + "/.aatpe_env_root", "1\n");      // force euid==0
+    writeFile(std::string(root) + "/.aatpe_env_root", "1\n");
     writeFile(std::string(root) + "/sys/fs/selinux/enforce", "1\n");
-    // util node: readable, non-empty.
     writeFile(std::string(root) + "/sys/kernel/ged/hal/gpu_utilization", "22\n");
-    // All other GED nodes exist but read EMPTY (SELinux denies cat under root shell).
     const char* empties[] = {
         "current_freqency", "previous_freqency", "gpu_boost_level",
         "custom_boost_gpu_freq", "custom_upbound_gpu_freq", "total_gpu_freq_level_count",
@@ -97,12 +83,10 @@ int main() {
     printf("    probe counts: R=%d W=%d N=%d  (line: %s)\n", r, w, n, s.gpuProbe.c_str());
     CHECK(w == 0, "enforcing/root: zero nodes judged writable (W==0)");
     CHECK(r == 1, "only the non-empty util node counts as R (R==1)");
-    // 12 empty GED nodes + 4 absent platform-device entries = 16 N. Total 17 nodes,
-    // matching the on-device enumeration (was R0/W17/N0 before the hotfix).
     CHECK(n == 16, "12 empty GED nodes + 4 absent plat dirs counted as N (N==16)");
     CHECK(s.gpuProbe.find("=W") == std::string::npos, "probe line contains no '=W'");
 
-    aatpe::diag::setTestRoot("");  // reset
+    aatpe::diag::setTestRoot("");
     printf("\n%s\n", g_failures ? "RESULT: FAILURES PRESENT" : "RESULT: ALL PASS");
     return g_failures ? 1 : 0;
 }

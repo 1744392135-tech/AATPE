@@ -1,7 +1,3 @@
-// AATPE v4.4.6 decision hot-path micro-benchmark (host, deterministic).
-// Measures P50/P95/P99/mean latency (ns) and ops/s for the pure C4 decision path
-// and supporting pure functions. No network / no device / no I/O. CPU affinity to
-// one core is set by the runner script (taskset) to reduce jitter.
 #include "c4_freezer.h"
 #include <chrono>
 #include <algorithm>
@@ -37,7 +33,6 @@ int main() {
     const int N = 200000;
     int sink = 0;
 
-    // --- decideC4Freeze (fixed input: background, not frozen, audio silent) ---
     C4DecisionInputs in{};
     in.featureEnabled = true; in.isForeground = false; in.alreadyFrozen = false;
     in.freezerAvailable = true; in.audioActive = false;
@@ -46,13 +41,11 @@ int main() {
         sink += (int)d.action;
     }, N);
 
-    // --- c4ChooseTarget ---
     auto dTarget = timeit([&]{
         std::string r = c4ChooseTarget("com.game", "com.android.launcher", false);
         sink += (int)r.size();
     }, N);
 
-    // --- c4StateJson ---
     auto dJson = timeit([&]{
         std::string r = c4StateJson(true, "com.game", true, "/sys/fs/cgroup/uid_1/cg_1",
                                     "UNFREEZE(foreground)", false, true, "");
@@ -65,7 +58,6 @@ int main() {
         double ops = 1e9 / mean;
         std::printf("%-22s P50=%8.1fns P95=%9.1fns P99=%9.1fns mean=%8.1fns  ops/s=%.0f\n",
                     name, p50, p95, p99, mean, ops);
-        // Host assertions: percentiles ordered and in sane sub-100us range.
         if (!(p50 <= p95 && p95 <= p99)) { std::printf("BENCH-ASSERT percentile order FAIL\n"); return 1; }
         if (p99 > 100000.0) { std::printf("BENCH-ASSERT p99>100us FAIL (%s)\n", name); return 1; }
         return 0;

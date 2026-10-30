@@ -1,7 +1,3 @@
-// test_applaunch.cpp - v94 hermetic unit tests for aatped_applaunch.cpp
-// Links aatped_applaunch.cpp + applaunch_deps (see build.sh recipe).
-// Covers: recordAppLaunch history persistence, getPreloadedPreferredCpu
-// (known/unknown package, null), checkAndPreloadNewApps graceful on host.
 #include <cstdio>
 #include "aatped.h"
 #include "aatped_applaunch.h"
@@ -32,8 +28,7 @@ int main() {
 
     printf("=== AppLaunch: checkAndPreloadNewApps graceful on host ===\n");
     size_t histBefore = g_appLaunchHistory.size();
-    checkAndPreloadNewApps();  // scans /proc; must not crash
-    // The scan must not wipe the record we just persisted.
+    checkAndPreloadNewApps();
     CHECK(g_appLaunchHistory.size() >= histBefore,
           "checkAndPreloadNewApps preserves existing launch history");
 

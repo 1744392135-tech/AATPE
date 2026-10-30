@@ -1,8 +1,3 @@
-// test_loadforecast_scene_v449.cpp — R2-L5 regression: load_forecast must not
-// divide-by-zero (or yield inf/NaN confidence) when an external config override
-// sets min_samples=0. Pre-fix: confidence = (valid_samples - 0)/(0*2) = inf,
-// clamped to 1.0 (falsely "fully confident" despite the invalid config). Post-fix:
-// min_samples<=0 -> confidence 0.0 (conservative, finite).
 #include <cstdio>
 #include <cmath>
 #include "mech/include/load_forecast.h"
@@ -18,7 +13,7 @@ int main() {
 
     LoadForecastConfig cfg;
     load_forecast_config_default(&cfg);
-    cfg.min_samples = 0;            // the malicious/overridden config
+    cfg.min_samples = 0;
     cfg.horizon_windows = 4;
 
     LoadForecastState st;
@@ -27,9 +22,6 @@ int main() {
     LoadObservation obs{60.0f, 50.0f, 16.0f, 20.0f};
     LoadForecast out;
 
-    // Feed several valid samples so valid_samples > 0 and we reach the confidence
-    // division (early-return path needs valid_samples < min_samples; min_samples=0
-    // means we never early-return).
     for (int i = 0; i < 6; i++) {
         load_forecast_step(&obs, &cfg, &st, &out);
     }
@@ -39,7 +31,6 @@ int main() {
     CHECK(std::isfinite(out.confidence), "confidence is finite (not inf/NaN)");
     CHECK(out.confidence == 0.0f, "confidence==0 (conservative) when min_samples<=0");
 
-    // Forecast arrays must still be populated (we didn't break the forecast).
     CHECK(out.num_windows == 4, "num_windows==horizon");
     CHECK(std::isfinite(out.cpu_forecast[0]), "cpu_forecast[0] finite");
     CHECK(out.cpu_forecast[0] >= 0.0f && out.cpu_forecast[0] <= cfg.max_util_pct,

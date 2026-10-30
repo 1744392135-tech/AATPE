@@ -1,10 +1,6 @@
-// fz_json_escape.cpp - fuzz webui_json jsonEscape (surface #3/#8: JSON string
-// writer / thread-name escaping). Invariant: output must be a structurally valid
-// JSON string body (balanced escapes, no raw control chars).
 #include <string>
 #include "fuzz_engine.h"
 
-// provided by webui_json.cpp (extern, no namespace in TU)
 std::string jsonEscape(const std::string& s);
 
 int main(int argc, char** argv) {
@@ -23,8 +19,6 @@ int main(int argc, char** argv) {
   };
   fz::run(opt, [](const std::string& in) {
     std::string out = jsonEscape(in);
-    // invariant: no raw control chars may remain in output; every backslash
-    // must be followed by a valid escape char.
     for (size_t i = 0; i < out.size(); ++i) {
       unsigned char c = (unsigned char)out[i];
       if (c == '\\') {

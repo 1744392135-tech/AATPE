@@ -1,18 +1,8 @@
-// test_ebpf_cpu_mask.cpp — host test for #24 (CPU online mask parser).
-//
-// final-review fix: this TU previously contained a self-copied duplicate of
-// parseCpuOnlineMask() AND the build recipe linked no production object, so
-// the test had ZERO sensitivity to the production parser — editing or
-// regressing the real function in aatpe_ebpf.cpp left this test green.
-// The duplicate was deleted and the recipe now links the REAL aatpe_ebpf.o
-// (same prod/stub closure as the d3hotplug recipe), so every case below
-// executes the production parser itself.
 #include <cstdio>
 #include <string>
 #include <vector>
 
 namespace aatpe_ebpf {
-// Production symbol, defined in aatpe_ebpf.cpp and linked via aatpe_ebpf.o.
 std::vector<int> parseCpuOnlineMask(const std::string& text);
 }
 

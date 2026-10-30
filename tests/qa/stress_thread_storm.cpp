@@ -1,7 +1,3 @@
-// stress_thread_storm.cpp — Real thread create/destroy stress test.
-//
-// Uses aatpeRtSetHooksForTest for deterministic assertions.
-// Spawns threads, seeds test TIDs, runs prune, asserts exact count.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,7 +8,6 @@
 #include <chrono>
 #include <unistd.h>
 
-// Production test seams (from aatped_priority.cpp under AATPE_HOST_TEST)
 extern "C" {
     void aatpeRtDebugSeedForTest(int tid, unsigned long long starttime);
     void aatpePruneDeadRtTids(void);
@@ -23,7 +18,6 @@ extern "C" {
 
 static std::atomic<int> g_threadsDone(0);
 
-// Hook state
 static bool g_hookAttrResult = true;
 static unsigned long long g_hookStarttime = 0;
 
@@ -44,43 +38,36 @@ int main() {
 
     int pass = 0, fail = 0;
 
-    // Set hooks
     aatpeRtSetHooksForTest(rtAttrFn, rtStartFn);
 
-    // Spawn threads in batches
     const int BATCH = 100;
-    const int TEST_TID_BASE = 900000;  // avoid collision with real system TIDs
+    const int TEST_TID_BASE = 900000;
 
     for (int batch = 0; batch < ITERS / BATCH; batch++) {
         std::vector<std::thread> threads;
         threads.reserve(BATCH);
 
-        // Seed test TIDs: mix of alive/dead/mismatched
         int expectedAlive = 0;
         for (int i = 0; i < 10; i++) {
             int tid = TEST_TID_BASE + batch * 10 + i;
             unsigned long long st = (unsigned long long)(tid * 1000);
             aatpeRtDebugSeedForTest(tid, st);
 
-            // First 4: alive (attr=true, starttime matches)
             if (i < 4) {
                 g_hookAttrResult = true;
                 g_hookStarttime = st;
                 expectedAlive++;
             }
-            // Next 3: dead (attr=false)
             else if (i < 7) {
                 g_hookAttrResult = false;
                 g_hookStarttime = st;
             }
-            // Last 3: mismatched starttime
             else {
                 g_hookAttrResult = true;
-                g_hookStarttime = st + 9999;  // mismatch
+                g_hookStarttime = st + 9999;
             }
         }
 
-        // Spawn actual threads
         for (int i = 0; i < BATCH; i++) {
             try {
                 threads.emplace_back(worker, batch * BATCH + i);
@@ -89,7 +76,6 @@ int main() {
             }
         }
 
-        // Join all threads
         for (auto& t : threads) {
             try {
                 if (t.joinable()) t.join();
@@ -98,13 +84,10 @@ int main() {
             }
         }
 
-        // Run prune with hooks set to alive + matching starttime
         g_hookAttrResult = true;
-        g_hookStarttime = 0;  // will be set per-tid by the seed
+        g_hookStarttime = 0;
         aatpePruneDeadRtTids();
 
-        // Assertion: RT count should match expected alive count
-        // (Note: exact assertion depends on hook implementation)
         int rtCount = aatpeRtCountForTest();
         if (rtCount < 0) {
             fail++;
@@ -114,7 +97,6 @@ int main() {
         pass += BATCH;
     }
 
-    // Final assertion: after all batches, RT count should be reasonable
     int finalCount = aatpeRtCountForTest();
     printf("  [INFO] Final RT count: %d\n", finalCount);
 

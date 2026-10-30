@@ -1,7 +1,3 @@
-// test_ml_hybrid_alpha.cpp - v94 hermetic unit tests for aatpe_ml_hy_alpha.cpp
-// Links all 5 hybrid TUs. Focus: getAlpha() ramp schedule — 0 until the
-// 50-sample cold-start gate, then linear ramp to kHybridMaxAlpha (0.1),
-// clamped at 1.0, and forced to 0 when disabled.
 #include <cstdio>
 #include <cmath>
 #include <vector>

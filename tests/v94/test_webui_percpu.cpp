@@ -1,15 +1,3 @@
-// test_webui_percpu.cpp — #98 regression.
-//
-// writePerCpuJson() must ALWAYS emit /webui/percpu.json:
-//   T-PERCPU-A: with topology + per-CPU metrics present, the file carries one
-//               object per CPU (cpu/type/util/cur_freq/freq_pct/temp/capacity),
-//               "count" == number of CPUs, "degraded" == "ok".
-//   T-PERCPU-B: topology known but g_cpuMetrics empty -> the file is STILL
-//               written, "cpus":[] , "count":0, "degraded":"no-cpu-metrics"
-//               (explicit reason, not a silent empty object).
-//   T-PERCPU-C: topology itself missing (g_allCpus empty) -> "degraded":"no-topology".
-//
-// Host build (-DAATPE_HOST_TEST): WEBUI_DIR points at a temp dir via the stub.
 
 #include <cstdio>
 #include <cstring>
@@ -68,7 +56,6 @@ int main() {
 
     printf("=== #98: writePerCpuJson always emits, explicit degraded codes ===\n");
 
-    // T-PERCPU-A: full data.
     seedTopology({0,1,2,3,4,5,6,7});
     seedMetrics({0,1,2,3,4,5,6,7});
     writePerCpuJson();
@@ -81,7 +68,6 @@ int main() {
     CHECK(a.find("\"type\":\"little\"") != std::string::npos, "A: little type tagged");
     CHECK(a.find("\"type\":\"big\"") != std::string::npos, "A: big type tagged");
 
-    // T-PERCPU-B: topology known, metrics empty.
     seedTopology({0,1,2,3,4,5,6,7});
     { std::lock_guard<std::mutex> l(g_cpuMetricsMutex); g_cpuMetrics.clear(); }
     writePerCpuJson();
@@ -92,7 +78,6 @@ int main() {
     CHECK(b.find("\"degraded\":\"no-cpu-metrics\"") != std::string::npos,
           "B: explicit degraded=no-cpu-metrics (not silent)");
 
-    // T-PERCPU-C: topology itself missing.
     seedTopology({});
     { std::lock_guard<std::mutex> l(g_cpuMetricsMutex); g_cpuMetrics.clear(); }
     writePerCpuJson();

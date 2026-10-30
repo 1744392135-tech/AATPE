@@ -1,5 +1,3 @@
-// test_caps.cpp - hermetic unit tests for aatpe_caps.cpp probe layer.
-// Uses caps::setTestRoot to redirect /proc /sys /dev into a temp dir.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,7 +8,6 @@
 #include <unistd.h>
 #include "aatpe_caps.h"
 
-// Host stub for atomicWriteFile (aatpe_caps.cpp now uses atomic write 0600).
 bool atomicWriteFile(const char* path, const std::string& content) {
     std::ofstream f(path, std::ios::trunc);
     if (!f.is_open()) return false;
@@ -18,7 +15,6 @@ bool atomicWriteFile(const char* path, const std::string& content) {
     return true;
 }
 
-// Additional host stubs for aatpe_caps.cpp dependencies
 const char* STATE_DIR = "/tmp/aatpe_caps_test";
 bool writeFile(const char* path, const std::string& content) {
     std::ofstream f(path, std::ios::trunc);
@@ -33,12 +29,6 @@ std::string readFile(const char* path) {
     while (std::getline(f, line)) { if (!out.empty()) out += "\n"; out += line; }
     return out;
 }
-// H9: log symbols (g_logLevel/logMsg/logFlush/...) now come from the single
-// tests/stubs/log_stub.cpp TU (std::atomic<int> g_logLevel, matching
-// aatped_logging.h). Previously test_caps.cpp defined its own `int g_logLevel` +
-// logMsg/logFlush, which collided with log_stub.o under the TSan recipe.
-// v4.2 A3: aatpe_caps.o's autocal path references aatpe_ml::computeDeviceTopologyHash().
-// This recipe links aatpe_caps.o but NOT aatpe_ml.o, so provide a neutral host stub.
 namespace aatpe_ml { std::string computeDeviceTopologyHash() { return "caps-test-topo"; } }
 
 static int g_pass = 0, g_fail = 0;
@@ -48,7 +38,6 @@ static int g_pass = 0, g_fail = 0;
 } while(0)
 
 static void mkdirp(const std::string& p) {
-    // crude recursive mkdir
     std::string cur;
     for (size_t i = 0; i < p.size(); i++) {
         cur += p[i];
@@ -74,20 +63,16 @@ int main() {
         char tmp[] = "/tmp/caps_v1_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // Build v1 tree: /dev/cpuset/top-app/cpus="4-6", /dev/cpuctl/top-app/tasks
         mkdirp(root + "/dev/cpuset/top-app");
         writeFile(root + "/dev/cpuset/top-app/cpus", "4-6\n");
         writeFile(root + "/dev/cpuset/top-app/tasks", "");
         mkdirp(root + "/dev/cpuctl/top-app");
         writeFile(root + "/dev/cpuctl/top-app/cpu.uclamp.min", "0");
         writeFile(root + "/dev/cpuctl/top-app/tasks", "");
-        // /proc/self/mountinfo mentions cgroup (v1)
         mkdirp(root + "/proc/self");
         writeFile(root + "/proc/self/mountinfo", "25 1069 0:25 / /sys/fs/cgroup ro,nosuid,nodev,noyard shared:5 - cgroup tmpfs\n");
-        // PSI
         mkdirp(root + "/proc/pressure");
         writeFile(root + "/proc/pressure/cpu", "some avg10=0.00\n");
-        // GPU devfreq
         mkdirp(root + "/sys/class/devfreq/gpu0");
         aatpe::caps::setTestRoot(root);
         aatpe::caps::probe();
@@ -100,12 +85,10 @@ int main() {
         CHECK(c.uclampCgroupV1 == true, "v1 uclamp node present");
         CHECK(c.psiAvailable == true, "v1 PSI available");
         CHECK(c.gpuDetected == true, "v1 GPU devfreq found");
-        // resolve paths
         CHECK(aatpe::caps::resolveCgroupProcsPath("top-app") == root + "/dev/cpuset/top-app/tasks",
               "resolveCgroupProcsPath v1 top-app");
         CHECK(aatpe::caps::resolveCpuCgroupProcsPath("top-app") == root + "/dev/cpuctl/top-app/tasks",
               "resolveCpuCgroupProcsPath v1 top-app");
-        // write tid (returns 0 on success per ROUND-013 three-state contract)
         CHECK(aatpe::caps::writeTidToCgroupGroup(4242, "top-app") == 0, "writeTidToCgroupGroup v1");
         CHECK(readFile(root + "/dev/cpuset/top-app/tasks") == "4242", "v1 tasks file contains tid");
         CHECK(aatpe::caps::writeTidToCpuCgroupGroup(9999, "top-app") == 0, "writeTidToCpuCgroupGroup v1");
@@ -117,7 +100,6 @@ int main() {
         char tmp[] = "/tmp/caps_v2_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // v2 tree: /sys/fs/cgroup/cgroup.controllers, /sys/fs/cgroup/top-app/cgroup.procs + cgroup.threads
         mkdirp(root + "/sys/fs/cgroup/top-app");
         writeFile(root + "/sys/fs/cgroup/cgroup.controllers", "cpu memory\n");
         writeFile(root + "/sys/fs/cgroup/top-app/cgroup.procs", "");
@@ -143,7 +125,6 @@ int main() {
         char tmp[] = "/tmp/caps_none_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;
-        // empty tree, no /dev/cpuset, no /sys/fs/cgroup
         aatpe::caps::setTestRoot(root);
         aatpe::caps::probe();
         auto c = aatpe::caps::getCaps();
@@ -172,26 +153,17 @@ int main() {
         CHECK(!s.empty(), "caps state file written");
         CHECK(s.find("cgroup=v1") != std::string::npos, "state file contains cgroup=v1");
 
-        // v4.1.x: per-knob state files must be published for the WebUI
-        // 机制与调试 panel (it aggregates by file name; the packed line alone
-        // never reaches get('task_uclamp') etc.).
         std::string tu = readFile(root + "/state/task_uclamp");
         CHECK(tu == "0" || tu == "1", "task_uclamp knob file published");
         CHECK(readFile(root + "/state/cgroup_uclamp_v1") == "0", "no uclamp v1 node -> knob 0");
         CHECK(readFile(root + "/state/cgroup_uclamp_v2") == "0", "no uclamp v2 node -> knob 0");
-        // Honesty gate: cgroup v1 device must NOT publish threads_v2=1.
         CHECK(readFile(root + "/state/cgroup_threads_v2") == "0", "v1 device: threads_v2 honest 0");
-        // No uclamp node anywhere -> scale file EMPTY (panel shows '—', not '未知').
         CHECK(readFile(root + "/state/cgroup_uclamp_scale").empty(), "no uclamp node -> scale empty");
-        // Packed line mirrors the honest threads_v2 value.
         CHECK(s.find("cgroup_threads_v2=0") != std::string::npos, "packed line threads_v2 honest");
     }
 
     printf("\n=== Caps: ROUND-013 ABI layout guards ===\n");
     {
-        // static_assert(sizeof(struct sched_attr)==56) is in aatpe_sched_abi.h
-        // and verified at production compile time. Host-side: just confirm
-        // the header compiles cleanly (already proven by linking aatpe_caps.o).
         CHECK(true, "sched_attr layout guards compiled in production build");
     }
 
@@ -209,7 +181,6 @@ int main() {
         aatpe::caps::probe();
         auto c = aatpe::caps::getCaps();
         CHECK(c.cgroupVer == aatpe::caps::DeviceCaps::CgroupVersion::V2, "v2 detected (threads test)");
-        // resolveCgroupThreadPath should give cgroup.threads for v2
         CHECK(aatpe::caps::resolveCgroupThreadPath("top-app") == root + "/sys/fs/cgroup/top-app/cgroup.threads",
               "v2 resolveCgroupThreadPath -> cgroup.threads");
         CHECK(aatpe::caps::resolveCpuCgroupThreadPath("top-app") == root + "/sys/fs/cgroup/top-app/cgroup.threads",
@@ -218,15 +189,12 @@ int main() {
 
     printf("\n=== Caps: ROUND-013 per-thread uclamp probe three states ===\n");
     {
-        // E2BIG -> uclampTaskAvailable=false
         aatpe::caps::setTaskUclampProbeResultForTest(false, E2BIG);
         auto c1 = aatpe::caps::getCaps();
         CHECK(c1.uclampTaskAvailable == false, "probeTaskUclamp E2BIG -> false");
-        // EPERM -> denied (still false but distinct)
         aatpe::caps::setTaskUclampProbeResultForTest(false, EPERM);
         auto c2 = aatpe::caps::getCaps();
         CHECK(c2.uclampTaskAvailable == false, "probeTaskUclamp EPERM -> false");
-        // rc=0 -> true
         aatpe::caps::setTaskUclampProbeResultForTest(true, 0);
         auto c3 = aatpe::caps::getCaps();
         CHECK(c3.uclampTaskAvailable == true, "probeTaskUclamp rc=0 -> true");
@@ -253,8 +221,6 @@ int main() {
 
     printf("\n=== Caps: RC6 (B1) read-only uclamp scale inference + zero-write ===\n");
     {
-        // Pure inference table: percent-range -> percent; raw-range -> raw1024;
-        // unreadable/non-numeric -> unknown (safe direction).
         CHECK(strcmp(aatpe::caps::inferCgroupUclampScaleReadOnly("0"), "percent") == 0,
               "B1: resting 0 -> percent");
         CHECK(strcmp(aatpe::caps::inferCgroupUclampScaleReadOnly("50"), "percent") == 0,
@@ -275,9 +241,6 @@ int main() {
               "B1: non-numeric -> unknown");
     }
     {
-        // Zero-write probe: seed a v2 node with a distinctive raw value, run the real
-        // probe(), then assert the node content is byte-for-byte UNCHANGED (the old
-        // code wrote "101" here). Probe must classify it raw1024 purely by reading.
         char tmp[] = "/tmp/caps_b1_XXXXXX";
         mkdirp(mkdtemp(tmp));
         std::string root = tmp;

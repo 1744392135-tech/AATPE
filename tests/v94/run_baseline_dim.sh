@@ -1,8 +1,4 @@
 #!/bin/bash
-# Reproduce the F1.1/F1.4 v4.3.8 regression gate on host g++.
-# Usage: bash tests/v94/run_baseline_dim.sh
-# Builds the hermetic baseline-dim test against the real aatpe_ml TU and runs
-# it under plain, ASan+UBSan, and TSan. Exits non-zero on any failure.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/../.." && pwd)"
@@ -14,7 +10,7 @@ INC="-I$SRC -I$STUB -I$SRC/shared -I$SRC/mech/include -D__clang_version__=host-g
 TEST="$SRC/tests/v94/test_ml_baseline_dim.cpp"
 
 fail=0
-run_one() { # $1=flavor  $2=extra flags
+run_one() {
   local flavor="$1"; local flags="$2"
   echo "=== build+run [$flavor] ==="
   $CXX -std=c++17 -O1 -g $flags -fPIC -pthread $INC -c "$SRC/aatpe_ml.cpp" -o "$OUT/ml_$flavor.o" || { echo "COMPILE ML FAIL $flavor"; fail=1; return; }

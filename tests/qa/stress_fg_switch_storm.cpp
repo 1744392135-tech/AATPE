@@ -1,7 +1,3 @@
-// stress_fg_switch_storm.cpp — Real foreground switch stress test.
-//
-// Uses spillover test seams: spilloverCountForTest, spilloverDebugAddForTest,
-// spilloverReleaseAllForTest. Asserts exact count after each release cycle.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -10,7 +6,6 @@
 #include <chrono>
 #include <unistd.h>
 
-// Production spillover test seams (namespace aatpe::placement, AATPE_HOST_TEST)
 namespace aatpe { namespace placement {
     int spilloverCountForTest();
     void spilloverDebugAddForTest(int tid, int tier);
@@ -39,33 +34,27 @@ int main() {
     for (int i = 0; i < ITERS; i++) {
         int nEntries = countDist(g_rng);
 
-        // Add random spillover entries
         for (int j = 0; j < nEntries; j++) {
             int tid = TID_BASE + i * 20 + j;
             int tier = tierDist(g_rng);
             spilloverDebugAddForTest(tid, tier);
         }
 
-        // Assert: count matches what we added
         int count = spilloverCountForTest();
         if (count != nEntries) {
             fail++;
             printf("[iter %d] count mismatch: expected %d, got %d\n", i, nEntries, count);
         }
 
-        // Release all (simulate foreground switch)
         spilloverReleaseAllForTest();
 
-        // Assert: after release, count is 0
         count = spilloverCountForTest();
         if (count != 0) {
             fail++;
             printf("[iter %d] after release: expected 0, got %d\n", i, count);
         }
 
-        // Every 100 iterations: skip release batch to verify entries persist
         if (i % 100 == 99) {
-            // Add entries but DON'T release
             int extra = countDist(g_rng);
             for (int j = 0; j < extra; j++) {
                 int tid = TID_BASE + i * 20 + 100 + j;
@@ -76,11 +65,9 @@ int main() {
                 fail++;
                 printf("[iter %d] persist check: expected %d, got %d\n", i, extra, count);
             }
-            // Now release
             spilloverReleaseAllForTest();
         }
 
-        // Random delay 0-50ms
         int d = delayMs(g_rng);
         if (d > 0) usleep(d * 1000);
 

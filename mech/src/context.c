@@ -4,7 +4,7 @@
 
 static float sanf_hours(float v)
 {
-    if (!isfinite(v)) return 12.0f; /* default to noon */
+    if (!isfinite(v)) return 12.0f;
     if (v < 0.0f) return 0.0f;
     if (v >= 24.0f) return 23.999f;
     return v;
@@ -40,8 +40,8 @@ void ctx_config_default(CtxConfig *cfg)
     cfg->night_start_hour    = 23.0f;
     cfg->battery_high_pct    = 50.0f;
     cfg->battery_low_pct     = 20.0f;
-    cfg->idle_timeout_ms      = 30000.0f;   /* 30 seconds */
-    cfg->long_session_ms      = 1800000.0f; /* 30 minutes */
+    cfg->idle_timeout_ms      = 30000.0f;
+    cfg->long_session_ms      = 1800000.0f;
     cfg->night_efficiency_bias = -0.2f;
     cfg->low_battery_bias      = -0.4f;
     cfg->charging_perf_bias    = 0.1f;
@@ -118,7 +118,7 @@ const char *ctx_session_name(CtxSessionState s)
 void ctx_decide(const CtxSample *s, const CtxConfig *cfg,
                 CtxState *st, CtxDecision *out)
 {
-    /* Zero output. */
+
     if (out) {
         out->time_of_day       = CTX_TIME_UNKNOWN;
         out->battery_state     = CTX_BATTERY_UNKNOWN;
@@ -131,7 +131,6 @@ void ctx_decide(const CtxSample *s, const CtxConfig *cfg,
     }
     if (!s || !cfg || !st || !out) return;
 
-    /* Sanitise inputs. */
     float hour     = sanf_hours(s->hours_of_day);
     float batt     = sanf_pct(s->battery_pct);
     float idle_ago = sanf_ms(s->last_interaction_ago_ms);
@@ -139,34 +138,29 @@ void ctx_decide(const CtxSample *s, const CtxConfig *cfg,
     int   scr_on    = s->screen_on ? 1 : 0;
     int   charging  = s->charging ? 1 : 0;
 
-    /* --- classify --- */
     out->time_of_day   = classify_time(hour, cfg);
     out->battery_state = classify_battery(batt, charging, cfg);
     out->session_state = classify_session(scr_on, idle_ago, cfg);
 
-    /* --- track session timing --- */
     if (scr_on) {
         st->screen_on_elapsed_ms += dt;
         if (out->session_state == CTX_SESSION_ACTIVE) {
             st->session_elapsed_ms += dt;
         }
     } else {
-        /* Screen off: reset elapsed timers. */
+
         st->screen_on_elapsed_ms = 0.0f;
         st->session_elapsed_ms   = 0.0f;
     }
 
-    /* --- compute gentle biases --- */
     float eff_bias = 0.0f;
     float boost_b  = 0.0f;
 
-    /* Night: lean slightly toward efficiency. */
     if (out->time_of_day == CTX_TIME_NIGHT) {
         eff_bias += cfg->night_efficiency_bias;
         out->night_mode_suggested = 1;
     }
 
-    /* Low battery: stronger efficiency bias. */
     if (out->battery_state == CTX_BATTERY_LOW) {
         eff_bias += cfg->low_battery_bias;
         out->battery_saver_suggested = 1;
@@ -174,27 +168,23 @@ void ctx_decide(const CtxSample *s, const CtxConfig *cfg,
         eff_bias += cfg->low_battery_bias * 0.3f;
     }
 
-    /* Charging: slight performance allowance. */
     if (out->battery_state == CTX_BATTERY_CHARGING) {
         eff_bias += cfg->charging_perf_bias;
         boost_b  += cfg->charging_perf_bias;
     }
 
-    /* Idle session: lean efficiency. */
     if (out->session_state == CTX_SESSION_IDLE) {
         eff_bias -= 0.15f;
     }
 
-    /* Screen off: strong efficiency (we shouldn't be boosting much anyway). */
     if (out->session_state == CTX_SESSION_SCREEN_OFF) {
         eff_bias = -0.8f;
         boost_b  = -0.5f;
     }
 
-    /* Long session: gentle warning about thermal fatigue. */
     if (st->session_elapsed_ms > cfg->long_session_ms) {
         out->long_session_warning = 1;
-        /* Don't add more efficiency bias here; thermal core handles that. */
+
     }
 
     out->efficiency_bias = clampf(eff_bias, -1.0f, 1.0f);

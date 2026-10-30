@@ -1,4 +1,3 @@
-// fault_inject.cpp — v4.4.9 extended fault-injection harness for AATPE.
 #include "aatped.h"
 #include "aatpe_recovery.h"
 
@@ -12,7 +11,6 @@
 #include <errno.h>
 #include <chrono>
 
-// --- host environment redirects (external linkage for production TUs) --------
 const char* RUN_DIR   = "/tmp/aatpe_fi_run";
 const char* STATE_DIR = "/tmp/aatpe_fi_state";
 static const std::string RD = RUN_DIR;
@@ -56,7 +54,6 @@ static const char* GOOD_REC =
     "orig_nice=0\napplied_nice=-10\norig_min=0\napplied_min=50\n"
     "orig_max=1024\napplied_max=1024\nhave_orig_sched=1\nhave_orig_uclamp=1\nts=1\n";
 
-// v4.4.9 A2 seams (host-only; release compiles them out)
 extern int g_fi_write_short_after;
 extern int g_fi_write_fail_after;
 extern int g_fi_fsync_fail;
@@ -150,7 +147,7 @@ int main() {
     {
         size_t before = aatpe_recovery::recoveryCount();
         system(("rm -rf " + recDir).c_str());
-        aatpe_recovery::recoveryBootload();  // must not crash
+        aatpe_recovery::recoveryBootload();
         CHECK(aatpe_recovery::recoveryCount() == before, "FI-12: missing dir no crash, existing state preserved");
     }
     ::mkdir(recDir.c_str(), 0755);
@@ -196,7 +193,7 @@ int main() {
     printf("  FI-17: binary-garbage .rec\n");
     {
         std::string g = "schema_version=2\ntid=8010\nstarttime=";
-        for (int i = 0; i < 100; i++) g += (char)(i & 0xFF);  // binary garbage in starttime
+        for (int i = 0; i < 100; i++) g += (char)(i & 0xFF);
         g += "\n";
         wfile(recDir + "/8010.rec", g);
         aatpe_recovery::recoveryBootload();
@@ -239,12 +236,11 @@ int main() {
     printf("  FI-21: write() short-write retry completes fully (A2 seam)\n");
     {
         aatpeTestFiReset();
-        std::string content(8192, 'X');   // no trailing whitespace (readFile trims)
-        g_fi_write_short_after = 1;  // 1st write() returns a 1-byte short write; retry loop must finish
+        std::string content(8192, 'X');
+        g_fi_write_short_after = 1;
         std::string p = RD + "/short.txt";
         bool ok = writeFileAtomic(p.c_str(), content);
         CHECK(ok, "FI-21: short-write retry still succeeds");
-        // Read the raw file bytes directly (readFile trims whitespace, unsuitable here).
         FILE* rf = fopen(p.c_str(), "rb");
         long rawLen = 0; std::string raw;
         if (rf) { fseek(rf, 0, SEEK_END); rawLen = ftell(rf); fseek(rf, 0, SEEK_SET);
@@ -261,7 +257,7 @@ int main() {
         aatpeTestFiReset();
         std::string p = RD + "/will_not_exist.txt";
         ::unlink(p.c_str());
-        g_fi_write_fail_after = 1;  // 1st write() returns -1/EIO
+        g_fi_write_fail_after = 1;
         bool ok = writeFileAtomic(p.c_str(), "nope");
         CHECK(!ok, "FI-22: writeFileAtomic returns false on write EIO");
         CHECK(readFile(p.c_str()).empty(), "FI-22: target file not published");

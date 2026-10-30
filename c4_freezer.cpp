@@ -1,4 +1,3 @@
-// c4_freezer.cpp — see c4_freezer.h for the contract.
 #include "c4_freezer.h"
 
 #include <cstdio>
@@ -10,19 +9,15 @@
 namespace aatpe {
 namespace c4freezer {
 
-// ---- PURE decision layer (always compiled; host-tested) -----------------------
 C4Decision decideC4Freeze(const C4DecisionInputs& in) {
     C4Decision d;
 
-    // Gate off: byte-identical to v4.4.3 — never touch any cgroup.
     if (!in.featureEnabled) {
         d.action = C4Action::NO_CHANGE;
         d.reason = "gate-off";
         return d;
     }
 
-    // Safe-first: any foreground release edge wins. We never leave an app frozen
-    // after it returns to foreground, even if every other signal is ambiguous.
     if (in.isForeground) {
         if (in.alreadyFrozen) {
             d.action = C4Action::UNFREEZE;
@@ -34,12 +29,6 @@ C4Decision decideC4Freeze(const C4DecisionInputs& in) {
         return d;
     }
 
-    // Background:
-    // Audio whitelist — never freeze an app that may be playing audio (music /
-    // voice chat). audioActive=true covers BOTH "positively playing" and
-    // "unknown (could not verify)" so we never freeze on an ambiguous verdict.
-    // MJ-2: if audio STARTS while we are already frozen (mid-freeze music), we must
-    // UNFREEZE rather than hold the freeze.
     if (in.audioActive) {
         if (in.alreadyFrozen) {
             d.action = C4Action::UNFREEZE;
@@ -51,9 +40,6 @@ C4Decision decideC4Freeze(const C4DecisionInputs& in) {
         return d;
     }
 
-    // No freezer backend available (v2 unified freezer absent AND v1 freezer
-    // hierarchy absent). v6.1.0: v1 now counts as available, so this branch only
-    // fires when BOTH backends are missing.
     if (!in.freezerAvailable) {
         d.action = C4Action::NO_CHANGE;
         d.degraded = true;
@@ -61,7 +47,6 @@ C4Decision decideC4Freeze(const C4DecisionInputs& in) {
         return d;
     }
 
-    // Already frozen -> idempotent, no redundant write.
     if (in.alreadyFrozen) {
         d.action = C4Action::NO_CHANGE;
         d.reason = "already-frozen";
@@ -73,7 +58,6 @@ C4Decision decideC4Freeze(const C4DecisionInputs& in) {
     return d;
 }
 
-// ---- v4.4.4 rewire: pure helpers (always compiled; host-tested) --------------
 std::string parseV2CgroupPath(const std::string& content) {
     std::string path;
     size_t pos = 0;
@@ -81,7 +65,6 @@ std::string parseV2CgroupPath(const std::string& content) {
         size_t eol = content.find('\n', pos);
         if (eol == std::string::npos) eol = content.size();
         std::string line = content.substr(pos, eol - pos);
-        // trim trailing CR/space
         while (!line.empty() && (line.back()=='\r' || line.back()==' ' || line.back()=='\t'))
             line.pop_back();
         if (line.rfind("0::", 0) == 0) {
@@ -91,7 +74,7 @@ std::string parseV2CgroupPath(const std::string& content) {
         }
         pos = eol + 1;
     }
-    return path; // "" when none found
+    return path;
 }
 
 std::string buildFreezeDir(const std::string& v2Path, const std::string& mountRoot) {
@@ -103,43 +86,56 @@ std::string buildFreezeDir(const std::string& v2Path, const std::string& mountRo
 
 bool mediaSessionMentionsPlaying(const std::string& output, const std::string& pkg) {
     if (output.empty() || pkg.empty()) return false;
-    // Walk block-by-block: a session block header contains the package name; the
-    // playback state line "playback state=3" (STATE_PLAYING) appears in that
-    // block. We track pkg presence within the current block and a state=3 seen
-    // since the block started. Simple, conservative, host-testable.
-    bool inPkgBlock = false;
-    bool pkgInBlock = false;
-    bool state3InBlock = false;
+    std::string curPkg;
     size_t pos = 0;
-    auto flushBlock = [&]() -> bool {
-        if (pkgInBlock && state3InBlock) return true;
-        pkgInBlock = false; state3InBlock = false; inPkgBlock = false;
+    auto isHeader = [](const std::string& ln) {
+        size_t i = 0;
+        while (i < ln.size() && (ln[i] == ' ' || ln[i] == '\t')) i++;
+        if (ln.compare(i, 7, "Session") != 0) return false;
+        size_t j = i + 7;
+        if (j < ln.size() && (ln[j] == ' ' || ln[j] == ':' || ln[j] == '#' ||
+                              (ln[j] >= '0' && ln[j] <= '9')))
+            return true;
+        return false;
+    };
+    auto hasExactToken = [](const std::string& ln, const char* tok) {
+        size_t i = 0;
+        while (i < ln.size()) {
+            while (i < ln.size() && (ln[i] == ' ' || ln[i] == '\t' ||
+                                     ln[i] == ',' || ln[i] == ';')) i++;
+            if (i >= ln.size()) break;
+            size_t j = i;
+            while (j < ln.size() && ln[j] != ' ' && ln[j] != '\t' &&
+                   ln[j] != ',' && ln[j] != ';') j++;
+            if (ln.compare(i, j - i, tok) == 0) return true;
+            i = j;
+        }
         return false;
     };
     while (pos < output.size()) {
         size_t eol = output.find('\n', pos);
         if (eol == std::string::npos) eol = output.size();
         std::string line = output.substr(pos, eol - pos);
-        // A new top-level block line (indented less) resets state.
-        bool blockStart = !line.empty() && (line.front()==' ' || line.front()=='\t');
-        if (!blockStart) {
-            if (flushBlock()) return true;
-        }
-        // Package reference (e.g. "package=com.foo" or "com.foo/...").
-        if (line.find(pkg) != std::string::npos) pkgInBlock = true;
-        // Playback state 3.
-        if (line.find("state=3") != std::string::npos ||
-            line.find("playback state=3") != std::string::npos) state3InBlock = true;
-        inPkgBlock = pkgInBlock;
         pos = eol + 1;
+        if (isHeader(line)) { curPkg.clear(); continue; }
+        size_t eq = line.find("package=");
+        if (eq != std::string::npos) {
+            std::string tok = line.substr(eq + 8);
+            size_t sp = tok.find_first_of(" \t,;");
+            if (sp != std::string::npos) tok = tok.substr(0, sp);
+            size_t colon = tok.find(':');
+            if (colon != std::string::npos) tok = tok.substr(0, colon);
+            curPkg = tok;
+            continue;
+        }
+        if (hasExactToken(line, "state=3") && curPkg == pkg) return true;
     }
-    return (pkgInBlock && state3InBlock);
+    return false;
 }
 
 bool cgroupPathBelongsToUid(const std::string& v2Path, int appUid) {
     if (appUid <= 0 || v2Path.empty()) return false;
     std::string want = "uid_" + std::to_string(appUid);
-    // Walk each '/' segment exactly.
     size_t pos = 0;
     while (pos <= v2Path.size()) {
         size_t slash = v2Path.find('/', pos);
@@ -151,20 +147,17 @@ bool cgroupPathBelongsToUid(const std::string& v2Path, int appUid) {
     return false;
 }
 
-// ---- v6.1.0: cgroup v1 freezer pure helpers ----------------------------------
 std::string parseV1FreezerPath(const std::string& content) {
     size_t pos = 0;
     while (pos < content.size()) {
         size_t eol = content.find('\n', pos);
         if (eol == std::string::npos) eol = content.size();
         std::string line = content.substr(pos, eol - pos);
-        // v1 line format: <id>:<ctrl1,ctrl2,...>:<path>
         size_t c1 = line.find(':');
         if (c1 == std::string::npos) { pos = eol + 1; continue; }
         size_t c2 = line.find(':', c1 + 1);
         if (c2 == std::string::npos) { pos = eol + 1; continue; }
         std::string ctrls = line.substr(c1 + 1, c2 - c1 - 1);
-        // Split controller list by comma; look for exact "freezer".
         bool hasFreezer = false;
         size_t p = 0;
         while (p <= ctrls.size()) {
@@ -183,15 +176,6 @@ std::string parseV1FreezerPath(const std::string& content) {
     return "";
 }
 
-// PURE (#96): parse the body of /proc/mounts (or /etc/mtab) and return the mount
-// point of the cgroup v1 freezer hierarchy. A v1 cgroup mount line is
-// whitespace-separated:
-//   <device>  <mount point>  cgroup  <opt1,opt2,freezer,...>  <dump>  <pass>
-// e.g. "none /sys/fs/cgroup/freezer cgroup rw,relatime,freezer 0 0".
-// We require vfstype == "cgroup" (v2 unified is "cgroup2", which is handled by the
-// separate v2 probe) and an exact "freezer" entry in the comma-separated options.
-// Returns the mount point WITHOUT a trailing slash, or "" when no such mount line
-// exists. Pure: no I/O, fully host-testable.
 std::string parseV1FreezerMountPoint(const std::string& procMountsContent) {
     size_t pos = 0;
     while (pos < procMountsContent.size()) {
@@ -199,7 +183,6 @@ std::string parseV1FreezerMountPoint(const std::string& procMountsContent) {
         if (eol == std::string::npos) eol = procMountsContent.size();
         std::string line = procMountsContent.substr(pos, eol - pos);
         pos = eol + 1;
-        // Split into whitespace-separated fields.
         std::vector<std::string> fields;
         size_t p = 0;
         while (p < line.size()) {
@@ -210,11 +193,9 @@ std::string parseV1FreezerMountPoint(const std::string& procMountsContent) {
                    line[p]!='\r') p++;
             if (s < p) fields.push_back(line.substr(s, p - s));
         }
-        // Need at least: device, mount point, vfstype, options.
         if (fields.size() < 4) continue;
         const std::string& vfsType = fields[2];
-        if (vfsType != "cgroup") continue;          // v2 unified is "cgroup2"
-        // Options: comma-separated controller list; match "freezer" exactly.
+        if (vfsType != "cgroup") continue;
         const std::string& opts = fields[3];
         bool hasFreezer = false;
         size_t q = 0;
@@ -244,29 +225,86 @@ std::string parseV1FreezerState(const std::string& content) {
 }
 
 bool isV1FreezerDir(const std::string& dir) {
-    // v1 freezer cgroup dirs contain "/freezer/" in their path
-    // (e.g. /sys/fs/cgroup/freezer/uid_10123). v2 dirs do not.
     return dir.find("/freezer/") != std::string::npos;
+}
+
+C4BucketPaths buildV1BucketPaths(const std::string& v1Root) {
+    C4BucketPaths out;
+    if (v1Root.empty()) return out;
+    std::string root = v1Root;
+    while (!root.empty() && root.back() == '/') root.pop_back();
+    out.frozenDir = root + "/perf/frozen";
+    out.thawedDir = root + "/perf/thawed";
+    out.valid = true;
+    return out;
+}
+
+bool isV1FrozenBucketDir(const std::string& dir) {
+    if (dir.size() < sizeof("/perf/frozen") - 1) return false;
+    return dir.compare(dir.size() - (sizeof("/perf/frozen") - 1),
+                       sizeof("/perf/frozen") - 1, "/perf/frozen") == 0;
+}
+
+std::string thawedBucketFromFrozen(const std::string& frozenDir) {
+    if (!isV1FrozenBucketDir(frozenDir)) return "";
+    return frozenDir.substr(0, frozenDir.size() - 7) + "/thawed";
+}
+
+std::vector<int> parsePidsList(const std::string& s) {
+    std::vector<int> out;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        size_t comma = s.find(',', pos);
+        if (comma == std::string::npos) comma = s.size();
+        std::string tok = s.substr(pos, comma - pos);
+        size_t b = tok.find_first_not_of(" \t\r\n");
+        size_t e = tok.find_last_not_of(" \t\r\n");
+        if (b != std::string::npos) {
+            std::string num = tok.substr(b, e - b + 1);
+            bool allDigits = !num.empty();
+            for (char c : num) if (c < '0' || c > '9') { allDigits = false; break; }
+            if (allDigits) {
+                int pid = std::atoi(num.c_str());
+                if (pid > 0) out.push_back(pid);
+            }
+        }
+        pos = comma + 1;
+    }
+    return out;
+}
+
+std::string formatPidsList(const std::vector<int>& pids) {
+    std::string s;
+    for (size_t i = 0; i < pids.size(); i++) {
+        if (i) s += ",";
+        s += std::to_string(pids[i]);
+    }
+    return s;
+}
+
+bool procCgroupOnFrozenBucket(const std::string& procCgroupContent) {
+    return parseV1FreezerPath(procCgroupContent) == "perf/frozen";
 }
 
 bool audioReevalDue(int bgTicks, int period) {
     if (period <= 0) period = kAudioReevalPeriod;
     if (bgTicks < 0) return false;
-    if (bgTicks == 0) return true;           // background edge
+    if (bgTicks == 0) return true;
     return (bgTicks % period) == 0;
 }
 
-// ---- v4.4.5 Part A: NN persistence + MN retarget (pure) ---------------------
 std::string serializeC4Frozen(const std::string& cgDir, const std::string& pkg,
-                              int uid, const std::string& lastGame) {
+                              int uid, const std::string& lastGame,
+                              const std::vector<int>& pids) {
     std::string s = "cg=" + cgDir + "\npkg=" + pkg + "\nuid=" + std::to_string(uid) + "\n";
     if (!lastGame.empty()) s += "lg=" + lastGame + "\n";
+    if (!pids.empty()) s += "pids=" + formatPidsList(pids) + "\n";
     return s;
 }
 
 C4FrozenState parseC4Frozen(const std::string& content) {
     C4FrozenState s;
-    std::string cg, pkg, lg; int uid = 0;
+    std::string cg, pkg, lg, pidsRaw; int uid = 0;
     size_t pos = 0;
     while (pos < content.size()) {
         size_t eol = content.find('\n', pos);
@@ -276,7 +314,8 @@ C4FrozenState parseC4Frozen(const std::string& content) {
             line.pop_back();
         if (line.rfind("cg=", 0) == 0)       cg  = line.substr(3);
         else if (line.rfind("pkg=", 0)== 0)  pkg = line.substr(4);
-        else if (line.rfind("lg=", 0) == 0)  lg  = line.substr(3); // v4.4.6 optional
+        else if (line.rfind("lg=", 0) == 0)  lg  = line.substr(3);
+        else if (line.rfind("pids=", 0)== 0) pidsRaw = line.substr(5);
         else if (line.rfind("uid=", 0)== 0) {
             std::string v = line.substr(4);
             if (!v.empty() && std::all_of(v.begin(), v.end(),
@@ -286,26 +325,25 @@ C4FrozenState parseC4Frozen(const std::string& content) {
         }
         pos = eol + 1;
     }
-    if (cg.empty() || pkg.empty() || uid <= 0) return s; // valid stays false
-    s.cgDir = cg; s.pkg = pkg; s.uid = uid; s.lastGame = lg; s.valid = true;
+    if (cg.empty() || pkg.empty() || uid <= 0) return s;
+    s.cgDir = cg; s.pkg = pkg; s.uid = uid; s.lastGame = lg;
+    s.pids = parsePidsList(pidsRaw);
+    s.valid = true;
     return s;
 }
 
 std::string c4ChooseTarget(const std::string& lastGame,
                            const std::string& fgPkg,
                            bool fgIsGame) {
-    if (fgIsGame) return fgPkg;            // foreground game is the (new) target
-    if (!lastGame.empty()) return lastGame; // non-game fg: freeze last bg game
-    return "";                             // nothing tracked
+    if (fgIsGame) return fgPkg;
+    if (!lastGame.empty()) return lastGame;
+    return "";
 }
 
-// PURE (v6.0.1): see header. Trivial OR, extracted so the production glue's
-// signal collection stays host-testable on its own.
 bool c4FgIsGameSignals(bool manualGame, bool configGame, bool engineThreadGame) {
     return manualGame || configGame || engineThreadGame;
 }
 
-// PURE (v4.4.6 WebUI; v6.1.0 backend): read-only JSON snapshot.
 std::string c4StateJson(bool enabled, const std::string& target, bool frozen,
                         const std::string& cgDir, const std::string& lastAction,
                         bool audioActive, bool freezerAvailable,
@@ -334,64 +372,33 @@ std::string c4StateJson(bool enabled, const std::string& target, bool frozen,
     return j;
 }
 
-} // namespace c4freezer
-} // namespace aatpe
+}
+}
 
-// ---- Production glue (compiled out under AATPE_HOST_TEST) --------------------
 #ifndef AATPE_HOST_TEST
 
 #include <unistd.h>
 #include <dirent.h>
 #include <cstdlib>
 #include <sys/stat.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <atomic>
 #include <mutex>
 
-#include "aatpe_managers.h"      // ForegroundManager::instance().getPackage()
+#include "aatpe_managers.h"
 
-// Hardened exec helper (3s wall-clock timeout). Forward-declared to avoid pulling
-// the heavy aatped_utils.h (which depends on ThreadRule/ThreadInfo types declared
-// in other headers). Defined in aatped_utils.cpp.
 std::string aatpeExec(const std::string& cmd, const char* debugTag);
-// STATE helpers (defined in aatped_utils.cpp). NOTE: writeFileAtomic/readFile
-// take a FULL path — they do NOT prepend STATE_DIR (unlike writeFile family in
-// some other TUs). Callers must build "STATE_DIR/<name>" themselves, exactly
-// like frame.cpp does (writeFile(std::string(STATE_DIR)+"/frame_source", ...)).
-// Forward-declared to keep this TU self-contained.
 std::string readFile(const char* path);
 bool writeFileAtomic(const char* path, const std::string& content);
-// STATE_DIR root (defined in aatped_main.cpp; "/dev/aatpe/state" on Android).
-// Forward-declared here rather than including aatped.h (same pattern as
-// aatpe_caps.cpp). c4 state files MUST live under it (v6.0.0 review P1).
 extern const char* STATE_DIR;
-// Manual game list (defined in frame.cpp: aatpe::gamelist::isManualGame).
-// Forward-declared in the aatpe namespace to keep this TU self-contained
-// (avoids pulling aatped.h's heavy include graph).
 namespace aatpe { namespace gamelist { bool isManualGame(const std::string& pkg); } }
-// v6.0.1: the OTHER game list (aatped_config.cpp: isPackageInGameList, backed by
-// GAME_PACKAGES= in aatpe.conf). It lives in the GLOBAL namespace (see
-// aatped_config.h:80). C4 historically only consulted the manual
-// game_overrides.list, so a user who configured games via aatpe.conf (or whose
-// gamescene engine already tracks games through this list) saw
-// degraded="no-game-target" forever. Unify both lists here.
 bool isPackageInGameList(const std::string& pkg);
-// v6.0.1: auto game-engine-thread recognizer (aatped_threadutil.cpp, namespace
-// aatpe). It has existed since v4.2 A1 but was never called in production (dead
-// code). Wire it in as a third, automatic "this fg is a game" signal so a
-// freshly-installed engine-built game becomes a freeze target without any
-// manual configuration.
 namespace aatpe { bool isGameEngineThread(const char* comm, const char* procComm); }
 
 namespace aatpe {
 namespace c4freezer {
 
-// On-disk paths (v6.0.0 review P1): resolve STATE_DIR ONCE, lazily on first use.
-// The old code used the bare basename "c4_frozen_state" and passed it straight to
-// writeFileAtomic/readFile, which open paths relative to the DAEMON's CWD — the
-// file landed wherever the service happened to be running from, not under
-// STATE_DIR, so WebUI/root bridge consumers (which all read STATE_DIR/) never saw
-// it. Function-local statics avoid static-init order issues with test-provided
-// STATE_DIR (the first tick happens long after main()).
 static const std::string& c4StateFilePath() {
     static const std::string path =
         std::string(STATE_DIR ? STATE_DIR : "") + "/c4_frozen_state";
@@ -403,9 +410,6 @@ static const std::string& c4LastActionPath() {
     return path;
 }
 
-// v6.0.0 review P1 test seam: proves no slow I/O (exec / file read-write) happens
-// while s_stateMutex is held. Compiled ONLY into host glue tests — release builds
-// never define C4_FREEZER_TEST_SEAM (zero symbols, zero overhead in release).
 #ifdef C4_FREEZER_TEST_SEAM
 std::atomic<int> g_c4freezerLockDepth{0};
 struct C4LockProbe {
@@ -416,37 +420,17 @@ struct C4LockProbe {
 struct C4LockProbe { C4LockProbe() {} };
 #endif
 
-// Slow-thread bookkeeping.
-//
-// R2-M1: these statics are MUTATED only by c4FreezerTick() (one slow thread) but
-// READ by c4FreezerStateJson() on the WebUI/control thread. The exported strings
-// (s_frozenCgDir / s_targetPkg / s_lastAction) commonly exceed the libc++ SSO
-// cap, so a concurrent read during assignment can tear the (pointer,size) pair
-// or read a dangling heap buffer.
-//
-// v6.0.0 review P1 (lock granularity): the tick previously held this mutex for
-// its ENTIRE body — including exec("pm list packages"), exec("dumpsys
-// media_session"), opendir("/proc") + per-task /proc/<pid>/cgroup reads, sysfs
-// probes, cgroup.freeze writes and STATE_DIR file writes. Any of those can take
-// tens of ms (dumpsys especially), and every one of them blocked the WebUI
-// snapshot thread for the whole duration. The tick now runs in three phases:
-//   1. read the persisted state file + sample managers (lock-free);
-//   2. SHORT critical section: copy shared bookkeeping into locals;
-//   3. ALL slow work (exec / proc scan / sysfs / state-file writes) lock-free;
-//   4. SHORT critical section: publish updated locals back to the statics.
-// The WebUI reader therefore only ever waits on two microsecond-length windows.
 static std::mutex  s_stateMutex;
 static bool        s_alreadyFrozen = false;
-static std::string s_frozenCgDir;     // cgroup dir we actually froze
-static std::string s_targetPkg;       // current foreground game we may freeze
-static int         s_targetUid = 0;   // resolved uid of s_targetPkg (0 = unknown)
-static std::string s_lastGame;        // MN: last foreground game (kept as target under launcher)
-static bool        s_audioActive = false; // persisted across background episode
-static int         s_bgTicks = -1;    // ticks since entering bg (-1 = foreground)
-static std::string s_lastAction;      // v4.4.6: last decision action+reason (WebUI)
+static std::string s_frozenCgDir;
+static std::string s_targetPkg;
+static int         s_targetUid = 0;
+static std::string s_lastGame;
+static bool        s_audioActive = false;
+static int         s_bgTicks = -1;
+static std::string s_lastAction;
+static std::vector<int> s_frozenPids;
 
-// Cgroup mount root. On Android this is /sys/fs/cgroup. Overridable under
-// C4_FREEZER_TEST_SEAM so host glue tests can point it at a fake tree.
 static std::string& cgroupMountRootRef() {
     static std::string root = "/sys/fs/cgroup";
     return root;
@@ -459,29 +443,32 @@ void c4FreezerTestSetMountRoot(const std::string& root) {
 }
 #endif
 
-// ---- #96: runtime v1 freezer mount-point resolution ---------------------------
-//
-// On the audit device the v1 freezer hierarchy IS mounted (/proc/mounts:
-// "none /sys/fs/cgroup/freezer cgroup rw,relatime,freezer") yet the old probe
-// reported freezerAvailable=false. The old code REQUIRED
-// <root>/freezer/freezer.state to exist at the hierarchy root; on this device
-// that root node is not observable through our probe (SELinux/root-node quirk),
-// so the backend was wrongly judged missing. The authoritative signal that a v1
-// freezer backend exists is the cgroup v1 mount carrying the "freezer" controller
-// in /proc/mounts -- we parse it at runtime and use the discovered mount point,
-// never hardcoding /sys/fs/cgroup/freezer. The probe caches the result (cgroup
-// mounts are static after boot).
-static std::string s_v1FreezerRoot;       // resolved v1 hierarchy root ("" = none)
+static std::string s_v1FreezerRoot;
 static bool        s_v1FreezerProbed = false;
 
-#ifdef C4_FREEZER_TEST_SEAM
-// Test seam: inject /proc/mounts content. Empty -> read the real /proc/mounts.
-// Also flushes the cached resolution so the new content is re-probed.
-static std::string s_testMountsContent;
-void c4FreezerTestSetMountsContent(const std::string& content) {
-    s_testMountsContent = content;
+static C4BucketPaths s_bucketPaths;
+static bool         s_bucketAvailable = false;
+static bool         s_bucketProbed   = false;
+
+static std::mutex  s_probeMutex;
+static int          s_probeTickAge   = 0;
+static constexpr int kProbeRescanTicks = 200;
+
+static void probeResetLocked() {
     s_v1FreezerProbed = false;
     s_v1FreezerRoot.clear();
+    s_bucketProbed = false;
+    s_bucketAvailable = false;
+    s_bucketPaths = C4BucketPaths();
+}
+
+#ifdef C4_FREEZER_TEST_SEAM
+static std::string s_testMountsContent;
+void c4FreezerTestSetMountsContent(const std::string& content) {
+    std::lock_guard<std::mutex> lk(s_probeMutex);
+    s_testMountsContent = content;
+    probeResetLocked();
+    s_probeTickAge = 0;
 }
 #endif
 
@@ -499,13 +486,7 @@ static std::string readProcMountsContent() {
     return out;
 }
 
-// Resolve the v1 freezer hierarchy root. Order:
-//   1. Parse /proc/mounts for a cgroup v1 "freezer" mount; if its mount point is a
-//      directory, that is the root. This works even when the root freezer.state
-//      node is unreadable.
-//   2. Fall back to the conventional <root>/freezer directory.
-// Returns the path (no trailing slash) or "" when neither yields a directory.
-static const std::string& resolveV1FreezerRoot() {
+static std::string resolveV1FreezerRootUnlocked() {
     if (s_v1FreezerProbed) return s_v1FreezerRoot;
     s_v1FreezerProbed = true;
 
@@ -517,13 +498,17 @@ static const std::string& resolveV1FreezerRoot() {
             return s_v1FreezerRoot;
         }
     }
-    // Conventional fallback (also what the host glue fake-tree tests rely on).
     std::string conv = cgroupMountRoot() + "/freezer";
     struct stat st;
     if (::stat(conv.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
         s_v1FreezerRoot = conv;
     }
     return s_v1FreezerRoot;
+}
+
+static std::string resolveV1FreezerRoot() {
+    std::lock_guard<std::mutex> lk(s_probeMutex);
+    return resolveV1FreezerRootUnlocked();
 }
 
 static bool freezerControllerPresent() {
@@ -535,7 +520,6 @@ static bool freezerControllerPresent() {
     return n > 0 && std::strstr(buf, "freezer") != nullptr;
 }
 
-// Is <dir>/cgroup.freeze present AND writable by us?
 static bool freezeNodeWritable(const std::string& dir) {
     if (dir.empty()) return false;
     std::string p = dir + "/cgroup.freeze";
@@ -544,18 +528,18 @@ static bool freezeNodeWritable(const std::string& dir) {
     return ::access(p.c_str(), W_OK) == 0;
 }
 
-// ---- v6.1.0: cgroup v1 freezer backend --------------------------------------
-
-// v1 freezer backend available iff we resolved a v1 freezer hierarchy root (via
-// /proc/mounts, with a conventional-path fallback). The OLD code additionally
-// required <root>/freezer/freezer.state to be observable, which failed on the
-// #96 device even though the hierarchy was mounted. "Backend available" is now
-// independent of whether a target app cgroup exists yet.
 static bool v1FreezerPresent() {
     return !resolveV1FreezerRoot().empty();
 }
 
-// Is <dir>/freezer.state present AND writable?
+static void probeHeartbeat() {
+    std::lock_guard<std::mutex> lk(s_probeMutex);
+    if (++s_probeTickAge >= kProbeRescanTicks) {
+        s_probeTickAge = 0;
+        probeResetLocked();
+    }
+}
+
 static bool v1FreezeNodeWritable(const std::string& dir) {
     if (dir.empty()) return false;
     std::string p = dir + "/freezer.state";
@@ -564,11 +548,6 @@ static bool v1FreezeNodeWritable(const std::string& dir) {
     return ::access(p.c_str(), W_OK) == 0;
 }
 
-// Locate the v1 freezer cgroup for appUid: <resolved v1 root>/uid_<uid>/.
-// Uses the runtime-resolved mount point (see resolveV1FreezerRoot) rather than
-// hardcoding <cgroupMountRoot>/freezer. The uid gate is built into the directory
-// name, so system/root processes (which have no uid_<appUid> directory under the
-// freezer hierarchy) are never touched.
 static std::string findTargetV1CgroupDir(int appUid) {
     if (appUid <= 0) return "";
     std::string root = resolveV1FreezerRoot();
@@ -580,7 +559,6 @@ static std::string findTargetV1CgroupDir(int appUid) {
     return dir;
 }
 
-// Read a small text file into a string (for v1 freezer.state read-back).
 static std::string readSmallFile(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "r");
     if (!f) return "";
@@ -590,8 +568,6 @@ static std::string readSmallFile(const std::string& path) {
     return std::string(buf, n);
 }
 
-// Write FROZEN/THAWED to <dir>/freezer.state, then read back to confirm the
-// kernel actually transitioned. Brief retry for FREEZING/THAWING transient states.
 static bool v1WriteFreeze(const std::string& dir, bool freeze) {
     std::string p = dir + "/freezer.state";
     FILE* f = std::fopen(p.c_str(), "w");
@@ -602,19 +578,15 @@ static bool v1WriteFreeze(const std::string& dir, bool freeze) {
     if (rc < 1 || ce != 0) return false;
 
     std::string want = freeze ? "FROZEN" : "THAWED";
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 30; i++) {
+        usleep(i == 0 ? 2000 : 10000);
         std::string state = parseV1FreezerState(readSmallFile(p));
         if (state == want) return true;
-        if (state == "FREEZING" || state == "THAWING") {
-            usleep(5000);  // 5 ms, wait for transition
-            continue;
-        }
-        return false;  // wrong state or unknown
+        if (state == "FREEZING" || state == "THAWING") continue;
     }
-    return false;  // timed out
+    return false;
 }
 
-// v2 freeze writer (original).
 static bool writeFreezeV2(const std::string& dir, int val) {
     std::string p = dir + "/cgroup.freeze";
     FILE* f = std::fopen(p.c_str(), "w");
@@ -624,14 +596,11 @@ static bool writeFreezeV2(const std::string& dir, int val) {
     return (rc >= 1 && ce == 0);
 }
 
-// Dispatch: choose v1 or v2 writer based on the cgroup dir path.
 static bool applyFreezeState(const std::string& dir, bool freeze) {
     if (isV1FreezerDir(dir)) return v1WriteFreeze(dir, freeze);
     return writeFreezeV2(dir, freeze ? 1 : 0);
 }
 
-// Resolve an Android app uid from its package name. Returns 0 on failure.
-// Uses `pm list packages -U <pkg>` (output "package:com.x uid:10123").
 static int resolveAppUid(const std::string& pkg) {
     if (pkg.empty()) return 0;
     std::string out = aatpeExec(("pm list packages -U " + pkg).c_str(), "c4freezer-uid");
@@ -643,7 +612,6 @@ static int resolveAppUid(const std::string& pkg) {
     return uid;
 }
 
-// Read /proc/<pid>/status and return the real (first Uid:) value, or -1.
 static int procUid(int pid) {
     std::string p = "/proc/" + std::to_string(pid) + "/status";
     FILE* f = std::fopen(p.c_str(), "r");
@@ -651,7 +619,6 @@ static int procUid(int pid) {
     char line[256]; int uid = -1;
     while (fgets(line, sizeof(line), f)) {
         if (std::strncmp(line, "Uid:", 4) == 0) {
-            // "Uid:\t10123\t10123\t..."
             unsigned ruid=0, euid=0, suid=0, fsuid=0;
             if (std::sscanf(line, "Uid:\t%u\t%u\t%u\t%u", &ruid,&euid,&suid,&fsuid) == 4) {
                 uid = (int)ruid;
@@ -663,9 +630,6 @@ static int procUid(int pid) {
     return uid;
 }
 
-// MJ-1: enumerate /proc, filter by target uid, and return the cgroup dir of a
-// thread whose v2 path contains "uid_<appUid>". System/root processes have their
-// own cgroups (no uid_ segment) and are NEVER returned -> we can't freeze them.
 static std::string findTargetV2CgroupDir(int appUid) {
     if (appUid <= 0) return "";
     DIR* proc = ::opendir("/proc");
@@ -676,7 +640,7 @@ static std::string findTargetV2CgroupDir(int appUid) {
         if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;
         int pid = std::atoi(de->d_name);
         if (pid <= 0) continue;
-        if (procUid(pid) != appUid) continue;   // <-- uid gate: never touch others
+        if (procUid(pid) != appUid) continue;
         std::string cf = std::string("/proc/") + de->d_name + "/cgroup";
         FILE* f = std::fopen(cf.c_str(), "r");
         if (!f) continue;
@@ -686,7 +650,6 @@ static std::string findTargetV2CgroupDir(int appUid) {
             if (l.rfind("0::", 0) == 0) {
                 std::string p = l.substr(3);
                 while (!p.empty() && p.front()=='/') p.erase(p.begin());
-                // Pure membership check: only accept a path under this uid.
                 if (!p.empty() && cgroupPathBelongsToUid(p, appUid)) {
                     found = buildFreezeDir(p, cgroupMountRoot());
                     break;
@@ -700,24 +663,14 @@ static std::string findTargetV2CgroupDir(int appUid) {
     return found;
 }
 
-// Run dumpsys media_session; returns true iff target pkg is actively playing.
-// exec failure / timeout / empty -> true (conservative: unknown = do not freeze).
 static bool audioActiveNow(const std::string& pkg) {
     std::string out = aatpeExec("dumpsys media_session", "c4freezer-media");
-    if (out.empty()) return true; // unknown -> conservative, do not freeze
+    if (out.empty()) return true;
     return mediaSessionMentionsPlaying(out, pkg);
 }
 
-// v6.0.1 test seam: when non-empty, fgHasGameEngineThreads() returns
-// (pkg == s_testAutoGamePkg). Lets host glue tests inject "this foreground app
-// has engine threads" without a real /proc tree. Release builds never define
-// C4_FREEZER_TEST_SEAM, so this symbol is absent from the production binary.
 #ifdef C4_FREEZER_TEST_SEAM
 static std::string s_testAutoGamePkg;
-// Forward declaration of the cache defined below; the seam setter must flush
-// it so a test can toggle "engine threads present" for the SAME pkg across
-// phases (in production the cache is keyed on a stable pkg and never needs a
-// flush, but tests flip the injected result mid-run).
 static void flushAutoGameCache();
 void c4FreezerTestSetAutoGamePkg(const std::string& pkg) {
     s_testAutoGamePkg = pkg;
@@ -725,13 +678,6 @@ void c4FreezerTestSetAutoGamePkg(const std::string& pkg) {
 }
 #endif
 
-// v6.0.1: auto-detect whether `pkg` currently runs a game-engine thread
-// (UnityMain/UnrealGame/VulkanRender/bgfx/GameView/...). Reuses the thread-role
-// truth in aatped_threadutil.cpp that was previously dead in production.
-// Conservative: any failure to enumerate -> false (do NOT promote to a game).
-// Caches the result per distinct fg pkg (the tick is single-threaded) so the
-// pidof exec + /proc/<pid>/task scan runs once per foreground switch rather
-// than every tick.
 static bool fgHasGameEngineThreads(const std::string& pkg) {
     if (pkg.empty()) return false;
 #ifdef C4_FREEZER_TEST_SEAM
@@ -739,7 +685,6 @@ static bool fgHasGameEngineThreads(const std::string& pkg) {
 #else
     std::string out = aatpeExec(("pidof " + pkg).c_str(), "c4freezer-autogame");
     if (out.empty()) return false;
-    // pidof prints "pid1 pid2 ...". Walk whitespace-separated tokens.
     size_t pos = 0;
     while (pos < out.size()) {
         while (pos < out.size() &&
@@ -763,7 +708,6 @@ static bool fgHasGameEngineThreads(const std::string& pkg) {
             size_t n = std::fread(comm, 1, sizeof(comm) - 1, f);
             std::fclose(f);
             if (n == 0) continue;
-            // comm file is NUL- or newline-terminated; trim trailing whitespace.
             while (n > 0 && (comm[n-1]=='\n' || comm[n-1]=='\r' ||
                              comm[n-1]==' '  || comm[n-1]=='\t')) {
                 comm[n-1] = '\0'; n--;
@@ -777,15 +721,9 @@ static bool fgHasGameEngineThreads(const std::string& pkg) {
     return false;
 }
 
-// Per-fg-pkg cache so the pidof + task scan above runs once per distinct
-// foreground app, not every slow tick. c4FreezerTick() is the only caller and
-// runs on a single slow thread, so no lock is needed.
 static std::string s_autoCachePkg;
 static bool        s_autoCacheResult = false;
 #ifdef C4_FREEZER_TEST_SEAM
-// Only the test seam flushes the cache (production re-scans whenever the fg pkg
-// changes, so it never needs a flush); guard it so NDK -Wunused-function won't
-// fire under -Werror.
 static void flushAutoGameCache() { s_autoCachePkg.clear(); s_autoCacheResult = false; }
 #endif
 static bool fgHasGameEngineThreadsCached(const std::string& pkg) {
@@ -795,16 +733,223 @@ static bool fgHasGameEngineThreadsCached(const std::string& pkg) {
     return s_autoCacheResult;
 }
 
+#ifdef C4_FREEZER_TEST_SEAM
+static std::vector<int> s_testPidsForUid;
+static bool             s_testPidsForUidInjected = false;
+static std::string      s_testProcCgroupContent;
+static int              s_testReadbackFailAfter = 0;
+static bool             s_testFailThawedWrites = false;
+void c4FreezerTestSetPidsForUid(const std::vector<int>& pids) {
+    s_testPidsForUid = pids;
+    s_testPidsForUidInjected = true;
+}
+void c4FreezerTestSetProcCgroupContent(const std::string& cg) {
+    s_testProcCgroupContent = cg;
+}
+void c4FreezerTestSetReadbackFailAfter(int n) {
+    s_testReadbackFailAfter = n;
+}
+void c4FreezerTestFailThawedWrites(bool f) {
+    s_testFailThawedWrites = f;
+}
+#endif
+static std::vector<int> enumPidsForUid(int appUid) {
+    std::vector<int> out;
+    if (appUid <= 0) return out;
+#ifdef C4_FREEZER_TEST_SEAM
+    if (s_testPidsForUidInjected) return s_testPidsForUid;
+#endif
+    DIR* proc = ::opendir("/proc");
+    if (!proc) return out;
+    struct dirent* de;
+    while ((de = ::readdir(proc)) != nullptr) {
+        if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;
+        int pid = std::atoi(de->d_name);
+        if (pid <= 0) continue;
+        if (procUid(pid) != appUid) continue;
+        out.push_back(pid);
+    }
+    ::closedir(proc);
+    return out;
+}
+
+static bool bucketLooksReady(const C4BucketPaths& bp) {
+    struct stat st;
+    if (::stat(bp.frozenDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    if (::stat(bp.thawedDir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    if (parseV1FreezerState(readSmallFile(bp.frozenDir + "/freezer.state")) != "FROZEN")
+        return false;
+    if (parseV1FreezerState(readSmallFile(bp.thawedDir + "/freezer.state")) != "THAWED")
+        return false;
+    if (::access((bp.frozenDir + "/cgroup.procs").c_str(), W_OK) != 0) return false;
+    if (::access((bp.thawedDir + "/cgroup.procs").c_str(), W_OK) != 0) return false;
+    return true;
+}
+
+static bool pathHasNoSymlink(const std::string& path) {
+    struct stat st;
+    if (::lstat(path.c_str(), &st) != 0) return errno == ENOENT;
+    return !S_ISLNK(st.st_mode);
+}
+
+static bool pathComponentsNoSymlink(const std::string& path) {
+    std::string cur;
+    size_t i = 0;
+    if (!path.empty() && path.front() == '/') { cur = "/"; i = 1; }
+    while (i <= path.size()) {
+        size_t sl = path.find('/', i);
+        if (sl == std::string::npos) sl = path.size();
+        if (sl > i) {
+            cur += path.substr(i, sl - i);
+            if (!pathHasNoSymlink(cur)) return false;
+        }
+        if (sl < path.size()) cur += '/';
+        i = sl + 1;
+    }
+    return true;
+}
+
+static bool provisionBucket(const std::string& dir, const char* state) {
+    if (!pathComponentsNoSymlink(dir)) return false;
+    if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) return false;
+    if (!pathHasNoSymlink(dir)) return false;
+    std::string p = dir + "/freezer.state";
+    int fd = ::open(p.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (fd < 0) return false;
+    std::string s = std::string(state) + "\n";
+    ssize_t w = ::write(fd, s.c_str(), s.size());
+    ::close(fd);
+    if (w != (ssize_t)s.size()) return false;
+    std::string procs = dir + "/cgroup.procs";
+    int pf = ::open(procs.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (pf >= 0) ::close(pf);
+    return true;
+}
+
+static bool probeV1Bucket() {
+    std::lock_guard<std::mutex> lk(s_probeMutex);
+    if (s_bucketProbed) return s_bucketAvailable;
+    s_bucketProbed = true;
+    std::string root = resolveV1FreezerRootUnlocked();
+    C4BucketPaths bp = buildV1BucketPaths(root);
+    if (!bp.valid) return false;
+    if (!bucketLooksReady(bp)) {
+        if (!root.empty() && ::access(root.c_str(), W_OK) == 0) {
+            provisionBucket(bp.frozenDir, "FROZEN");
+            provisionBucket(bp.thawedDir, "THAWED");
+        }
+    }
+    if (!bucketLooksReady(bp)) return false;
+    s_bucketPaths = bp;
+    s_bucketAvailable = true;
+    return true;
+}
+
+#ifdef C4_FREEZER_TEST_SEAM
+void c4FreezerTestFlushCaches() {
+    std::lock_guard<std::mutex> lk(s_probeMutex);
+    probeResetLocked();
+    s_probeTickAge = 0;
+}
+#endif
+
+static bool pidOwnerMatches(int pid, int targetUid) {
+#ifdef C4_FREEZER_TEST_SEAM
+    (void)pid; (void)targetUid;
+    return true;
+#else
+    return procUid(pid) == targetUid;
+#endif
+}
+
+static bool writePidToBucket(const std::string& procsPath, int pid) {
+#ifdef C4_FREEZER_TEST_SEAM
+    if (s_testFailThawedWrites && procsPath.find("/thawed/") != std::string::npos)
+        return false;
+#endif
+    FILE* f = std::fopen(procsPath.c_str(), "w");
+    if (!f) return false;
+    int rc = std::fprintf(f, "%d\n", pid);
+    int ce = std::fclose(f);
+    return rc >= 1 && ce == 0;
+}
+
+static bool bucketMovePids(const std::string& frozenDir, bool freeze,
+                           int targetUid, std::vector<int>* pids) {
+    if (!pids) return false;
+    std::string destDir = freeze ? frozenDir : thawedBucketFromFrozen(frozenDir);
+    if (destDir.empty()) return false;
+
+    std::vector<int> candidates = enumPidsForUid(targetUid);
+    std::vector<int> live;
+    for (int pid : candidates) {
+        if (pidOwnerMatches(pid, targetUid)) live.push_back(pid);
+    }
+    if (live.empty()) return false;
+
+    if (!freeze) {
+        std::string procsPath = destDir + "/cgroup.procs";
+        bool any = false;
+        for (int pid : live) any |= writePidToBucket(procsPath, pid);
+        return any;
+    }
+
+    std::string procsPath = frozenDir + "/cgroup.procs";
+    std::string thawedProcs = thawedBucketFromFrozen(frozenDir) + "/cgroup.procs";
+    std::vector<int> verified;
+    std::vector<int> moved;
+    bool ok = true;
+    for (int pid : live) {
+        if (!writePidToBucket(procsPath, pid)) { ok = false; break; }
+        moved.push_back(pid);
+#ifdef C4_FREEZER_TEST_SEAM
+        if (s_testReadbackFailAfter > 0 &&
+            (int)verified.size() >= s_testReadbackFailAfter) {
+            ok = false; break;
+        }
+#endif
+        bool landed = false;
+        for (int i = 0; i < 5 && !landed; i++) {
+            if (i) usleep(2000);
+            std::string cg;
+#ifdef C4_FREEZER_TEST_SEAM
+            if (!s_testProcCgroupContent.empty()) cg = s_testProcCgroupContent;
+            else
+#endif
+                cg = readSmallFile("/proc/" + std::to_string(pid) + "/cgroup");
+            landed = procCgroupOnFrozenBucket(cg);
+        }
+        if (!landed) { ok = false; break; }
+        verified.push_back(pid);
+    }
+    if (!ok) {
+        std::vector<int> stuck;
+        for (int pid : moved) {
+            if (!writePidToBucket(thawedProcs, pid)) stuck.push_back(pid);
+        }
+        if (!stuck.empty()) {
+            *pids = stuck;
+            return true;
+        }
+        return false;
+    }
+    *pids = verified;
+    return true;
+}
+
+static bool applyFreezeSmart(const std::string& dir, bool freeze,
+                             int targetUid, std::vector<int>* pids) {
+    if (isV1FrozenBucketDir(dir)) {
+        return bucketMovePids(dir, freeze, targetUid, pids);
+    }
+    return applyFreezeState(dir, freeze);
+}
+
 void c4FreezerTick() {
     if (!c4FreezerEnabled()) return;
+    probeHeartbeat();
 
-    // ======================================================================
-    // PHASE 1 (lock-free): read the persisted state file once + sample managers.
-    // NN: once per process, reconcile a persisted frozen state across daemon
-    // restart. The state-file READ happens here, OUTSIDE the mutex (the old code
-    // held s_stateMutex across this read, and across every exec/sysfs call below).
-    // ======================================================================
-    static bool s_loaded = false;      // mutated only by the single slow thread
+    static bool s_loaded = false;
     C4FrozenState restored;
     bool haveRestore = false;
     if (!s_loaded) {
@@ -813,27 +958,16 @@ void c4FreezerTick() {
         haveRestore = restored.valid;
     }
 
-    // ForegroundManager is internally synchronized; no need for our mutex here.
     std::string fg = ForegroundManager::instance().getPackage();
-    // v6.0.1: "is this foreground a game?" is now the OR of three independent
-    // signals (see c4FgIsGameSignals): manual override list, config game list,
-    // and an auto scan for game-engine threads. The historical v6.0.0 code only
-    // consulted gamelist::isManualGame(), so on a fresh device where the user
-    // had never opened WebUI -> "add game", fgIsGame was permanently false,
-    // lastGame was never set, c4ChooseTarget() always returned "", and the
-    // panel sat at degraded="no-game-target" forever (the reported 8h bug).
     bool manualGame = !fg.empty() && gamelist::isManualGame(fg);
     bool configGame = !fg.empty() && isPackageInGameList(fg);
     bool engineGame = !fg.empty() && fgHasGameEngineThreadsCached(fg);
     bool fgIsGame   = c4FgIsGameSignals(manualGame, configGame, engineGame);
 
-    // ======================================================================
-    // PHASE 2 (SHORT critical section): snapshot the shared bookkeeping into
-    // locals. No I/O, no exec, no sysfs in here — pure copies.
-    // ======================================================================
     bool alreadyFrozen, audioActive;
     int  targetUid, bgTicks;
     std::string frozenCgDir, targetPkg, lastGame;
+    std::vector<int> frozenPids;
     {
         std::lock_guard<std::mutex> stateLk(s_stateMutex);
         C4LockProbe probe;
@@ -844,91 +978,67 @@ void c4FreezerTick() {
         frozenCgDir   = s_frozenCgDir;
         targetPkg     = s_targetPkg;
         lastGame      = s_lastGame;
+        frozenPids    = s_frozenPids;
     }
 
-    // Apply the NN restore to the local working copy. If the persisted game is
-    // back in foreground, release it symmetrically (sysfs write + state-file
-    // clear, both OUTSIDE the lock) — identical to the old inline restore-release.
     if (haveRestore) {
         if (fg == restored.pkg) {
-            applyFreezeState(restored.cgDir, false);
+            std::vector<int> rpids = restored.pids;
+            applyFreezeSmart(restored.cgDir, false, restored.uid, &rpids);
             writeFileAtomic(c4StateFilePath().c_str(), "");
         } else {
             alreadyFrozen = true;
             frozenCgDir   = restored.cgDir;
+            frozenPids    = restored.pids;
             targetPkg     = restored.pkg;
             targetUid     = restored.uid;
-            // NN-NIT(v4.4.6): restore lastGame too (optional field; old files
-            // omit it -> empty, safe).
             if (!restored.lastGame.empty()) lastGame = restored.lastGame;
         }
     }
 
-    // ======================================================================
-    // PHASE 3 (lock-free): ALL slow work — exec, /proc scan, sysfs probes and
-    // writes, STATE_DIR file writes — runs here on the locals only.
-    // ======================================================================
-
-    // MN: refresh the last foreground game. fgIsGame drives c4ChooseTarget.
     if (fgIsGame) lastGame = fg;
 
-    // Choose the freeze target: foreground game -> that game; launcher/non-game ->
-    // the previously-backgrounded lastGame; nothing tracked -> "".
     std::string target = c4ChooseTarget(lastGame, fg, fgIsGame);
 
-    // Release a held freeze only when the TARGET actually changes (old bug: any
-    // non-game foreground released the backgrounded game). Switching games / losing
-    // the target releases; launcher appearing does NOT.
     if (alreadyFrozen && target != targetPkg && !frozenCgDir.empty()) {
-        applyFreezeState(frozenCgDir, false);
+        applyFreezeSmart(frozenCgDir, false, targetUid, &frozenPids);
         alreadyFrozen = false;
         frozenCgDir.clear();
-        writeFileAtomic(c4StateFilePath().c_str(), "");   // NN: clear persisted record
+        frozenPids.clear();
+        writeFileAtomic(c4StateFilePath().c_str(), "");
     }
     if (target.empty()) {
         targetUid = 0;
-        lastGame.clear();          // target gone (process exited / no game)
+        lastGame.clear();
     } else if (targetUid == 0) {
-        targetUid = resolveAppUid(target);              // exec (slow) — lock-free
+        targetUid = resolveAppUid(target);
     }
 
-    // isForeground = the TARGET game is the one currently on screen. Under a
-    // launcher this is false -> the backgrounded game stays freezable.
     bool isFg = !target.empty() && fg == target;
 
     if (isFg) {
-        // Foreground edge: reset background episode bookkeeping.
         bgTicks = -1;
         audioActive = false;
     } else if (!target.empty()) {
-        // Background: advance tick counter (0 = first background tick this episode).
         if (bgTicks < 0) bgTicks = 0; else bgTicks++;
 
-        // MJ-2: persisted audio + periodic re-eval (edge + every kAudioReevalPeriod).
         if (audioReevalDue(bgTicks, kAudioReevalPeriod)) {
-            audioActive = audioActiveNow(target);        // exec (slow) — lock-free
+            audioActive = audioActiveNow(target);
         }
     } else {
         bgTicks = -1;
         audioActive = false;
     }
 
-    // Resolve cgroup dir (only when we hold no frozen dir).
-    // v6.1.0: try v2 unified first; fall back to v1 freezer hierarchy.
     std::string cgDir;
-    std::string backend;       // "v2" / "v1" / ""
-    if (alreadyFrozen) {
-        cgDir = frozenCgDir;
-        backend = isV1FreezerDir(cgDir) ? "v1" : "v2";
-    } else {
-        // v2 priority
+    std::string backend;
+    if (!alreadyFrozen) {
         cgDir = findTargetV2CgroupDir(targetUid);
         if (!cgDir.empty() && freezerControllerPresent() && freezeNodeWritable(cgDir)) {
             backend = "v2";
         } else {
             cgDir.clear();
         }
-        // v1 auto-fallback
         if (cgDir.empty()) {
             std::string v1Dir = findTargetV1CgroupDir(targetUid);
             if (!v1Dir.empty() && v1FreezerPresent() && v1FreezeNodeWritable(v1Dir)) {
@@ -936,8 +1046,13 @@ void c4FreezerTick() {
                 backend = "v1";
             }
         }
+        if (cgDir.empty() && probeV1Bucket()) {
+            cgDir   = s_bucketPaths.frozenDir;
+            backend = "v1-bucket";
+        }
+    } else {
+        cgDir = frozenCgDir;
     }
-    // If the target no longer maps to a real (background) cgroup, drop target.
     if (cgDir.empty() && !alreadyFrozen && !target.empty()) {
         lastGame.clear();
         target.clear();
@@ -948,43 +1063,40 @@ void c4FreezerTick() {
     in.featureEnabled   = true;
     in.isForeground     = isFg;
     in.alreadyFrozen    = alreadyFrozen;
-    in.freezerAvailable = !cgDir.empty() && !backend.empty();
+    in.freezerAvailable = !cgDir.empty();
     in.audioActive      = audioActive;
 
-    // lastAction is recomputed from the decision every tick (the snapshot value
-    // is only history); it is published back to the statics in phase 4.
     std::string lastAction;
     C4Decision d = decideC4Freeze(in);
     if (d.action == C4Action::FREEZE) {
         lastAction = alreadyFrozen ? "FREEZE(already)" : ("FREEZE(" + backend + ")");
-        if (applyFreezeState(cgDir, true)) {
+        if (applyFreezeSmart(cgDir, true, targetUid, &frozenPids)) {
             alreadyFrozen = true;
             frozenCgDir   = cgDir;
+            std::vector<int> persistPids =
+                isV1FrozenBucketDir(cgDir) ? frozenPids : std::vector<int>{};
             writeFileAtomic(c4StateFilePath().c_str(),
-                            serializeC4Frozen(cgDir, target, targetUid, lastGame));
+                            serializeC4Frozen(cgDir, target, targetUid, lastGame,
+                                              persistPids));
         } else {
             lastAction = "FREEZE(write-fail-degraded)";
         }
     } else if (d.action == C4Action::UNFREEZE) {
         lastAction = audioActive ? "UNFREEZE(audio-started-mid-freeze)"
                                  : "UNFREEZE(foreground)";
-        if (!frozenCgDir.empty()) applyFreezeState(frozenCgDir, false);
+        if (!frozenCgDir.empty()) {
+            applyFreezeSmart(frozenCgDir, false, targetUid, &frozenPids);
+        }
         alreadyFrozen = false;
         frozenCgDir.clear();
-        writeFileAtomic(c4StateFilePath().c_str(), "");   // NN: clear persisted record
+        frozenPids.clear();
+        writeFileAtomic(c4StateFilePath().c_str(), "");
     } else {
         lastAction = "NO_CHANGE";
     }
 
-    // P2 (v6.0.0 review): publish the last decision as a diagnostic state file so
-    // the root bridge / WebUI can `cat STATE_DIR/c4_last_action` — same convention
-    // as frame.cpp's frame_unavailable_reason / vm_inner_detect_reason. Lock-free.
     writeFileAtomic(c4LastActionPath().c_str(), lastAction);
 
-    // ======================================================================
-    // PHASE 4 (SHORT critical section): publish the updated locals back to the
-    // exported bookkeeping the WebUI reader snapshots. Again, pure assignments.
-    // ======================================================================
     {
         std::lock_guard<std::mutex> stateLk(s_stateMutex);
         C4LockProbe probe;
@@ -996,20 +1108,13 @@ void c4FreezerTick() {
         s_audioActive    = audioActive;
         s_bgTicks        = bgTicks;
         s_lastAction     = lastAction;
+        s_frozenPids    = frozenPids;
     }
 }
 
-// Production glue: read-only snapshot for WebUI.
-//
-// R2-M1: this is called off the WebUI/control thread while c4FreezerTick() runs
-// on the slow thread. We take s_stateMutex ONLY to copy the exported scalars and
-// strings into locals (short critical section, no I/O), then release it before
-// probing sysfs / building JSON. The copied locals are immune to concurrent
-// mutation, so no string can tear mid-export.
 std::string c4FreezerStateJson() {
     bool en = c4FreezerEnabled();
 
-    // --- short critical section: snapshot the exported bookkeeping -----------
     bool alreadyFrozen, audioActive;
     std::string targetPkg, frozenCgDir, lastAction;
     {
@@ -1020,22 +1125,29 @@ std::string c4FreezerStateJson() {
         frozenCgDir   = s_frozenCgDir;
         lastAction    = s_lastAction;
     }
-    // --- lock released; I/O + JSON building run lock-free --------------------
 
-    // v6.1.0: determine which freezer backend is actually available.
     bool hasV2 = freezerControllerPresent();
     bool hasV1 = v1FreezerPresent();
-    std::string backend = hasV2 ? "v2" : (hasV1 ? "v1" : "");
+    bool onBucket = !frozenCgDir.empty() && isV1FrozenBucketDir(frozenCgDir);
+    std::string backend;
+    if (onBucket)      backend = "v1-bucket";
+    else if (hasV2)    backend = "v2";
+    else if (hasV1)    backend = "v1";
+    else               backend = "";
     bool freezerAvail = !backend.empty();
 
     std::string degraded;
     if (!en) degraded = "disabled";
     else if (targetPkg.empty()) degraded = "no-game-target";
     else if (!frozenCgDir.empty()) {
-        // Check the frozen dir's node is writable via its own backend.
-        bool writable = isV1FreezerDir(frozenCgDir)
-                            ? v1FreezeNodeWritable(frozenCgDir)
-                            : freezeNodeWritable(frozenCgDir);
+        bool writable;
+        if (onBucket) {
+            writable = ::access((frozenCgDir + "/cgroup.procs").c_str(), W_OK) == 0;
+        } else if (isV1FreezerDir(frozenCgDir)) {
+            writable = v1FreezeNodeWritable(frozenCgDir);
+        } else {
+            writable = freezeNodeWritable(frozenCgDir);
+        }
         if (!writable) degraded = "freeze-node-not-writable";
     }
     if (degraded.empty() && !freezerAvail) degraded = "no-freezer-controller";
@@ -1044,7 +1156,7 @@ std::string c4FreezerStateJson() {
                        freezerAvail, backend, degraded);
 }
 
-} // namespace c4freezer
-} // namespace aatpe
+}
+}
 
-#endif // AATPE_HOST_TEST
+#endif

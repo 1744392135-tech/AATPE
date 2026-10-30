@@ -1,15 +1,10 @@
-// AATPE Hybrid Learning Module Implementation (training logic)
-// Phase-2 refactor: split from aatpe_ml_hybrid.cpp
 #include "aatpe_ml_hybrid.h"
 #include <cmath>
 #include <algorithm>
 namespace aatpe_ml_hybrid {
 
-// caller MUST hold mutex_
 void HybridLearner::sgdUpdate(int pool, const float features[15], float target) {
     if (pool<0||pool>=(int)poolDeltas_.size()) return;
-    // ROUND-014 P3: reject non-finite target/features so a NaN outcome cannot poison
-    // weights permanently (predict path already guards; this closes the train side).
     if (!std::isfinite(target)) return;
     for (int i=0;i<15;i++) if (!std::isfinite(features[i])) return;
     HybridPoolDelta& delta = poolDeltas_[pool];
@@ -33,4 +28,4 @@ float HybridLearner::clampWeight(float w) const {
     return w;
 }
 
-} // namespace aatpe_ml_hybrid
+}

@@ -1,7 +1,3 @@
-// stress_reload_storm.cpp — Real config hot-reload stress test.
-//
-// Links aatped_config.cpp and calls loadConfig() on 2000+ random/malformed configs.
-// Asserts: g_cfg fields always clamped correctly, malformed rejected, state valid.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -39,15 +35,15 @@ static std::string genRandomConfig(int iter) {
     int c = choice(g_rng);
     switch (c) {
         case 0: cfg += "# comment line\n\n"; break;
-        case 1: cfg += "uclamp_passive_pct=999\n"; break;      // out of range high
-        case 2: cfg += "uclamp_passive_pct=-10\n"; break;     // negative
-        case 3: cfg += "unknown_key_xyz=123\n"; break;         // unknown key
-        case 4: cfg += "uclamp_passive_pct=\n"; break;         // empty value
-        case 5: cfg += "uclamp_passive_pct=abc\n"; break;      // non-numeric
-        case 6: cfg += "uclamp_passive_pct=25\nuclamp_passive_pct=30\n"; break;  // duplicate
-        case 7: cfg += std::string(1000, 'x') + "=y\n"; break;  // ultra-long line
-        case 8: cfg += "control_mode=invalid_mode\n"; break;    // invalid mode
-        case 9: cfg += "uclamp_assist_pct=70\n"; break;         // valid boundary
+        case 1: cfg += "uclamp_passive_pct=999\n"; break;
+        case 2: cfg += "uclamp_passive_pct=-10\n"; break;
+        case 3: cfg += "unknown_key_xyz=123\n"; break;
+        case 4: cfg += "uclamp_passive_pct=\n"; break;
+        case 5: cfg += "uclamp_passive_pct=abc\n"; break;
+        case 6: cfg += "uclamp_passive_pct=25\nuclamp_passive_pct=30\n"; break;
+        case 7: cfg += std::string(1000, 'x') + "=y\n"; break;
+        case 8: cfg += "control_mode=invalid_mode\n"; break;
+        case 9: cfg += "uclamp_assist_pct=70\n"; break;
         default: cfg += "uclamp_passive_pct=25\n"; break;
     }
     return cfg;
@@ -57,7 +53,6 @@ int main() {
     g_stateDir = "/tmp/stress_reload_" + std::to_string(getpid());
     mkpath(g_stateDir);
 
-    // Set STATE_DIR (already declared in aatped.h as const char*)
     extern const char* STATE_DIR;
     static char s_stateDirBuf[256];
     strncpy(s_stateDirBuf, g_stateDir.c_str(), 255);
@@ -70,9 +65,8 @@ int main() {
     auto t0 = std::chrono::steady_clock::now();
 
     int pass = 0, fail = 0;
-    int basePassive = 25;  // baseline value
+    int basePassive = 25;
 
-    // First load: valid baseline config
     g_cfg = Config{};
     g_cfg.uclampPassivePct = basePassive;
     validateConfig();
@@ -88,10 +82,8 @@ int main() {
             continue;
         }
 
-        // Call production loadConfig()
         loadConfig();
 
-        // Assertion 1: out-of-range value clamped
         if (cfg.find("uclamp_passive_pct=999") != std::string::npos) {
             if (g_cfg.uclampPassivePct > 100) {
                 fail++;
@@ -99,7 +91,6 @@ int main() {
             }
         }
 
-        // Assertion 2: negative value clamped to lower bound
         if (cfg.find("uclamp_passive_pct=-10") != std::string::npos) {
             if (g_cfg.uclampPassivePct < 1) {
                 fail++;
@@ -107,9 +98,7 @@ int main() {
             }
         }
 
-        // Assertion 3: non-numeric value → parse failure → keep previous
         if (cfg.find("uclamp_passive_pct=abc") != std::string::npos) {
-            // atoi("abc") = 0, which would be clamped to 1
             if (g_cfg.uclampPassivePct < 1) {
                 fail++;
                 printf("[iter %d] non-numeric clamp fail: got %d\n", i, g_cfg.uclampPassivePct);

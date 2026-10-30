@@ -1,6 +1,3 @@
-// fz_control.cpp - fuzz executeControlLine (surface #4: control command text -
-// whitelist / length / '=' count / dispatcher). Must be fail-closed: unknown or
-// malformed lines return success=false; must never crash or hang.
 #include <string>
 #include "aatped.h"
 #include "aatped_control.h"
@@ -12,7 +9,7 @@ int main(int argc, char** argv) {
   fz::Options opt;
   opt.name = logTag;
   opt.crashDir = crashDir;
-  opt.minIter = 1000000ULL;    // heavy parser gate
+  opt.minIter = 1000000ULL;
   opt.minSeconds = 1500.0;
   opt.seed = 0xC0FFEE ^ 0x31;
   opt.maxLen = 4096;

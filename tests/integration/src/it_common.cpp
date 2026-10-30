@@ -1,4 +1,3 @@
-// AATPE v94 Integration Test Framework - implementation
 #include "it_common.h"
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -22,8 +21,6 @@ void itLog(const char* fmt, ...) {
 }
 
 void itWriteFile(const std::string& path, const std::string& content) {
-    // mkdir -p: create every ancestor dir; NEVER mkdir the final path component
-    // (that is a regular file).
     for (size_t i = 1; i < path.size(); i++) {
         if (path[i] == '/') {
             std::string sub = path.substr(0, i);
@@ -57,8 +54,6 @@ long long itReadInt(const std::string& path, long long def) {
     try { return std::stoll(s); } catch (...) { return def; }
 }
 
-// stat file line: "pid (comm) state ppid pgrp session tty ... processor"
-// We only need: nice is field after ')' index 16, starttime index 19, processor index 36.
 void itAddProcThread(int pid, const std::string& pkg, int tid, const std::string& tname,
                      unsigned long long runTime, unsigned long long nrSwitches,
                      int currentCpu, unsigned long long starttime) {
@@ -66,12 +61,9 @@ void itAddProcThread(int pid, const std::string& pkg, int tid, const std::string
     std::string taskRoot = procRoot + "/task/" + std::to_string(tid);
     itWriteFile(procRoot + "/cmdline", pkg);
     itWriteFile(taskRoot + "/comm", tname + "\n");
-    // schedstat: runTime waitTime nrSwitches
     char sched[128];
     snprintf(sched, sizeof(sched), "%llu 0 %llu\n", runTime, nrSwitches);
     itWriteFile(taskRoot + "/schedstat", sched);
-    // stat: post-')' field vector, exact 0-based indices:
-    //   idx16 = nice, idx19 = starttime, idx36 = processor.
     int nice = 0;
     std::string rest;
     for (int i = 0; i < 37; i++) {
@@ -91,20 +83,13 @@ void itAddProcThread(int pid, const std::string& pkg, int tid, const std::string
 
 void itRemoveProcThread(int pid, int tid) {
     std::string taskRoot = "/proc/" + std::to_string(pid) + "/task/" + std::to_string(tid);
-    // rmdir fails on a non-empty dir; unlink the leaf files first.
     for (const char* f : {"comm","stat","schedstat","status"})
         ::unlink((taskRoot + "/" + f).c_str());
     ::rmdir(taskRoot.c_str());
 }
 
 void itSetThermalTemp(const std::string& zone, int tempCelsius) {
-    // thermal zone temp reported in millicelsius (>=1500 path). Use tempCelsius*1000.
     char b[64]; snprintf(b, sizeof(b), "%d\n", tempCelsius * 1000);
-    // v4.3.2: write into the harness-controlled thermal fake tree (redirected via
-    // thermalSetTestRoot in itRedirectPaths), NOT the literal /sys (which is
-    // read-only / absent when the soak binary is run directly, outside run_soak.sh's
-    // bind-mount namespace). This makes the 105C ramp injection deterministic both
-    // inside the userns bind-mount AND when the binary is exec'd directly.
     itWriteFile(g_it.mockRoot + "/sys/class/thermal/" + zone + "/temp", b);
 }
 
@@ -115,8 +100,6 @@ double itNowMs() {
 void itSleepMs(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
 void itRedirectPaths() {
-    // These are mutable 'const char*' variables (pointer-to-const-char), so the
-    // pointer itself can be reassigned at runtime to our mock tree.
     const char* root = getenv("AATPE_IT_ROOT");
     if (!root) root = "/tmp/aatpe_it_root";
     std::string r = root;
@@ -153,13 +136,6 @@ void itRedirectPaths() {
     ::mkdir((r + "/decisions").c_str(), 0755);
     ::mkdir((r + "/metrics").c_str(), 0755);
 
-    // v4.3.2: hermetic thermal fake tree wired to the product's thermalSetTestRoot
-    // seam. Product thermal.cpp (tSys()) reads thermal zones + /proc/stat relative
-    // to this root instead of the literal /sys. This makes the >=105C emergency ramp
-    // (M-T3/M-T4) deterministic whether the soak runs inside run_soak.sh's
-    // userns bind-mount OR is exec'd directly (where /sys is read-only/absent).
-    // CPU topology detection uses literal /sys paths (not tSys), so the run_soak.sh
-    // bind-mount of /sys/devices/system/cpu still works unchanged.
     {
         extern void thermalSetTestRoot(const std::string&);
         std::string tz = r + "/sys/class/thermal";
@@ -179,8 +155,6 @@ void itRedirectPaths() {
         W(tz + "/thermal_zone1/temp", "30000\n");
         W(tz + "/thermal_zone2/type", "battery\n");
         W(tz + "/thermal_zone2/temp", "30000\n");
-        // thermal.cpp thermalBusyPctHook reads /proc/stat via tSys(); provide a
-        // minimal steady baseline so load-correlation never returns -1 spuriously.
         ::mkdir((r + "/proc").c_str(), 0755);
         W(r + "/proc/stat", "cpu  200 0 100 700 0 0 0 0 0 0\n");
         thermalSetTestRoot(r);
@@ -189,8 +163,6 @@ void itRedirectPaths() {
 
 void itBootstrapConfig(const std::string& confText) {
     itWriteFile(g_it.confDir + "/aatpe.conf", confText);
-    // rules/thread_roles.conf and profiles/*.conf are materialized into
-    // confDir by the shell wrapper (run_integration.sh) before exec.
 }
 
 void itBringUp() {
@@ -202,71 +174,42 @@ void itBringUp() {
 }
 
 void itReadThermalFresh() {
-    // readThermal caches for 1000ms; sleep to force a fresh sysfs read.
     itSleepMs(1050);
     readThermal();
 }
 
-// ---------------------------------------------------------------------------
-// Scenario isolation (issue #17): reset EVERY in-process production global so
-// each scenario starts from a deterministic clean slate. Called by it_main()
-// BEFORE every scenario. Without this, a prior scenario pollutes global state
-// (e.g. S1 leaves g_threads populated + g_totalDecisions advanced, S4 latches
-// EMERGENCY, S5 primes g_configMtime, S3 leaves g_mlModel trained) and the next
-// scenario's assertions silently depend on that carry-over.
-//
-// Lock-ordering note (see thermal.cpp v94-工程改进包C): transitionToState()
-// re-takes g_cfgMutex internally, so we must NOT hold g_cfgMutex across the
-// call below. Config resets are scoped in their own tight block and released
-// before transitionToState().
-// ---------------------------------------------------------------------------
 void itResetToFreshState() {
-    // config + profile
     {
         std::lock_guard<std::mutex> cfgLk(g_cfgMutex);
-        g_cfg = Config();                 // restore member-initialized defaults
-        g_configMtime = 0;                // force the next loadConfig() to reload
+        g_cfg = Config();
+        g_configMtime = 0;
         g_currentProfile = "balanced";
         g_currentProfileEnum = ProfileType::BALANCED;
     }
 
-    // scanned thread table + rule table
     {
         std::lock_guard<std::mutex> thLk(g_threadsMutex);
         g_threads.clear();
     }
-    g_rules.clear();                      // loadThreadRules() appends; start empty
+    g_rules.clear();
 
-    // counters
     g_totalDecisions.store(0);
 
-    // thermal state machine + cached temps
     g_thermalEmergency.store(false);
     g_thermalMigrationPressure.store(0);
     g_thermalCpu.store(0); g_thermalSkin.store(0); g_thermalBattery.store(0);
     g_thermalCpuZonePath.clear();
-    // Wipe thermal.cpp runtime baselines (jump-filter s_lastZoneTemp, over-temp
-    // debounce streak, cache timestamp) so S4's emergency ramp doesn't leak a
-    // high-temperature baseline into S10 and filter the low-start ramp reads.
     thermal_resetRuntimeStateForTest();
 
-    // ML learners
     g_mlModel.reset();
     aatpe_ml_hybrid::instance().reset();
 
     g_currentScene.store((int)GameScene::MENU);
     g_it.timeline.clear();
 
-    // drive the unified state machine back to NORMAL (takes/releases its own
-    // locks internally).
     transitionToState(SystemState::NORMAL, "it-reset");
 }
 
-// v4.2.9 E7: per-scenario on-disk teardown. itResetToFreshState() resets the
-// in-process globals but leaves files under STATE_DIR and the run dir untouched;
-// without this, e.g. S13's persisted control_mode=active or a leftover
-// control/daemon.pid survives into the next scenario (the "full suite flaky,
-// isolated green" symptom). Best-effort: unlink failures are ignored.
 void itTeardownScenario() {
     DIR* d = ::opendir(g_it.stateDir.c_str());
     if (d) {

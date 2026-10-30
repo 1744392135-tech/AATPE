@@ -1,11 +1,3 @@
-// fz_apklabel.cpp - R-W4: rebuilt for zlib-based inflate + nested ARSC parser.
-// Two phases:
-//   PHASE 1 (positive semantic): write each known fixture to temp file,
-//     call readLabelFromApk(), assert result == expected Chinese label.
-//   PHASE 2 (negative fail-closed): fuzz-mutate the fixtures, assert that
-//     mutated input returns "" (empty) — never crashes, never OOB, never
-//     leaks memory. zlib inflateEnd must be called on all paths.
-// Link: -lz
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -23,7 +15,7 @@ struct Fixture {
   const char* name;
   const unsigned char* data;
   size_t len;
-  const char* expected;  // nullptr = expect empty (negative fixture)
+  const char* expected;
 };
 
 static Fixture g_fixtures[] = {
@@ -62,7 +54,6 @@ int main(int argc, char** argv) {
 
   uint64_t posFails = 0, negFails = 0;
 
-  // ---- PHASE 1: positive semantic ----
   fprintf(stderr, "[%s] PHASE1: positive semantic fixtures\n", logTag);
   for (auto& fx : g_fixtures) {
     if (!fx.expected) continue;
@@ -79,7 +70,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ---- PHASE 1b: negative fixtures must return empty ----
   fprintf(stderr, "[%s] PHASE1b: negative fixtures must return \"\"\n", logTag);
   for (auto& fx : g_fixtures) {
     if (fx.expected) continue;
@@ -94,7 +84,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ---- PHASE 2: fuzz mutations on valid fixtures ----
   fprintf(stderr, "[%s] PHASE2: fuzz mutations\n", logTag);
   fz::Options opt;
   opt.name = logTag;

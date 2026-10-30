@@ -1,8 +1,3 @@
-// test_utils.cpp - v94 hermetic unit tests for aatped_utils.cpp
-// Links aatped_utils.cpp + utils_deps + log_stub (see build.sh recipe).
-// Covers: readFile trim, readInt (valid/missing/garbage), writeFile overloads,
-// writeFileAtomic/atomicWriteFile round-trip, trim, parseCpusetCpuList ranges,
-// isCpuAllowed, readFirstLine, getOnlineCpus fallback, aatpeSdk detection.
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -75,10 +70,6 @@ int main() {
     const char* vn = aatpeAndroidVersionName();
     CHECK(vn != nullptr, "aatpeAndroidVersionName returns non-null");
 
-    // G1-005: concurrent atomicWriteFile to the SAME path must always publish a
-    // coherent whole content. The old fixed "<path>.tmp" meant two threads shared
-    // the temp file and interleaved write() streams; the final file could be an
-    // in-between mix of HEAD_A...HEAD_B. mkstemp gives each call its own tmp.
     printf("=== Utils: G1-005 concurrent atomic write coherence ===\n");
     {
         const char* p = "/tmp/aatpe_concurrent_atomic.txt";
@@ -98,12 +89,10 @@ int main() {
     }
 
     printf("=== Helper audit: protected config/asset names are NOT deleted ===\n");
-    // Legitimate user files / backups must survive.
     CHECK(!isSensitiveHelperFile("thread_roles.conf.bak"), "thread_roles.conf.bak protected");
     CHECK(!isSensitiveHelperFile("ml_config.json"), "ml_config.json protected");
     CHECK(!isSensitiveHelperFile("game_profiles.rules"), "game_profiles.rules protected");
     CHECK(!isSensitiveHelperFile("screen_off_rules.prop"), "screen_off_rules.prop protected");
-    // Truly sensitive names must be flagged.
     CHECK(isSensitiveHelperFile("daemon_token"), "daemon_token flagged");
     CHECK(isSensitiveHelperFile("hmac_key"), "hmac_key flagged");
     CHECK(isSensitiveHelperFile(".daemon_token"), ".daemon_token dotfile flagged");

@@ -1,7 +1,3 @@
-// test_adrc.cpp - v94 hermetic unit tests for adrc.cpp (ADRC control).
-// Links adrc.cpp + log_stub (see build.sh recipe).
-// Exercises: invalid-input divide-by-zero guard, first-step step response,
-// steady-state on-target tracking, clamped output ranges, reset(), and params.
 #include <cstdio>
 #include <cmath>
 #include "adrc.h"
@@ -19,14 +15,14 @@ static AdrcInput makeInput(double frameUs, double targetUs) {
     in.frameTimeUs = frameUs;
     in.targetFrameTimeUs = targetUs;
     in.cpuLoad = 0.3;
-    in.thermalLevel = 0.1;     // cool
+    in.thermalLevel = 0.1;
     in.mlSignal = 0.0;
     in.mlConfidence = 0.5;
     return in;
 }
 
 int main() {
-    const double kTarget = 16667.0;  // 60fps
+    const double kTarget = 16667.0;
 
     printf("=== ADRC: default params round-trip ===\n");
     AdrcController ctl;
@@ -50,12 +46,8 @@ int main() {
     printf("=== ADRC: first step response (slow frame -> urgent) ===\n");
     {
         AdrcController c;
-        // First valid sample: frame took 2x target -> deviation = target.
         AdrcOutput o = c.update(makeInput(kTarget * 2.0, kTarget));
         CHECK(o.urgency == 1.0, "first slow frame (2x target) -> urgency clamped to 1.0");
-        // After the first ESO step the non-zero NLSEF control perturbs z2 slightly,
-        // so riskScore is tiny but not exactly 0. Assert it stays negligible and
-        // bounded (the disturbance z3 itself is still ~0).
         CHECK(o.riskScore < 0.05, "first sample -> riskScore negligible (no accumulated disturbance)");
         CHECK(o.riskScore >= 0.0 && o.riskScore <= 1.0, "riskScore clamped in [0,1]");
         CHECK(o.shouldBoost == false, "risk negligible on first sample -> boost gated off");
@@ -98,7 +90,7 @@ int main() {
     {
         AdrcController c;
         AdrcInput hot = makeInput(kTarget * 2.2, kTarget);
-        hot.thermalLevel = 0.9;  // above 0.8 safety gate
+        hot.thermalLevel = 0.9;
         AdrcOutput o;
         for (int i = 0; i < 60; i++) o = c.update(hot);
         CHECK(o.shouldBoost == false, "thermalLevel 0.9 blocks boost despite slow frames");
@@ -106,20 +98,17 @@ int main() {
 
     printf("=== G5-005: (params) constructor clamps divide-by-zero / instability ===\n");
     {
-        // Old constructor stored params raw: b0=0 -> u = u0 - z3/b0 divides by zero.
         AdrcParams bad = kDefaultAdrcParams;
         bad.h = 0.0;
         bad.b0 = 0.0;
         bad.r = 0.0;
-        bad.beta01 = 1e9;   // would violate h*beta <= 2 once h is clamped
+        bad.beta01 = 1e9;
         AdrcController c(bad);
         AdrcParams p = c.getParams();
         CHECK(p.b0 >= 1e-9, "ctor: b0 clamped away from 0 (no later div-by-zero)");
         CHECK(p.h  >= 1e-6, "ctor: h clamped away from 0");
         CHECK(p.r  >= 1e-6, "ctor: r clamped away from 0");
-        // beta must be capped to keep forward-Euler ESO stable.
         CHECK(p.beta01 <= 2.0 / p.h + 1e-9, "ctor: beta01 clamped to h*beta<=2 envelope");
-        // And a few update() steps must stay finite (no NaN/inf propagation).
         AdrcOutput o;
         for (int i = 0; i < 20; i++) o = c.update(makeInput(kTarget * 1.5, kTarget));
         CHECK(!std::isnan(o.riskScore) && !std::isinf(o.riskScore),
