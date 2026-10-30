@@ -8,6 +8,62 @@ for debugging; they are pointers to this log, not the version itself.
 
 ---
 
+## v6.0.0 (2026-10-30) — rel20 / versionCode 4414：C4 双桶 freezer 真机根因修复 + 全树注释精简 + 四轮穷尽验证
+
+> 真机发现 C4 后台冻结始终冻结不了。真机证据锁定根因：该设备（小米 chopin / 天玑1100 / 内核4.14 / cgroup v1 freezer）**没有 uid_xxx 目录**，只有 MIUI 预置的共享双桶 `/sys/fs/cgroup/freezer/perf/frozen`（state=FROZEN）与 `perf/thawed`（THAWED），旧代码硬找不存在的 uid_xxx 顶层目录而静默失效。
+
+### C4 双桶后端重写
+- **双桶探测**：probeV1Bucket() 探测 frozen/thawed 两桶是否存在、cgroup.procs 是否可写、state 是否就绪，结果缓存并每 200 tick 重探；探测顺序 v2 → v1 uid_xxx → v1-bucket。
+- **按 uid 枚举 pid**：enumPidsForUid() 遍历 /proc 按 ruid 枚举目标 uid 全部 pid；**写 cgroup.procs 前用 pidOwnerMatches() 复核 /proc/<pid>/status 的 Uid 行**，属主不符（pid 被别的应用复用）直接丢弃，杜绝误冻别的 app。
+- **读回 + 回滚 + 提交子集**：逐 pid 写入 frozen 桶后回读 /proc/<pid>/cgroup 验证；任一回读失败即把已写 pid 全部回滚到 thawed；**回滚也失败的 pid 集合作为 stuck 子集提交为已冻结状态并落盘**，保证后续前台释放一定能解冻它们，从根上杜绝"孤儿 pid 永久卡死"。
+- **解冻恒重枚举**：解冻不盲信持久化 pid 列表，一律按当前 uid 重新枚举全部 live pid 移到 thawed（多解冻无害），覆盖冻结期 fork 出来、继承 FROZEN cgroup 的子进程；解冻只动本 uid 的 pid，**从不清空共享桶**。
+- **桶自动 provision**：桶缺失但 v1 freezer 根可写时，自动 mkdir 双桶并写 freezer.state；provision 路径逐级 lstat 拒绝符号链接、文件用 O_NOFOLLOW|O_EXCL 创建，防止路径穿越。
+- **音频白名单精确化**：mediaSessionMentionsPlaying() 重写——按 dumpsys session 头精确分块、包名精确 token 匹配（修掉 `com.game` 误配 `com.game.hack`）、`state=3` 精确分词（修掉 `flags=state=3` 子串误判）、包名截断 `:id` 后缀；分词器对逗号/分号分隔有界（修掉一个会导致 tick 线程永久挂起的死循环）。
+
+### 注释精简（按用户口径）
+- module.prop 的 description 从版本历史改为一句话模块简介；全树 C/C++/shell/conf/WebUI 注释按"只留许可证、其余全删"剥离（代码库无文件头许可证注释，故等同全删），并用编译器、node、归一化 token 对比验证零误伤。
+
+### 四轮"修复 → 独立验证"收敛（本轮新增的穷尽流程）
+- 第一轮四路独立验证（逐行审查 / 对抗红队 / 变异敏感度 / Sanitizer）发现 P0 孤儿冻结 + 2 个 P1 + P2/P3 共 5 项；
+- 第二轮回归又发现解冻漏子进程、回滚失败残留孤儿、provision 符号链接 3 项；
+- 第三轮发现音频 `mL` 子串误判、state 子串误配；
+- 第四轮发现分词器死循环（逗号分隔）。每一轮修复后都重新独立验证，直到四路全部收口。
+- 验证基线：host v94 **157 ok / 0 fail / 0 skip**；ASan+UBSan **163 目标零内存错误/UB/泄漏**；TSan **25 并发目标 0 race / 0 死锁**；变异电池 **69 个变异、63 个被测试捕获**（剩 4 个为 seam 能力边界低风险项）；release_ci 全 PASS。
+- **自建仿真环境**：无真机/KVM 条件下，在 user+mount namespace（unshare -Urm）内用 LD_PRELOAD 拦截 fopen/fclose，把写 cgroup.procs 翻译成真实 SIGSTOP/SIGCONT，用**未改一字节的权威 c4_freezer.cpp** 端到端跑通冻结/解冻/回滚/重启/属主复核/子进程随父解冻全流程，真实观测进程 State=S↔T。
+
+### 仍需真机回传（DEGRADED，不伪造）
+刷入 rel20 后让目标游戏进后台，确认 c4.json 显示 `backend=v1-bucket`、`frozen=true`、cgDir 指向 perf/frozen，回前台或起音频后自动解冻。
+
+---
+
+## v6.0.0 (2026-10-29) — rel19 / versionCode 4413：四路全新对抗红队终审封版
+
+> 在 rel18 基础上，派 4 名全新独立红队做终审对抗复查；修复查出的 3 个阻断项 + 全部同类建议项后复审清零。host v94=157/0、NDK 干净重编、三门全过、TSan race=0、反编译逐函数对照一致、源码干净重建复现一致。
+
+---
+
+## v6.0.0 (2026-10-28) — rel18：外部深度审查 H01–H04 独立复核 + 测试假通过根治
+
+- H01 eBPF 软信任门控矛盾（锁定 ROM 零事件）、H03/H04 独立验证复核修复；
+- 系统性根治"测试假通过"（零敏感度断言、恒真表达式、自抄副本）；
+- 真机截图/帧率显示字段修复。
+
+---
+
+## v6.0.0 (2026-10-27) — rel17：真机两 bug 根因修复（含 rel16 大小核修复）
+
+- WebUI 首屏慢/刷新不及时/点按卡顿根因修复；守护进程每秒全量重打分导致 CPU 占用 43% 的根因修复；
+- 前端数据对账与显示 bug 6 项修复；
+- rel16 并入：大小核颠倒（超大核闲置+小核堆重负载）调度核心修复、温控状态机震荡修复、C4 freezer 探测与 percpu.json 生成修复、ML 模型就绪度空 MID 池误判修复、场景误判修复、前端显示全修复。
+
+---
+
+## v6.0.0 (2026-10-26) — rel15：真机反馈第一批修复
+
+- 真机"锁小核致游戏卡顿"、调度震荡、cgroup 空/freezer 不可用等反馈项的根因排查与修复；自建 arm64 模拟环境端到端复现钉小核（CONFIRMED）。
+
+---
+
 ## v6.0.0 (2026-10-26) — rel14 四大根因修复封版
 
 > 在 rel13 逐行审查基础上，修复四个导致真机行为异常的根因问题，而非症状层打补丁。host v94 146/0/0、NDK 普通门 rc=0、ASan+UBSan 15 行/801 断言/0 错误泄漏、TSan 5 目标/0 race。

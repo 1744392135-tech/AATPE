@@ -1,8 +1,8 @@
 id=aatpe
-name=AATPE - Adaptive Android Task Placement Engine
+name=AATPE 自适应游戏调度引擎
 version=v6.0.0 (rel20)
 versionCode=4414
 author=AATPE
-description=Adaptive Android task placement engine: eBPF event-driven scheduling, per-app background freezer, thermal control and adaptive ML placement. C++17, NDK r30.
+description=AATPE 自适应游戏调度引擎：自动识别前台游戏，把游戏线程放到大核、后台应用冻结省电，配合温控和帧率感知，让游戏更稳更凉更省电。
 updateJson=
 template=3
